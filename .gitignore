@@ -3,6 +3,7 @@
 /.cache/
 /node_modules/
 /ui-dist/
+/dist/
 /src-tauri/target/
 /src-tauri/binaries/*
 !/src-tauri/binaries/.gitkeep
