@@ -4,21 +4,23 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SOURCE="$ROOT/assets/Meta.png"
 EXPECTED_SHA256="0dc1c7df03c02ac34ea60b7b169020648abdc6e199627c2e1276d337249289c8"
-GENERATED="$ROOT/.cache/generated-icons"
 OUTPUT="$ROOT/src-tauri/icons"
 
-actual="$(/usr/bin/shasum -a 256 "$SOURCE" | /usr/bin/awk '{print $1}')"
-if [[ "$actual" != "$EXPECTED_SHA256" ]]; then
-  echo "official Meta.png checksum mismatch: expected $EXPECTED_SHA256, got $actual" >&2
-  exit 1
-fi
+verify() {
+  local path="$1"
+  local expected="$2"
+  local actual
+  actual="$(/usr/bin/shasum -a 256 "$path" | /usr/bin/awk '{print $1}')"
+  if [[ "$actual" != "$expected" ]]; then
+    echo "icon checksum mismatch for $path: expected $expected, got $actual" >&2
+    exit 1
+  fi
+}
 
-/bin/rm -rf "$GENERATED"
-/bin/mkdir -p "$GENERATED" "$OUTPUT"
-"$ROOT/node_modules/.bin/tauri" icon "$SOURCE" --output "$GENERATED" >/dev/null
-/bin/cp "$GENERATED/32x32.png" "$OUTPUT/32x32.png"
-/bin/cp "$GENERATED/128x128.png" "$OUTPUT/128x128.png"
-/bin/cp "$GENERATED/128x128@2x.png" "$OUTPUT/128x128@2x.png"
-/bin/cp "$GENERATED/icon.icns" "$OUTPUT/icon.icns"
+verify "$SOURCE" "$EXPECTED_SHA256"
+verify "$OUTPUT/32x32.png" "e7ccba78681b89c4950b0ade992aa7c9cd88d8aa902b495e1192d5036408e4ad"
+verify "$OUTPUT/128x128.png" "d71567bcf8b356e678f79b67f085325829830d5a936ddccd7c78635f750a0743"
+verify "$OUTPUT/128x128@2x.png" "f7144a16e4e50d6ee7329e0cc9d8e6c3137e7ef1d70e9f7c397547a70463977d"
+verify "$OUTPUT/icon.icns" "472db0ccf0e913b1b37f660277378a65d61df63dfa5e11541271fdeea324ea15"
 
-echo "prepared icons from official MetaCubeX/mihomo Meta.png"
+echo "verified icons derived from official MetaCubeX/mihomo Meta.png"

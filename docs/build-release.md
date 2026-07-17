@@ -21,7 +21,8 @@ external binaries. Tauri places them in `Contents/MacOS` without the target
 suffix.
 
 `scripts/prepare-icons.sh` verifies the checked-in official Mihomo `Meta.png`
-and deterministically derives the PNG/ICNS sizes required by Tauri/macOS.
+and all derived PNG/ICNS outputs by SHA-256. Generated icons are committed;
+normal builds do not rewrite ICNS metadata.
 
 ## Local Validation
 
