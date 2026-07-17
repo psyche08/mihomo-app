@@ -1,0 +1,30 @@
+{
+  "systemDNSListen": {
+    "host": "127.0.0.53",
+    "port": 53
+  },
+  "mihomoDNS": {
+    "host": "127.0.0.1",
+    "port": 1053
+  },
+  "upstreamListen": {
+    "host": "127.0.0.1",
+    "port": 1054
+  },
+  "manageSystemDNS": true,
+  "loopbackInterface": "lo0",
+  "loopbackAlias": "127.0.0.53",
+  "loopbackNetmask": "255.0.0.0",
+  "systemDNSBackupPath": "/Library/Application Support/Mihomo App/global-dns-backup.plist",
+  "aliasMarkerPath": "/Library/Application Support/Mihomo App/alias-created",
+  "queryTimeoutMilliseconds": 5000,
+  "fallbackDNSServers": [],
+  "mihomoProcess": {
+    "binaryPath": "/Library/Application Support/Mihomo App/mihomo",
+    "configDirectory": "/Library/Application Support/Mihomo App/mihomo-data",
+    "configPath": "/Library/Application Support/Mihomo App/mihomo-data/config.yaml",
+    "pidPath": "/Library/Application Support/Mihomo App/mihomo.pid",
+    "logPath": "/Library/Logs/Mihomo App/mihomo.log",
+    "restartDelayMilliseconds": 1000
+  }
+}

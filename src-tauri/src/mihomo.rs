@@ -1,0 +1,328 @@
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::time::Duration;
+
+#[derive(Clone)]
+pub struct MihomoClient {
+    base_url: String,
+    client: reqwest::Client,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Snapshot {
+    pub reachable: bool,
+    pub enhanced_tun: bool,
+    pub mode: String,
+    pub groups: Vec<ProxyGroup>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ProxyGroup {
+    pub name: String,
+    pub current: String,
+    pub proxies: Vec<ProxyNode>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ProxyNode {
+    pub name: String,
+    pub delay: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct ConfigResponse {
+    #[serde(default)]
+    mode: String,
+    #[serde(default)]
+    tun: TunConfig,
+}
+
+#[derive(Default, Deserialize, Serialize)]
+struct TunConfig {
+    #[serde(default)]
+    enable: bool,
+}
+
+#[derive(Deserialize)]
+struct ProxiesResponse {
+    proxies: HashMap<String, ProxyResponse>,
+}
+
+#[derive(Deserialize)]
+struct ProxyResponse {
+    #[serde(rename = "type", default)]
+    kind: String,
+    #[serde(default)]
+    now: String,
+    #[serde(default)]
+    all: Vec<String>,
+    #[serde(default)]
+    history: Vec<DelayEntry>,
+}
+
+#[derive(Deserialize)]
+struct DelayEntry {
+    delay: u64,
+}
+
+impl MihomoClient {
+    pub fn new(base_url: impl Into<String>) -> Self {
+        Self {
+            base_url: base_url.into(),
+            client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(4))
+                .build()
+                .expect("reqwest client"),
+        }
+    }
+
+    pub async fn snapshot(&self) -> Snapshot {
+        self.fetch_snapshot().await.unwrap_or_default()
+    }
+
+    async fn fetch_snapshot(&self) -> reqwest::Result<Snapshot> {
+        let configs = self
+            .client
+            .get(format!("{}/configs", self.base_url))
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<ConfigResponse>()
+            .await?;
+        let proxies = self
+            .client
+            .get(format!("{}/proxies", self.base_url))
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<ProxiesResponse>()
+            .await?;
+
+        let mut groups = proxies
+            .proxies
+            .iter()
+            .filter(|(_, value)| !value.all.is_empty())
+            .map(|(name, value)| ProxyGroup {
+                name: name.clone(),
+                current: value.now.clone(),
+                proxies: value
+                    .all
+                    .iter()
+                    .map(|node| ProxyNode {
+                        name: node.clone(),
+                        delay: proxies
+                            .proxies
+                            .get(node)
+                            .and_then(|entry| entry.history.last())
+                            .map(|entry| entry.delay),
+                    })
+                    .collect(),
+            })
+            .collect::<Vec<_>>();
+        groups.sort_by(|left, right| {
+            let left_selector = proxies
+                .proxies
+                .get(&left.name)
+                .is_some_and(|value| value.kind.eq_ignore_ascii_case("selector"));
+            let right_selector = proxies
+                .proxies
+                .get(&right.name)
+                .is_some_and(|value| value.kind.eq_ignore_ascii_case("selector"));
+            right_selector
+                .cmp(&left_selector)
+                .then_with(|| left.name.cmp(&right.name))
+        });
+
+        Ok(Snapshot {
+            reachable: true,
+            enhanced_tun: configs.tun.enable,
+            mode: configs.mode.to_lowercase(),
+            groups,
+        })
+    }
+
+    pub async fn set_tun(&self, enabled: bool) -> reqwest::Result<()> {
+        self.client
+            .patch(format!("{}/configs", self.base_url))
+            .json(&serde_json::json!({ "tun": { "enable": enabled } }))
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(())
+    }
+
+    pub async fn set_mode(&self, mode: &str) -> reqwest::Result<()> {
+        self.client
+            .patch(format!("{}/configs", self.base_url))
+            .json(&serde_json::json!({ "mode": mode }))
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(())
+    }
+
+    pub async fn select_proxy(&self, group: &str, proxy: &str) -> reqwest::Result<()> {
+        self.client
+            .put(format!(
+                "{}/proxies/{}",
+                self.base_url,
+                urlencoding::encode(group)
+            ))
+            .json(&serde_json::json!({ "name": proxy }))
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(())
+    }
+
+    pub async fn reload_profile(&self) -> reqwest::Result<()> {
+        self.client
+            .put(format!("{}/configs?force=true", self.base_url))
+            .json(&serde_json::json!({ "path": "", "payload": "" }))
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::mpsc;
+    use std::thread;
+
+    #[test]
+    fn default_snapshot_is_unreachable_and_safe() {
+        let snapshot = Snapshot::default();
+        assert!(!snapshot.reachable);
+        assert!(!snapshot.enhanced_tun);
+        assert!(snapshot.groups.is_empty());
+    }
+
+    #[test]
+    fn snapshot_maps_tun_mode_selectors_and_delay() {
+        let (base_url, server) = serve(vec![
+            r#"{"mode":"Rule","tun":{"enable":true}}"#,
+            r#"{"proxies":{"PROXY":{"type":"Selector","now":"Node B","all":["Node A","Node B"]},"Node A":{"type":"Shadowsocks","history":[{"delay":41}]},"Node B":{"type":"Shadowsocks","history":[{"delay":88}]}}}"#,
+        ]);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let snapshot = runtime.block_on(MihomoClient::new(base_url).snapshot());
+        server.join().expect("server");
+
+        assert!(snapshot.reachable);
+        assert!(snapshot.enhanced_tun);
+        assert_eq!(snapshot.mode, "rule");
+        assert_eq!(snapshot.groups.len(), 1);
+        assert_eq!(snapshot.groups[0].name, "PROXY");
+        assert_eq!(snapshot.groups[0].current, "Node B");
+        assert_eq!(snapshot.groups[0].proxies[0].delay, Some(41));
+        assert_eq!(snapshot.groups[0].proxies[1].delay, Some(88));
+    }
+
+    #[test]
+    fn mutations_use_mihomo_controller_contract() {
+        let (base_url, server, requests) = capture(4);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let client = MihomoClient::new(base_url);
+            client.set_tun(true).await.expect("set tun");
+            client.set_mode("global").await.expect("set mode");
+            client
+                .select_proxy("Primary Group", "Node B")
+                .await
+                .expect("select proxy");
+            client.reload_profile().await.expect("reload profile");
+        });
+        server.join().expect("server");
+        let requests = requests.recv().expect("requests");
+
+        assert!(requests[0].starts_with("PATCH /configs HTTP/1.1\r\n"));
+        assert!(requests[0].contains(r#"{"tun":{"enable":true}}"#));
+        assert!(requests[1].contains(r#"{"mode":"global"}"#));
+        assert!(requests[2].starts_with("PUT /proxies/Primary%20Group HTTP/1.1\r\n"));
+        assert!(requests[2].contains(r#"{"name":"Node B"}"#));
+        assert!(requests[3].starts_with("PUT /configs?force=true HTTP/1.1\r\n"));
+        assert!(requests[3].contains(r#"{"path":"","payload":""}"#));
+    }
+
+    fn serve(responses: Vec<&'static str>) -> (String, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let address = listener.local_addr().expect("address");
+        let server = thread::spawn(move || {
+            for response in responses {
+                let (mut stream, _) = listener.accept().expect("accept");
+                let _ = read_request(&mut stream);
+                write_response(&mut stream, response);
+            }
+        });
+        (format!("http://{address}"), server)
+    }
+
+    fn capture(count: usize) -> (String, thread::JoinHandle<()>, mpsc::Receiver<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let address = listener.local_addr().expect("address");
+        let (sender, receiver) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let mut requests = Vec::new();
+            for _ in 0..count {
+                let (mut stream, _) = listener.accept().expect("accept");
+                requests.push(read_request(&mut stream));
+                write_response(&mut stream, "{}");
+            }
+            sender.send(requests).expect("send requests");
+        });
+        (format!("http://{address}"), server, receiver)
+    }
+
+    fn read_request(stream: &mut TcpStream) -> String {
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        let mut expected_length = None;
+        loop {
+            let count = stream.read(&mut buffer).expect("read request");
+            if count == 0 {
+                break;
+            }
+            bytes.extend_from_slice(&buffer[..count]);
+            if let Some(header_end) = find_header_end(&bytes) {
+                let headers = String::from_utf8_lossy(&bytes[..header_end]);
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length: ")
+                            .and_then(|value| value.parse::<usize>().ok())
+                    })
+                    .unwrap_or(0);
+                expected_length = Some(header_end + 4 + content_length);
+            }
+            if expected_length.is_some_and(|length| bytes.len() >= length) {
+                break;
+            }
+        }
+        String::from_utf8(bytes).expect("utf-8 request")
+    }
+
+    fn find_header_end(bytes: &[u8]) -> Option<usize> {
+        bytes.windows(4).position(|window| window == b"\r\n\r\n")
+    }
+
+    fn write_response(stream: &mut TcpStream, body: &str) {
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .expect("write response");
+    }
+}

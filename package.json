@@ -1,0 +1,17 @@
+{
+  "name": "mihomo-app",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "prepare:icons": "bash scripts/prepare-icons.sh",
+    "prepare:metacubexd": "bash scripts/prepare-metacubexd.sh",
+    "prepare:binaries": "bash scripts/prepare-binaries.sh",
+    "prepare:bundle": "npm run prepare:icons && npm run prepare:metacubexd && npm run prepare:binaries",
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4"
+  }
+}

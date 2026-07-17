@@ -1,0 +1,25 @@
+{
+  "systemDNSListen": {
+    "host": "127.0.0.1",
+    "port": 15355
+  },
+  "mihomoDNS": {
+    "host": "127.0.0.1",
+    "port": 15353
+  },
+  "upstreamListen": {
+    "host": "127.0.0.1",
+    "port": 15354
+  },
+  "manageSystemDNS": false,
+  "loopbackInterface": "lo0",
+  "loopbackAlias": "127.0.0.53",
+  "loopbackNetmask": "255.0.0.0",
+  "systemDNSBackupPath": "/private/tmp/mihomo-daemon-e2e/global-dns-backup.plist",
+  "aliasMarkerPath": "/private/tmp/mihomo-daemon-e2e/alias-created",
+  "queryTimeoutMilliseconds": 1000,
+  "fallbackDNSServers": [
+    "1.1.1.1"
+  ],
+  "mihomoProcess": null
+}

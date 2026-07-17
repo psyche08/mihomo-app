@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>dev.linsheng.mihomo-app.daemon</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Library/Application Support/Mihomo App/mihomo-daemon</string>
+    <string>--config</string>
+    <string>/Library/Application Support/Mihomo App/daemon.json</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Library/Application Support/Mihomo App</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+  <key>StandardOutPath</key>
+  <string>/Library/Logs/Mihomo App/mihomo-daemon.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Library/Logs/Mihomo App/mihomo-daemon.log</string>
+</dict>
+</plist>

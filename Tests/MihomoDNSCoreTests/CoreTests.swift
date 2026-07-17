@@ -1,0 +1,160 @@
+import Foundation
+import SystemConfiguration
+import XCTest
+@testable import MihomoDNSCore
+
+final class CoreTests: XCTestCase {
+    func testDNSMessageLengthValidation() {
+        XCTAssertThrowsError(try DNSMessage.validate(Data(repeating: 0, count: 11)))
+        XCTAssertNoThrow(try DNSMessage.validate(Data(repeating: 0, count: 12)))
+    }
+
+    func testTruncatedFlag() {
+        XCTAssertTrue(DNSMessage.isTruncated(Data([0, 0, 0x02, 0])))
+        XCTAssertFalse(DNSMessage.isTruncated(Data([0, 0, 0x01, 0])))
+    }
+
+    func testConfigurationRejectsRecursiveEndpoint() {
+        let shared = Endpoint(host: "127.0.0.1", port: 1054)
+        let config = ProxyConfiguration(mihomoDNS: shared, upstreamListen: shared)
+        XCTAssertThrowsError(try config.validate()) { error in
+            XCTAssertEqual(error as? ConfigurationError, .recursiveEndpoint)
+        }
+    }
+
+    func testConfigurationJSONRoundTrip() throws {
+        let config = ProxyConfiguration(fallbackDNSServers: ["1.1.1.1"])
+        let data = try JSONEncoder().encode(config)
+        XCTAssertEqual(try JSONDecoder().decode(ProxyConfiguration.self, from: data), config)
+    }
+
+    func testExistingLoopbackAliasIsIgnored() throws {
+        let marker = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .path
+        let manager = LoopbackAliasManager(
+            interfaceName: "lo0",
+            address: "127.0.0.1",
+            netmask: "255.0.0.0",
+            markerPath: marker
+        )
+        try manager.ensure()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: marker))
+    }
+
+    func testPrivilegedLoopbackAliasLifecycle() throws {
+        guard ProcessInfo.processInfo.environment["MIHOMO_DNS_PRIVILEGED_TESTS"] == "1" else {
+            throw XCTSkip("set MIHOMO_DNS_PRIVILEGED_TESTS=1 and run as root")
+        }
+        let marker = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .path
+        let manager = LoopbackAliasManager(
+            interfaceName: "lo0",
+            address: "127.0.0.253",
+            netmask: "255.0.0.0",
+            markerPath: marker
+        )
+        if try manager.isPresent() {
+            throw XCTSkip("temporary loopback alias is already in use")
+        }
+        defer { try? manager.removeIfManaged() }
+
+        try manager.ensure()
+        XCTAssertTrue(try manager.isPresent())
+        XCTAssertTrue(FileManager.default.fileExists(atPath: marker))
+        try manager.ensure()
+        try manager.removeIfManaged()
+        XCTAssertFalse(try manager.isPresent())
+        XCTAssertFalse(FileManager.default.fileExists(atPath: marker))
+    }
+
+    func testGlobalDNSPreferencesApplyAndRestore() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let preferencesPath = root.appendingPathComponent("preferences.plist").path
+        let backupPath = root.appendingPathComponent("backup.plist").path
+        guard let preferences = SCPreferencesCreate(
+            nil,
+            "dev.linsheng.mihomo-app.daemon.tests.seed" as CFString,
+            preferencesPath as CFString
+        ) else {
+            return XCTFail("cannot create test preferences")
+        }
+        XCTAssertTrue(SCPreferencesSetValue(preferences, kSCPrefCurrentSet, "/Sets/Test" as CFString))
+        let dnsPath = "/Sets/Test/Network/Global/DNS" as CFString
+        let original = [kSCPropNetDNSServerAddresses as String: ["1.1.1.1"]] as CFDictionary
+        XCTAssertTrue(SCPreferencesPathSetValue(preferences, dnsPath, original))
+        guard SCPreferencesCommitChanges(preferences) else {
+            throw XCTSkip("SCPreferences custom-file commit requires privileged SystemConfiguration access")
+        }
+
+        let manager = GlobalDNSPreferences(
+            servers: ["127.0.0.53"],
+            backupPath: backupPath,
+            preferencesID: preferencesPath
+        )
+        try manager.apply()
+        SCPreferencesSynchronize(preferences)
+        let managed = SCPreferencesPathGetValue(preferences, dnsPath) as? [String: Any]
+        XCTAssertEqual(managed?[kSCPropNetDNSServerAddresses as String] as? [String], ["127.0.0.53"])
+
+        try manager.apply()
+        try manager.restore()
+        SCPreferencesSynchronize(preferences)
+        let restored = SCPreferencesPathGetValue(preferences, dnsPath) as? [String: Any]
+        XCTAssertEqual(restored?[kSCPropNetDNSServerAddresses as String] as? [String], ["1.1.1.1"])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: backupPath))
+    }
+
+    func testFallbackForwarderUsesPrimaryWhenAvailable() throws {
+        let expected = Data(repeating: 1, count: 12)
+        let primary = StubForwarder(result: .success(expected))
+        let fallback = StubForwarder(result: .success(Data(repeating: 2, count: 12)))
+        let forwarder = FallbackDNSForwarder(primary: primary, fallback: fallback)
+
+        XCTAssertEqual(try forwarder.forward(Data(repeating: 0, count: 12)), expected)
+        XCTAssertEqual(primary.callCount, 1)
+        XCTAssertEqual(fallback.callCount, 0)
+    }
+
+    func testFallbackForwarderUsesOriginalDNSWhenPrimaryFails() throws {
+        let expected = Data(repeating: 2, count: 12)
+        let primary = StubForwarder(result: .failure(TestError.unreachable))
+        let fallback = StubForwarder(result: .success(expected))
+        let forwarder = FallbackDNSForwarder(primary: primary, fallback: fallback)
+
+        XCTAssertEqual(try forwarder.forward(Data(repeating: 0, count: 12)), expected)
+        XCTAssertEqual(primary.callCount, 1)
+        XCTAssertEqual(fallback.callCount, 1)
+    }
+}
+
+private enum TestError: Error {
+    case unreachable
+}
+
+private final class StubForwarder: DNSForwarding, @unchecked Sendable {
+    private let lock = NSLock()
+    private let result: Result<Data, Error>
+    private var calls = 0
+
+    init(result: Result<Data, Error>) {
+        self.result = result
+    }
+
+    var callCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return calls
+    }
+
+    func forward(_ query: Data) throws -> Data {
+        lock.lock()
+        calls += 1
+        lock.unlock()
+        return try result.get()
+    }
+}

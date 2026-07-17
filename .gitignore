@@ -1,0 +1,10 @@
+/.build/
+/.swiftpm/
+/.cache/
+/node_modules/
+/ui-dist/
+/src-tauri/target/
+/src-tauri/binaries/*
+!/src-tauri/binaries/.gitkeep
+__pycache__/
+*.pyc

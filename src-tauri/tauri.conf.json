@@ -1,0 +1,57 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Mihomo App",
+  "version": "0.1.0",
+  "identifier": "dev.linsheng.mihomo-app",
+  "build": {
+    "beforeDevCommand": "npm run prepare:bundle",
+    "beforeBuildCommand": "npm run prepare:bundle",
+    "frontendDist": "../ui-dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Mihomo App",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 900,
+        "minHeight": 600,
+        "visible": false,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:9090 ws://127.0.0.1:9090"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg"],
+    "category": "Utility",
+    "copyright": "Copyright © 2026 Sheng Lin",
+    "externalBin": [
+      "binaries/mihomo",
+      "binaries/mihomo-daemon"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns"
+    ],
+    "resources": {
+      "../scripts/install-daemon.sh": "scripts/install-daemon.sh",
+      "../deploy/daemon.json": "daemon/daemon.json",
+      "../deploy/default-config.yaml": "daemon/default-config.yaml",
+      "../deploy/configure_mihomo.py": "daemon/configure_mihomo.py",
+      "../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
+      "../third_party/Mihomo.LICENSE": "licenses/Mihomo.LICENSE",
+      "../third_party/MetaCubeXD.LICENSE": "licenses/MetaCubeXD.LICENSE",
+      "../deploy/dev.linsheng.mihomo-app.daemon.plist": "daemon/dev.linsheng.mihomo-app.daemon.plist"
+    },
+    "macOS": {
+      "minimumSystemVersion": "14.0"
+    }
+  }
+}
