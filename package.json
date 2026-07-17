@@ -3,10 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "prepare:rust-cache": "bash scripts/prepare-rust-cache.sh",
     "prepare:icons": "bash scripts/prepare-icons.sh",
     "prepare:metacubexd": "bash scripts/prepare-metacubexd.sh",
     "prepare:binaries": "bash scripts/prepare-binaries.sh",
-    "prepare:bundle": "npm run prepare:icons && npm run prepare:metacubexd && npm run prepare:binaries",
+    "prepare:bundle": "npm run prepare:rust-cache && npm run prepare:icons && npm run prepare:metacubexd && npm run prepare:binaries",
     "tauri": "tauri",
     "dev": "tauri dev",
     "build": "tauri build"

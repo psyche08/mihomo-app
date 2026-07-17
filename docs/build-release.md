@@ -20,6 +20,9 @@ archive checksum, and stages the executable using Tauri's required
 external binaries. Tauri places them in `Contents/MacOS` without the target
 suffix.
 
+SwiftPM and Cargo both cache absolute build paths. Their preparation scripts
+record the project root and clean only generated caches when the checkout moves.
+
 `scripts/prepare-icons.sh` verifies the checked-in official Mihomo `Meta.png`
 and all derived PNG/ICNS outputs by SHA-256. Generated icons are committed;
 normal builds do not rewrite ICNS metadata.
