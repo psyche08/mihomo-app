@@ -38,6 +38,8 @@ done
   --wait
 /usr/bin/xcrun stapler staple "$APP"
 /usr/bin/xcrun stapler validate "$APP"
+/bin/rm -f "$ARCHIVE"
+/usr/bin/ditto -c -k --keepParent "$APP" "$ARCHIVE"
 /usr/sbin/spctl --assess --type execute --verbose=2 "$APP"
 /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP"
 
