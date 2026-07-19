@@ -10,7 +10,11 @@ public final class ProxyService {
     private let networkState: NetworkDNSState
     private let aliasManager: LoopbackAliasManager
     private let globalDNS: GlobalDNSPreferences
+    private let safetyState = NetworkSafetyState()
     private let mihomoSupervisor: MihomoSupervisor?
+    private let stopLock = NSLock()
+    private var stopped = false
+    private var consistencyController: NetworkConsistencyController?
     private var channels: [Channel] = []
 
     public init(configuration: ProxyConfiguration) {
@@ -40,7 +44,10 @@ public final class ProxyService {
 
     public func start() throws {
         try configuration.validate()
+        safetyState.setRuntimeReady(!configuration.manageSystemDNS)
         if configuration.manageSystemDNS {
+            try globalDNS.restore()
+            try aliasManager.removeIfManaged()
             try aliasManager.ensure()
         }
         try networkState.start()
@@ -56,7 +63,8 @@ public final class ProxyService {
         )
         let systemDNSForwarder = FallbackDNSForwarder(
             primary: mihomoForwarder,
-            fallback: originalDNSForwarder
+            fallback: originalDNSForwarder,
+            primaryAllowed: { [safetyState] in safetyState.isRuntimeReady() }
         )
 
         do {
@@ -64,18 +72,20 @@ public final class ProxyService {
             channels.append(try startTCP(endpoint: configuration.systemDNSListen, forwarder: systemDNSForwarder))
             channels.append(try startUDP(endpoint: configuration.upstreamListen, forwarder: originalDNSForwarder))
             channels.append(try startTCP(endpoint: configuration.upstreamListen, forwarder: originalDNSForwarder))
-            if configuration.manageSystemDNS {
-                try globalDNS.apply()
-                let preferences = globalDNS
-                networkState.setRefreshHandler {
-                    do {
-                        try preferences.apply()
-                    } catch {
-                        ServiceLog.error("event=global_dns_reapply_failed error=\(String(describing: error))")
-                    }
-                }
-            }
             try mihomoSupervisor?.start()
+            if configuration.manageSystemDNS {
+                let controller = NetworkConsistencyController(
+                    configuration: configuration,
+                    globalDNS: globalDNS,
+                    aliasManager: aliasManager,
+                    safetyState: safetyState,
+                    unsafeRuntimeHandler: { [mihomoSupervisor] in
+                        mihomoSupervisor?.stop()
+                    }
+                )
+                consistencyController = controller
+                controller.start()
+            }
         } catch {
             stop()
             throw error
@@ -91,6 +101,7 @@ public final class ProxyService {
     }
 
     public static func restoreSystemDNS(configuration: ProxyConfiguration) throws {
+        MihomoRuntimeInspector.flushMihomoDNSCaches()
         let preferences = GlobalDNSPreferences(
             servers: [configuration.systemDNSListen.host],
             backupPath: configuration.systemDNSBackupPath
@@ -103,6 +114,19 @@ public final class ProxyService {
             markerPath: configuration.aliasMarkerPath
         )
         try alias.removeIfManaged()
+        DNSCacheMaintenance.flushSystemCaches()
+    }
+
+    public static func isSystemDNSApplied(configuration: ProxyConfiguration) throws -> Bool {
+        let preferences = GlobalDNSPreferences(
+            servers: [configuration.systemDNSListen.host],
+            backupPath: configuration.systemDNSBackupPath
+        )
+        return try preferences.isApplied()
+    }
+
+    public static func networkHealth(configuration: ProxyConfiguration) -> NetworkConsistencyHealth {
+        MihomoRuntimeInspector.inspect(configuration: configuration)
     }
 
     public func wait() throws {
@@ -111,13 +135,30 @@ public final class ProxyService {
     }
 
     public func stop() {
-        mihomoSupervisor?.stop()
-        networkState.setRefreshHandler(nil)
+        stopLock.lock()
+        guard !stopped else {
+            stopLock.unlock()
+            return
+        }
+        stopped = true
+        stopLock.unlock()
+
+        safetyState.setRuntimeReady(false)
+        MihomoRuntimeInspector.flushMihomoDNSCaches()
+        consistencyController?.stopAndRestore()
+        consistencyController = nil
+        if configuration.manageSystemDNS {
+            try? globalDNS.restore()
+            try? aliasManager.removeIfManaged()
+        }
+        DNSCacheMaintenance.flushSystemCaches()
         let active = channels
         channels.removeAll()
         for channel in active {
             try? channel.close().wait()
         }
+        networkState.stop()
+        mihomoSupervisor?.stop()
         try? threadPool.syncShutdownGracefully()
         try? group.syncShutdownGracefully()
     }

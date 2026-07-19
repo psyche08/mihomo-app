@@ -102,6 +102,15 @@ public final class NetworkDNSState: @unchecked Sendable {
         lock.unlock()
     }
 
+    public func stop() {
+        setRefreshHandler(nil)
+        if let store {
+            SCDynamicStoreSetDispatchQueue(store, nil)
+        }
+        queue.sync {}
+        store = nil
+    }
+
     fileprivate func refresh() {
         guard let store else { return }
         let globalIPv4 = SCDynamicStoreCopyValue(store, "State:/Network/Global/IPv4" as CFString)
@@ -135,10 +144,21 @@ public final class NetworkDNSState: @unchecked Sendable {
         if servers.isEmpty {
             servers = unique(fallbackServers.filter(isUsableServer))
         }
-        let next = NetworkDNSSnapshot(interfaceName: interfaceName, serviceID: serviceID, servers: servers)
 
         lock.lock()
         let previous = value
+        var retainedInterface = interfaceName
+        var retainedService = serviceID
+        if servers.isEmpty, !previous.servers.isEmpty {
+            servers = previous.servers
+            retainedInterface = previous.interfaceName
+            retainedService = previous.serviceID
+        }
+        let next = NetworkDNSSnapshot(
+            interfaceName: retainedInterface,
+            serviceID: retainedService,
+            servers: servers
+        )
         value = next
         let handler = refreshHandler
         lock.unlock()

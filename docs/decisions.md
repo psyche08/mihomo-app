@@ -19,7 +19,7 @@ DNS, and Enhanced TUN state coherent. The GUI never starts a second kernel.
 
 ## Copy bundle payloads to stable system paths
 
-A LaunchDaemon that executes inside `/Applications/Mihomo App.app` breaks when
+A LaunchDaemon that executes inside `/Applications/MihomoBox.app` breaks when
 the user moves, replaces, or deletes the App. The signed bundle is the install
 source; root-owned copies are the runtime.
 

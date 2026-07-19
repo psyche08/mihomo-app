@@ -67,15 +67,25 @@ public final class DynamicDNSForwarder: DNSForwarding, @unchecked Sendable {
             throw DNSForwardingError.noUpstream
         }
         for server in snapshot.servers {
+            let endpoint = Endpoint(host: server, port: 53)
             do {
-                return try SocketDNSClient.query(
+                return try SocketDNSClient.queryTCP(
                     query,
-                    endpoint: Endpoint(host: server, port: 53),
+                    endpoint: endpoint,
                     timeoutMilliseconds: timeoutMilliseconds,
                     interfaceName: snapshot.interfaceName
                 )
             } catch {
-                continue
+                do {
+                    return try SocketDNSClient.query(
+                        query,
+                        endpoint: endpoint,
+                        timeoutMilliseconds: timeoutMilliseconds,
+                        interfaceName: snapshot.interfaceName
+                    )
+                } catch {
+                    continue
+                }
             }
         }
         throw DNSForwardingError.allUpstreamsFailed
@@ -85,13 +95,22 @@ public final class DynamicDNSForwarder: DNSForwarding, @unchecked Sendable {
 public final class FallbackDNSForwarder: DNSForwarding, @unchecked Sendable {
     private let primary: DNSForwarding
     private let fallback: DNSForwarding
+    private let primaryAllowed: @Sendable () -> Bool
 
-    public init(primary: DNSForwarding, fallback: DNSForwarding) {
+    public init(
+        primary: DNSForwarding,
+        fallback: DNSForwarding,
+        primaryAllowed: @escaping @Sendable () -> Bool = { true }
+    ) {
         self.primary = primary
         self.fallback = fallback
+        self.primaryAllowed = primaryAllowed
     }
 
     public func forward(_ query: Data) throws -> Data {
+        guard primaryAllowed() else {
+            return try fallback.forward(query)
+        }
         do {
             return try primary.forward(query)
         } catch {
@@ -104,6 +123,25 @@ public final class FallbackDNSForwarder: DNSForwarding, @unchecked Sendable {
 }
 
 enum SocketDNSClient {
+    static func queryTCP(
+        _ query: Data,
+        endpoint: Endpoint,
+        timeoutMilliseconds: Int,
+        interfaceName: String?
+    ) throws -> Data {
+        try DNSMessage.validate(query)
+        let response = try exchange(
+            query,
+            endpoint: endpoint,
+            timeoutMilliseconds: timeoutMilliseconds,
+            interfaceName: interfaceName,
+            socketType: SOCK_STREAM,
+            protocolNumber: IPPROTO_TCP
+        )
+        try validateResponse(response, query: query)
+        return response
+    }
+
     static func query(
         _ query: Data,
         endpoint: Endpoint,

@@ -10,6 +10,9 @@
   adding authentication first.
 - Privileged installation is an explicit menu action and uses the macOS
   administrator dialog. No credential is captured by the application.
+- Remote installation uses the same bundled installer through an authenticated
+  SSH session and `sudo`; the App does not store or relay the administrator
+  credential.
 - launchd executes stable root-owned copies, never files in a user-writable Git
   checkout or movable App bundle.
 

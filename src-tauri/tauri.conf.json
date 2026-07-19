@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Mihomo App",
+  "productName": "MihomoBox",
   "version": "0.1.0",
   "identifier": "dev.linsheng.mihomo-app",
   "build": {
@@ -12,7 +12,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Mihomo App",
+        "title": "MihomoBox",
         "width": 1280,
         "height": 820,
         "minWidth": 900,
@@ -32,7 +32,8 @@
     "copyright": "Copyright © 2026 Sheng Lin",
     "externalBin": [
       "binaries/mihomo",
-      "binaries/mihomo-daemon"
+      "binaries/mihomo-daemon",
+      "binaries/mihomoboxctl"
     ],
     "icon": [
       "icons/32x32.png",
@@ -42,13 +43,14 @@
     ],
     "resources": {
       "../scripts/install-daemon.sh": "scripts/install-daemon.sh",
+      "../scripts/install-daemon-remote.sh": "scripts/install-daemon-remote.sh",
       "../deploy/daemon.json": "daemon/daemon.json",
       "../deploy/default-config.yaml": "daemon/default-config.yaml",
       "../deploy/configure_mihomo.py": "daemon/configure_mihomo.py",
       "../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
       "../third_party/Mihomo.LICENSE": "licenses/Mihomo.LICENSE",
       "../third_party/MetaCubeXD.LICENSE": "licenses/MetaCubeXD.LICENSE",
-      "../deploy/dev.linsheng.mihomo-app.daemon.plist": "daemon/dev.linsheng.mihomo-app.daemon.plist"
+      "../deploy/dev.linsheng.mihomo.daemon.plist": "daemon/dev.linsheng.mihomo.daemon.plist"
     },
     "macOS": {
       "minimumSystemVersion": "14.0"

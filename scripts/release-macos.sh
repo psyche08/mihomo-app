@@ -20,9 +20,9 @@ export APPLE_SIGNING_IDENTITY="$IDENTITY"
 /usr/bin/env npm run prepare:bundle
 /usr/bin/env npm run tauri -- build --bundles app
 
-APP="$ROOT/src-tauri/target/release/bundle/macos/Mihomo App.app"
+APP="$ROOT/src-tauri/target/release/bundle/macos/MihomoBox.app"
 DIST="$ROOT/dist"
-ARCHIVE="$DIST/Mihomo-App-0.1.0-macos.zip"
+ARCHIVE="$DIST/MihomoBox-0.1.0-macos.zip"
 for executable in "$APP/Contents/MacOS/"*; do
   /usr/bin/codesign --force --options runtime --timestamp --sign "$IDENTITY" "$executable"
 done

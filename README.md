@@ -1,14 +1,15 @@
-# Mihomo App
+# MihomoBox
 
 An open-source native macOS menu-bar controller for Mihomo.
 
 - Tauri v2 application with a hidden-by-default main window.
 - App and tray artwork is derived from Mihomo's official `Meta.png`.
 - MetaCubeXD is built and embedded as the main dashboard.
-- Tray controls Enhanced TUN, outbound mode, proxy selection with latency,
-  profile reload, daemon installation, and exit.
-- The App bundle contains architecture-matched `mihomo` and
-  `mihomo-daemon` executables under `Contents/MacOS`.
+- Tray controls required Enhanced TUN, outbound mode, proxy selection with
+  latency, local YAML import/switch, network recovery, daemon installation,
+  and exit.
+- The App bundle contains architecture-matched `mihomo`, `mihomo-daemon`, and
+  `mihomoboxctl` executables under `Contents/MacOS`.
 - The root daemon supervises Mihomo and provides DHCP-aware system DNS without
   a DNS Settings profile.
 
@@ -36,6 +37,25 @@ Restore Global DNS and remove the daemon:
 ```bash
 sudo scripts/install-daemon.sh --restore
 ```
+
+Import and transactionally activate a local profile:
+
+```bash
+sudo scripts/install-daemon.sh --import-profile /path/to/profile.yaml --activate
+```
+
+After installation, the same safe operations are available through the CLI:
+
+```bash
+mihomoboxctl status
+mihomoboxctl profile list
+mihomoboxctl profile import ~/Desktop/sheng.yaml --activate
+mihomoboxctl restart
+mihomoboxctl stop
+```
+
+Read-only commands do not require elevated privileges. Mutating commands enter
+the same bundled installer boundary and request authorization with `sudo`.
 
 ## Documentation
 

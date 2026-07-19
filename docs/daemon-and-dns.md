@@ -15,7 +15,7 @@ it never kills an unrelated process merely because a PID file exists.
 ## DNS Flow
 
 ```text
-macOS -> 127.0.0.53:53 -> 127.0.0.1:1053 (Mihomo)
+macOS -> 127.0.0.53:53 -> 127.0.0.1:1153 (Mihomo)
                               |
                               +-- unavailable/timeout/invalid response
                                   -> DHCP DNS on PrimaryInterface
@@ -24,7 +24,11 @@ Mihomo -> 127.0.0.1:1054 -> DHCP DNS on PrimaryInterface
 ```
 
 The separate `1054` listener is mandatory. Pointing Mihomo at macOS `system`
-DNS would recurse back through `127.0.0.53`.
+DNS would recurse back through `127.0.0.53`. The installer also forces
+`dns.respect-rules: false`, so Mihomo never routes its loopback `1054` upstream
+through a proxy rule and accidentally breaks this recursion boundary. Mihomo
+uses the daemon's TCP `1054` listener for its upstream requests so Enhanced TUN
+cannot recapture a UDP loopback flow emitted by Mihomo itself.
 
 ## Global DNS
 
@@ -35,8 +39,11 @@ The daemon reads `CurrentSet`, then manages:
 ```
 
 It uses `SCPreferencesPathGetValue` and `SCPreferencesPathSetValue`, followed by
-`SCPreferencesCommitChanges` and `SCPreferencesApplyChanges`. Before the first
-write for each active set, it stores the prior dictionary in a binary plist.
+`SCPreferencesCommitChanges` and `SCPreferencesApplyChanges`. On current macOS,
+the effective resolver is published through the current PrimaryService's
+`State:/Network/Service/<id>/DNS` dictionary; a Global dynamic dictionary alone
+does not enter `scutil --dns`. Before the first write for each active set or
+primary service, the daemon stores the prior dictionary in a binary plist.
 
 Restoration is compare-before-write: an entry is restored only while its
 current `ServerAddresses` still equals the daemon-managed value. An external
@@ -58,5 +65,12 @@ On change it:
 3. excludes loopback, fake-IP, and daemon endpoints;
 4. binds original-DNS sockets using `IP_BOUND_IF`/`IPV6_BOUND_IF`;
 5. idempotently reapplies Global DNS for the new active set.
+
+When the persistent Global DNS value already matches but the PrimaryService's
+dynamic DNS value is absent, the daemon reapplies preferences and republishes
+the service value. Each service value is restored or removed with the same
+compare-before-write rule. This repairs resolver state lost during a TUN,
+primary-service change, or LaunchDaemon handoff without creating a notification
+loop.
 
 No query name or wire message is logged.

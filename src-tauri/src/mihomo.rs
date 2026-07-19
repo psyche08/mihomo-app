@@ -174,16 +174,6 @@ impl MihomoClient {
             .error_for_status()?;
         Ok(())
     }
-
-    pub async fn reload_profile(&self) -> reqwest::Result<()> {
-        self.client
-            .put(format!("{}/configs?force=true", self.base_url))
-            .json(&serde_json::json!({ "path": "", "payload": "" }))
-            .send()
-            .await?
-            .error_for_status()?;
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -227,7 +217,7 @@ mod tests {
 
     #[test]
     fn mutations_use_mihomo_controller_contract() {
-        let (base_url, server, requests) = capture(4);
+        let (base_url, server, requests) = capture(3);
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -240,7 +230,6 @@ mod tests {
                 .select_proxy("Primary Group", "Node B")
                 .await
                 .expect("select proxy");
-            client.reload_profile().await.expect("reload profile");
         });
         server.join().expect("server");
         let requests = requests.recv().expect("requests");
@@ -250,8 +239,6 @@ mod tests {
         assert!(requests[1].contains(r#"{"mode":"global"}"#));
         assert!(requests[2].starts_with("PUT /proxies/Primary%20Group HTTP/1.1\r\n"));
         assert!(requests[2].contains(r#"{"name":"Node B"}"#));
-        assert!(requests[3].starts_with("PUT /configs?force=true HTTP/1.1\r\n"));
-        assert!(requests[3].contains(r#"{"path":"","payload":""}"#));
     }
 
     fn serve(responses: Vec<&'static str>) -> (String, thread::JoinHandle<()>) {

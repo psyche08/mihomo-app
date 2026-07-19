@@ -5,7 +5,7 @@
   },
   "mihomoDNS": {
     "host": "127.0.0.1",
-    "port": 1053
+    "port": 1153
   },
   "upstreamListen": {
     "host": "127.0.0.1",

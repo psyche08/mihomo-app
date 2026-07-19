@@ -78,7 +78,7 @@ final class CoreTests: XCTestCase {
         let backupPath = root.appendingPathComponent("backup.plist").path
         guard let preferences = SCPreferencesCreate(
             nil,
-            "dev.linsheng.mihomo-app.daemon.tests.seed" as CFString,
+            "dev.linsheng.mihomo.daemon.tests.seed" as CFString,
             preferencesPath as CFString
         ) else {
             return XCTFail("cannot create test preferences")
@@ -97,6 +97,7 @@ final class CoreTests: XCTestCase {
             preferencesID: preferencesPath
         )
         try manager.apply()
+        XCTAssertTrue(try manager.isApplied())
         SCPreferencesSynchronize(preferences)
         let managed = SCPreferencesPathGetValue(preferences, dnsPath) as? [String: Any]
         XCTAssertEqual(managed?[kSCPropNetDNSServerAddresses as String] as? [String], ["127.0.0.53"])
@@ -128,6 +129,22 @@ final class CoreTests: XCTestCase {
 
         XCTAssertEqual(try forwarder.forward(Data(repeating: 0, count: 12)), expected)
         XCTAssertEqual(primary.callCount, 1)
+        XCTAssertEqual(fallback.callCount, 1)
+    }
+
+    func testFallbackForwarderSkipsFakeIPWhenRuntimeIsUnsafe() throws {
+        let expected = Data(repeating: 2, count: 12)
+        let primary = StubForwarder(result: .success(Data(repeating: 1, count: 12)))
+        let fallback = StubForwarder(result: .success(expected))
+        let safetyState = NetworkSafetyState()
+        let forwarder = FallbackDNSForwarder(
+            primary: primary,
+            fallback: fallback,
+            primaryAllowed: { safetyState.isRuntimeReady() }
+        )
+
+        XCTAssertEqual(try forwarder.forward(Data(repeating: 0, count: 12)), expected)
+        XCTAssertEqual(primary.callCount, 0)
         XCTAssertEqual(fallback.callCount, 1)
     }
 }

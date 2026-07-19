@@ -1,0 +1,367 @@
+import Darwin
+import Foundation
+
+public final class NetworkSafetyState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var runtimeReady = false
+
+    public init() {}
+
+    public func setRuntimeReady(_ ready: Bool) {
+        lock.lock()
+        runtimeReady = ready
+        lock.unlock()
+    }
+
+    public func isRuntimeReady() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return runtimeReady
+    }
+}
+
+public enum DNSCacheMaintenance {
+    public static func flushSystemCaches() {
+        run("/usr/bin/dscacheutil", arguments: ["-flushcache"])
+        run("/usr/bin/killall", arguments: ["-HUP", "mDNSResponder"])
+    }
+
+    private static func run(_ path: String, arguments: [String]) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: path)
+        process.arguments = arguments
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {}
+    }
+}
+
+public struct NetworkConsistencyHealth: Codable, Equatable {
+    public var controllerReachable: Bool
+    public var tunEnabled: Bool
+    public var tunInterface: String?
+    public var fakeIPMode: Bool
+    public var fakeIPRouteReady: Bool
+    public var dnsBridgeReady: Bool
+    public var mihomoDNSReady: Bool
+    public var systemDNSManaged: Bool
+    public var networkConsistent: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case controllerReachable = "controller_reachable"
+        case tunEnabled = "tun_enabled"
+        case tunInterface = "tun_interface"
+        case fakeIPMode = "fake_ip_mode"
+        case fakeIPRouteReady = "fake_ip_route_ready"
+        case dnsBridgeReady = "dns_bridge_ready"
+        case mihomoDNSReady = "mihomo_dns_ready"
+        case systemDNSManaged = "system_dns_managed"
+        case networkConsistent = "network_consistent"
+    }
+}
+
+public enum MihomoRuntimeInspector {
+    private static let controllerHost = "127.0.0.1"
+    private static let controllerPort: UInt16 = 9090
+    private static let fakeIPProbe = "198.18.0.1"
+
+    public static func inspect(
+        configuration: ProxyConfiguration,
+        globalDNS: GlobalDNSPreferences? = nil
+    ) -> NetworkConsistencyHealth {
+        let controller = controllerConfiguration()
+        let fakeIPMode = configuration.mihomoProcess
+            .map { inspectFakeIPMode(path: $0.configPath) } ?? false
+        let routeInterface = fakeIPRouteInterface()
+        let dnsBridgeReady = dnsEndpointResponds(endpoint: configuration.systemDNSListen)
+        let mihomoDNSReady = dnsEndpointResponds(endpoint: configuration.mihomoDNS)
+        let systemDNSManaged: Bool
+        if let globalDNS {
+            systemDNSManaged = ((try? globalDNS.isApplied()) == true) && globalDNS.isEffective()
+        } else {
+            let preferences = GlobalDNSPreferences(
+                servers: [configuration.systemDNSListen.host],
+                backupPath: configuration.systemDNSBackupPath
+            )
+            systemDNSManaged = ((try? preferences.isApplied()) == true) && preferences.isEffective()
+        }
+        let tunEnabled = controller.tunEnabled
+        let routeReady = routeInterface != nil
+        let runtimeReady = controller.reachable && tunEnabled && routeReady
+            && dnsBridgeReady && mihomoDNSReady
+        let networkConsistent = systemDNSManaged ? runtimeReady : (!tunEnabled || routeReady)
+        return NetworkConsistencyHealth(
+            controllerReachable: controller.reachable,
+            tunEnabled: tunEnabled,
+            tunInterface: routeInterface,
+            fakeIPMode: fakeIPMode,
+            fakeIPRouteReady: fakeIPMode && routeReady,
+            dnsBridgeReady: dnsBridgeReady,
+            mihomoDNSReady: mihomoDNSReady,
+            systemDNSManaged: systemDNSManaged,
+            networkConsistent: networkConsistent
+        )
+    }
+
+    static func inspectFakeIPMode(path: String) -> Bool {
+        guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return false }
+        var section: String?
+        for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(rawLine)
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+            if !line.hasPrefix(" ") && trimmed.hasSuffix(":") {
+                section = String(trimmed.dropLast())
+                continue
+            }
+            guard section == "dns", line.hasPrefix("  "), !line.hasPrefix("    ") else { continue }
+            let parts = trimmed.split(separator: ":", maxSplits: 1).map(String.init)
+            guard parts.count == 2, parts[0] == "enhanced-mode" else { continue }
+            let value = parts[1]
+                .split(separator: "#", maxSplits: 1)
+                .first
+                .map(String.init)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+            return value?.lowercased() == "fake-ip"
+        }
+        return false
+    }
+
+    public static func flushMihomoDNSCaches() {
+        _ = httpRequest(method: "POST", path: "/cache/fakeip/flush")
+        _ = httpRequest(method: "POST", path: "/cache/dns/flush")
+    }
+
+    private static func dnsEndpointResponds(endpoint: Endpoint) -> Bool {
+        let healthQuery = Data([
+            0x4d, 0x48, 0x01, 0x00, 0x00, 0x01,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x07, 0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65,
+            0x03, 0x63, 0x6f, 0x6d,
+            0x00, 0x00, 0x01, 0x00, 0x01,
+        ])
+        return (try? SocketDNSClient.query(
+            healthQuery,
+            endpoint: endpoint,
+            timeoutMilliseconds: 2_000,
+            interfaceName: nil
+        )) != nil
+    }
+
+    private static func controllerConfiguration() -> (reachable: Bool, tunEnabled: Bool) {
+        guard let data = httpRequest(method: "GET", path: "/configs"),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let tun = object["tun"] as? [String: Any],
+              let enabled = tun["enable"] as? Bool else {
+            return (false, false)
+        }
+        return (true, enabled)
+    }
+
+    private static func httpRequest(method: String, path: String) -> Data? {
+        let descriptor = socket(AF_INET, SOCK_STREAM, 0)
+        guard descriptor >= 0 else { return nil }
+        defer { close(descriptor) }
+        var timeout = timeval(tv_sec: 1, tv_usec: 0)
+        setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout.size(ofValue: timeout)))
+        setsockopt(descriptor, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout.size(ofValue: timeout)))
+
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = controllerPort.bigEndian
+        address.sin_addr = in_addr(s_addr: inet_addr(controllerHost))
+        let connected = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        guard connected == 0 else { return nil }
+
+        let request = "\(method) \(path) HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        let sent = request.withCString { pointer in
+            Darwin.send(descriptor, pointer, strlen(pointer), 0)
+        }
+        guard sent == request.utf8.count else { return nil }
+
+        var response = Data()
+        var buffer = [UInt8](repeating: 0, count: 16_384)
+        while response.count <= 1_048_576 {
+            let count = Darwin.recv(descriptor, &buffer, buffer.count, 0)
+            if count == 0 { break }
+            guard count > 0 else { return nil }
+            response.append(buffer, count: count)
+        }
+        guard response.starts(with: Data("HTTP/1.1 200".utf8))
+                || response.starts(with: Data("HTTP/1.0 200".utf8)),
+              let headerRange = response.range(of: Data("\r\n\r\n".utf8)) else {
+            return nil
+        }
+        return response.subdata(in: headerRange.upperBound..<response.endIndex)
+    }
+
+    private static func fakeIPRouteInterface() -> String? {
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/sbin/route")
+        process.arguments = ["-n", "get", fakeIPProbe]
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return nil
+        }
+        guard process.terminationStatus == 0,
+              let text = String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) else {
+            return nil
+        }
+        for line in text.split(separator: "\n") {
+            let parts = line.split(separator: ":", maxSplits: 1).map(String.init)
+            guard parts.count == 2, parts[0].trimmingCharacters(in: .whitespaces) == "interface" else {
+                continue
+            }
+            let interface = parts[1].trimmingCharacters(in: .whitespaces)
+            return interface.hasPrefix("utun") ? interface : nil
+        }
+        return nil
+    }
+}
+
+public final class NetworkConsistencyController: @unchecked Sendable {
+    private let configuration: ProxyConfiguration
+    private let globalDNS: GlobalDNSPreferences
+    private let aliasManager: LoopbackAliasManager
+    private let safetyState: NetworkSafetyState
+    private let unsafeRuntimeHandler: @Sendable () -> Void
+    private let queue = DispatchQueue(label: "dev.linsheng.mihomo-app.consistency")
+    private var timer: DispatchSourceTimer?
+    private var previous: NetworkConsistencyHealth?
+    private var managedDNSFailureCount = 0
+
+    public init(
+        configuration: ProxyConfiguration,
+        globalDNS: GlobalDNSPreferences,
+        aliasManager: LoopbackAliasManager,
+        safetyState: NetworkSafetyState,
+        unsafeRuntimeHandler: @escaping @Sendable () -> Void
+    ) {
+        self.configuration = configuration
+        self.globalDNS = globalDNS
+        self.aliasManager = aliasManager
+        self.safetyState = safetyState
+        self.unsafeRuntimeHandler = unsafeRuntimeHandler
+    }
+
+    public func start() {
+        queue.sync {
+            evaluate()
+            let timer = DispatchSource.makeTimerSource(queue: queue)
+            timer.schedule(deadline: .now() + .seconds(1), repeating: .seconds(2))
+            timer.setEventHandler { [weak self] in self?.evaluate() }
+            timer.resume()
+            self.timer = timer
+        }
+    }
+
+    public func stopAndRestore() {
+        queue.sync {
+            timer?.cancel()
+            timer = nil
+            safetyState.setRuntimeReady(false)
+            restoreSafeNetwork(source: "shutdown")
+        }
+    }
+
+    public func currentHealth() -> NetworkConsistencyHealth {
+        queue.sync {
+            MihomoRuntimeInspector.inspect(configuration: configuration, globalDNS: globalDNS)
+        }
+    }
+
+    private func evaluate() {
+        let before = MihomoRuntimeInspector.inspect(configuration: configuration, globalDNS: globalDNS)
+        let kernelReady = before.controllerReachable && before.tunEnabled && before.tunInterface != nil
+        let dnsReady = before.dnsBridgeReady && before.mihomoDNSReady
+        let runtimeReady = kernelReady && dnsReady
+        let anyManagedDNS = ((try? globalDNS.isApplied()) == true) || globalDNS.isEffective()
+        var changed = false
+        var action = "observe"
+        if runtimeReady && !before.systemDNSManaged {
+            managedDNSFailureCount = 0
+            do {
+                try aliasManager.ensure()
+                try globalDNS.apply()
+                action = "manage_dns"
+                changed = true
+            } catch {
+                ServiceLog.error("event=network_transition_failed action=manage_dns rollback=restore_dns")
+                restoreSafeNetwork(source: "manage_dns_failure")
+                action = "manage_dns_failed"
+                changed = true
+            }
+        } else if runtimeReady {
+            managedDNSFailureCount = 0
+        } else if anyManagedDNS {
+            safetyState.setRuntimeReady(false)
+            managedDNSFailureCount += 1
+            if !kernelReady || managedDNSFailureCount >= 2 {
+                restoreSafeNetwork(source: "runtime_unhealthy")
+                MihomoRuntimeInspector.flushMihomoDNSCaches()
+                DNSCacheMaintenance.flushSystemCaches()
+                unsafeRuntimeHandler()
+                action = "rollback_safe"
+                changed = true
+            } else {
+                action = "dns_degraded_real_ip_fallback"
+            }
+        } else {
+            managedDNSFailureCount = 0
+        }
+
+        let after = changed
+            ? MihomoRuntimeInspector.inspect(configuration: configuration, globalDNS: globalDNS)
+            : before
+        safetyState.setRuntimeReady(
+            after.controllerReachable && after.tunEnabled && after.tunInterface != nil
+                && after.dnsBridgeReady && after.mihomoDNSReady && after.systemDNSManaged
+        )
+        if after != previous {
+            let transition = UUID().uuidString
+            let oldTUN = previous?.tunEnabled.description ?? "unknown"
+            let oldDNS = previous?.systemDNSManaged.description ?? "unknown"
+            ServiceLog.info(
+                "event=network_consistency transition_id=\(transition) " +
+                "source=runtime_observer action=\(action) " +
+                "old_tun_enabled=\(oldTUN) " +
+                "tun_enabled=\(after.tunEnabled) " +
+                "old_system_dns_managed=\(oldDNS) " +
+                "fake_ip_mode=\(after.fakeIPMode) " +
+                "fake_ip_route_ready=\(after.fakeIPRouteReady) " +
+                "dns_bridge_ready=\(after.dnsBridgeReady) " +
+                "mihomo_dns_ready=\(after.mihomoDNSReady) " +
+                "system_dns_managed=\(after.systemDNSManaged) " +
+                "network_consistent=\(after.networkConsistent)"
+            )
+            previous = after
+        }
+    }
+
+    private func restoreSafeNetwork(source: String) {
+        do {
+            try globalDNS.restore()
+        } catch {
+            ServiceLog.error("event=network_restore_failed source=\(source) component=global_dns")
+        }
+        do {
+            try aliasManager.removeIfManaged()
+        } catch {
+            ServiceLog.error("event=network_restore_failed source=\(source) component=loopback_alias")
+        }
+    }
+}

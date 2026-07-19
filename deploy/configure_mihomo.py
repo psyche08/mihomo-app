@@ -8,12 +8,17 @@ import pathlib
 import re
 import shutil
 import sys
+from typing import Optional
 
-MANAGED = {
-    "listen": "127.0.0.1:1053",
-    "nameserver": "udp://127.0.0.1:1054",
-    "direct-nameserver": "udp://127.0.0.1:1054",
-    "proxy-server-nameserver": "udp://127.0.0.1:1054",
+MANAGED_SCALARS = {
+    "listen": "127.0.0.1:1153",
+    "respect-rules": "false",
+}
+
+MANAGED_LISTS = {
+    "nameserver": "tcp://127.0.0.1:1054",
+    "direct-nameserver": "tcp://127.0.0.1:1054",
+    "proxy-server-nameserver": "tcp://127.0.0.1:1054",
 }
 
 MANAGED_TOP_LEVEL = {
@@ -22,10 +27,11 @@ MANAGED_TOP_LEVEL = {
 }
 
 
-def dns_block(lines: list[str]) -> tuple[int, int]:
-    start = next((index for index, line in enumerate(lines) if re.match(r"^dns:\s*(?:#.*)?$", line)), None)
+def top_level_block(lines: list[str], name: str) -> tuple[int, int]:
+    pattern = re.compile(rf"^{re.escape(name)}:\s*(?:#.*)?$")
+    start = next((index for index, line in enumerate(lines) if pattern.match(line)), None)
     if start is None:
-        raise ValueError("top-level dns: block not found")
+        raise ValueError(f"top-level {name}: block not found")
     end = len(lines)
     for index in range(start + 1, len(lines)):
         line = lines[index]
@@ -35,18 +41,47 @@ def dns_block(lines: list[str]) -> tuple[int, int]:
     return start, end
 
 
-def replace_direct_key(block: list[str], key: str, value: str) -> list[str]:
+def dns_block(lines: list[str]) -> tuple[int, int]:
+    return top_level_block(lines, "dns")
+
+
+def direct_scalar(lines: list[str], section: str, key: str) -> Optional[str]:
+    start, end = top_level_block(lines, section)
+    pattern = re.compile(rf"^  {re.escape(key)}\s*:\s*(.*?)\s*(?:#.*)?$")
+    for line in lines[start + 1 : end]:
+        match = pattern.match(line.rstrip("\n"))
+        if match:
+            return match.group(1).strip().strip("\"'").lower()
+    return None
+
+
+def direct_key_range(block: list[str], key: str) -> tuple[Optional[int], Optional[int]]:
     pattern = re.compile(rf"^  {re.escape(key)}\s*:")
     start = next((index for index, line in enumerate(block) if pattern.match(line)), None)
-    replacement = [f"  {key}:\n", f"    - {value}\n"] if key != "listen" else [f"  {key}: {value}\n"]
     if start is None:
-        return block + replacement
+        return None, None
     end = start + 1
     while end < len(block):
         line = block[end]
         if line.strip() and not line.lstrip().startswith("#") and len(line) - len(line.lstrip()) <= 2:
             break
         end += 1
+    return start, end
+
+
+def replace_direct_scalar(block: list[str], key: str, value: str) -> list[str]:
+    start, end = direct_key_range(block, key)
+    replacement = [f"  {key}: {value}\n"]
+    if start is None or end is None:
+        return block + replacement
+    return block[:start] + replacement + block[end:]
+
+
+def replace_direct_list(block: list[str], key: str, value: str) -> list[str]:
+    start, end = direct_key_range(block, key)
+    replacement = [f"  {key}:\n", f"    - {value}\n"]
+    if start is None or end is None:
+        return block + replacement
     return block[:start] + replacement + block[end:]
 
 
@@ -66,11 +101,15 @@ def apply(config: pathlib.Path, backup: pathlib.Path) -> None:
     lines = config.read_text(encoding="utf-8").splitlines(keepends=True)
     start, end = dns_block(lines)
     block = lines[start + 1 : end]
-    for key, value in MANAGED.items():
-        block = replace_direct_key(block, key, value)
+    for key, value in MANAGED_SCALARS.items():
+        block = replace_direct_scalar(block, key, value)
+    for key, value in MANAGED_LISTS.items():
+        block = replace_direct_list(block, key, value)
     lines = lines[: start + 1] + block + lines[end:]
     for key, value in MANAGED_TOP_LEVEL.items():
         lines = replace_top_level_scalar(lines, key, value)
+    if direct_scalar(lines, "tun", "enable") != "true":
+        raise ValueError("managed system DNS requires tun.enable: true")
     config.write_text("".join(lines), encoding="utf-8")
 
 

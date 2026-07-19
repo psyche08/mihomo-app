@@ -3,14 +3,14 @@
 ## Components
 
 ```text
-Mihomo App.app (current user, Tauri)
+MihomoBox.app (current user, Tauri)
 ├── Contents/MacOS/mihomo-app       tray + window + controller client
 ├── Contents/MacOS/mihomo           pinned upstream kernel
 ├── Contents/MacOS/mihomo-daemon    Swift privileged service payload
 ├── WebView                         generated MetaCubeXD dashboard
 └── Resources/daemon + scripts      installer inputs
 
-/Library/LaunchDaemons/dev.linsheng.mihomo-app.daemon.plist (root)
+/Library/LaunchDaemons/dev.linsheng.mihomo.daemon.plist (root)
 └── /Library/Application Support/Mihomo App/mihomo-daemon
     ├── supervises copied Mihomo kernel as root
     ├── listens on 127.0.0.53:53 and 127.0.0.1:1054
@@ -48,7 +48,7 @@ bundle or a source checkout.
 | Endpoint | Direction | Purpose |
 |---|---|---|
 | `127.0.0.53:53` UDP/TCP | macOS → daemon | system DNS through Mihomo, with original-DNS fallback |
-| `127.0.0.1:1053` UDP/TCP | daemon → Mihomo | Mihomo DNS listener |
+| `127.0.0.1:1153` UDP/TCP | daemon → Mihomo | Mihomo DNS listener |
 | `127.0.0.1:1054` UDP/TCP | Mihomo → daemon | nonrecursive path to current DHCP DNS |
 | `127.0.0.1:9090` HTTP/WS | GUI/MetaCubeXD → Mihomo | controller API |
 

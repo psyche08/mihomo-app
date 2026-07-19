@@ -26,7 +26,7 @@ public struct ProxyConfiguration: Codable, Equatable {
 
     public init(
         systemDNSListen: Endpoint = Endpoint(host: "127.0.0.53", port: 53),
-        mihomoDNS: Endpoint = Endpoint(host: "127.0.0.1", port: 1053),
+        mihomoDNS: Endpoint = Endpoint(host: "127.0.0.1", port: 1153),
         upstreamListen: Endpoint = Endpoint(host: "127.0.0.1", port: 1054),
         manageSystemDNS: Bool = true,
         loopbackInterface: String = "lo0",

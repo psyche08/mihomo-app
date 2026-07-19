@@ -9,6 +9,7 @@ let package = Package(
     ],
     products: [
         .executable(name: "mihomo-daemon", targets: ["MihomoDaemon"]),
+        .executable(name: "mihomoboxctl", targets: ["MihomoBoxCLI"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.81.0"),
@@ -31,6 +32,7 @@ let package = Package(
             name: "MihomoDaemon",
             dependencies: ["MihomoDNSCore"]
         ),
+        .executableTarget(name: "MihomoBoxCLI"),
         .testTarget(
             name: "MihomoDNSCoreTests",
             dependencies: ["MihomoDNSCore"]

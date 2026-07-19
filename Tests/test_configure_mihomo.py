@@ -13,10 +13,13 @@ SPEC.loader.exec_module(MODULE)
 class ConfigureMihomoTests(unittest.TestCase):
     def test_apply_is_idempotent_and_restore_is_exact(self):
         original = """port: 7890
+tun:
+  enable: true
 dns:
   enable: true
   listen: :53
   enhanced-mode: fake-ip
+  respect-rules: true
   nameserver:
     - https://1.1.1.1/dns-query
 rules:
@@ -31,9 +34,10 @@ rules:
             once = config.read_text()
             MODULE.apply(config, backup)
             self.assertEqual(config.read_text(), once)
-            self.assertIn("  listen: 127.0.0.1:1053\n", once)
+            self.assertIn("  listen: 127.0.0.1:1153\n", once)
+            self.assertIn("  respect-rules: false\n", once)
             for key in ("nameserver", "direct-nameserver", "proxy-server-nameserver"):
-                self.assertIn(f"  {key}:\n    - udp://127.0.0.1:1054\n", once)
+                self.assertIn(f"  {key}:\n    - tcp://127.0.0.1:1054\n", once)
             self.assertIn("external-controller: 127.0.0.1:9090\n", once)
             self.assertIn("secret: ''\n", once)
             self.assertIn("  enhanced-mode: fake-ip\n", once)
@@ -43,6 +47,22 @@ rules:
     def test_missing_dns_block_is_rejected(self):
         with self.assertRaises(ValueError):
             MODULE.dns_block(["port: 7890\n"])
+
+    def test_managed_dns_rejects_disabled_tun(self):
+        original = """tun:
+  enable: false
+dns:
+  enable: true
+  enhanced-mode: fake-ip
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            config = root / "config.yaml"
+            backup = root / "backup.yaml"
+            config.write_text(original)
+            with self.assertRaisesRegex(ValueError, "requires tun.enable: true"):
+                MODULE.apply(config, backup)
+            self.assertEqual(config.read_text(), original)
 
 
 if __name__ == "__main__":

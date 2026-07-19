@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>dev.linsheng.mihomo-app.daemon</string>
+  <string>dev.linsheng.mihomo.daemon</string>
   <key>ProgramArguments</key>
   <array>
     <string>/Library/Application Support/Mihomo App/mihomo-daemon</string>

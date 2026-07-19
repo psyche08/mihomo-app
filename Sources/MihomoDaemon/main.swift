@@ -6,7 +6,7 @@ private let defaultConfigPath = "/Library/Application Support/Mihomo App/daemon.
 private let arguments = CommandLine.arguments
 
 if arguments.contains("--help") || arguments.contains("-h") {
-    print("usage: mihomo-daemon [--config PATH] [--check] [--restore-system-dns]")
+    print("usage: mihomo-daemon [--config PATH] [--check] [--health] [--check-system-dns] [--restore-system-dns]")
     exit(0)
 }
 
@@ -24,6 +24,21 @@ do {
     if arguments.contains("--restore-system-dns") {
         try ProxyService.restoreSystemDNS(configuration: configuration)
         print("system DNS restored")
+        exit(0)
+    }
+    if arguments.contains("--check-system-dns") {
+        guard try ProxyService.isSystemDNSApplied(configuration: configuration) else {
+            print("system DNS preferences are not applied")
+            exit(1)
+        }
+        print("system DNS preferences applied")
+        exit(0)
+    }
+    if arguments.contains("--health") {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(ProxyService.networkHealth(configuration: configuration))
+        print(String(decoding: data, as: UTF8.self))
         exit(0)
     }
 

@@ -36,16 +36,17 @@ normal builds do not rewrite ICNS metadata.
 The final bundle check must prove:
 
 ```text
-Mihomo App.app/Contents/MacOS/mihomo-app
-Mihomo App.app/Contents/MacOS/mihomo
-Mihomo App.app/Contents/MacOS/mihomo-daemon
+MihomoBox.app/Contents/MacOS/mihomo-app
+MihomoBox.app/Contents/MacOS/mihomo
+MihomoBox.app/Contents/MacOS/mihomo-daemon
+MihomoBox.app/Contents/MacOS/mihomoboxctl
 ```
 
 For an explicit window smoke test without changing the default hidden startup:
 
 ```bash
 MIHOMO_APP_SMOKE_SHOW_WINDOW=1 \
-  'src-tauri/target/release/bundle/macos/Mihomo App.app/Contents/MacOS/mihomo-app'
+  'src-tauri/target/release/bundle/macos/MihomoBox.app/Contents/MacOS/mihomo-app'
 ```
 
 ## Signing and Notarization

@@ -23,5 +23,5 @@ pub fn run() {
             }
         })
         .run(tauri::generate_context!())
-        .expect("failed to run Mihomo App");
+        .expect("failed to run MihomoBox");
 }
