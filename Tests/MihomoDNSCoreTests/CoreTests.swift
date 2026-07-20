@@ -60,9 +60,26 @@ final class CoreTests: XCTestCase {
     }
 
     func testConfigurationJSONRoundTrip() throws {
-        let config = ProxyConfiguration(fallbackDNSServers: ["1.1.1.1"])
+        let config = ProxyConfiguration(
+            fallbackDNSServers: ["1.1.1.1"],
+            controllerEndpoint: Endpoint(host: "127.0.0.1", port: 9191),
+            controllerSecret: "persistent-secret"
+        )
         let data = try JSONEncoder().encode(config)
         XCTAssertEqual(try JSONDecoder().decode(ProxyConfiguration.self, from: data), config)
+    }
+
+    func testConfigurationRejectsRemoteControllerAndHeaderInjection() {
+        XCTAssertThrowsError(try ProxyConfiguration(
+            controllerEndpoint: Endpoint(host: "192.0.2.1", port: 9090)
+        ).validate()) { error in
+            XCTAssertEqual(error as? ConfigurationError, .invalidControllerEndpoint)
+        }
+        XCTAssertThrowsError(try ProxyConfiguration(
+            controllerSecret: "secret\r\nInjected: true"
+        ).validate()) { error in
+            XCTAssertEqual(error as? ConfigurationError, .invalidControllerSecret)
+        }
     }
 
     func testExistingLoopbackAliasIsIgnored() throws {

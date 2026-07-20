@@ -123,8 +123,12 @@ them again.
 ## Runtime Paths
 
 ```text
+~/Library/Application Support/MihomoBox/profiles/
+~/Library/Application Support/MihomoBox/active-profile
 /Library/LaunchDaemons/dev.linsheng.mihomo.daemon.plist
 /Library/Application Support/Mihomo App/daemon.json
+/Library/Application Support/Mihomo App/controller.json
+/Library/Application Support/Mihomo App/controller-secret
 /Library/Application Support/Mihomo App/mihomo
 /Library/Application Support/Mihomo App/mihomo-daemon
 /Library/Application Support/Mihomo App/mihomo-data/config.yaml
@@ -133,6 +137,11 @@ them again.
 /Library/Logs/Mihomo App/mihomo.log
 /Library/Logs/Mihomo App/mihomo-daemon.log
 ```
+
+The user paths stage local tray imports before daemon installation. The signed
+installer validates the selected staged profile, copies it into the root-owned
+profile directory, makes it active, and starts the managed service in the same
+administrator-authorized transaction.
 
 ## Diagnosis
 
@@ -146,7 +155,6 @@ sudo '/Library/Application Support/Mihomo App/mihomo-daemon' \
   --health
 tail -f '/Library/Logs/Mihomo App/mihomo-daemon.log'
 tail -f '/Library/Logs/Mihomo App/mihomo.log'
-curl -fsS http://127.0.0.1:9090/version
 dig @127.0.0.53 -p 53 example.com
 dig @127.0.0.1 -p 1054 example.com
 scutil --dns

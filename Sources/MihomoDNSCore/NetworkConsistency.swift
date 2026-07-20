@@ -64,15 +64,14 @@ public struct NetworkConsistencyHealth: Codable, Equatable {
 }
 
 public enum MihomoRuntimeInspector {
-    private static let controllerHost = "127.0.0.1"
-    private static let controllerPort: UInt16 = 9090
+    private static let defaultController = Endpoint(host: "127.0.0.1", port: 9090)
     private static let fakeIPProbe = "198.18.0.1"
 
     public static func inspect(
         configuration: ProxyConfiguration,
         globalDNS: GlobalDNSPreferences? = nil
     ) -> NetworkConsistencyHealth {
-        let controller = controllerConfiguration()
+        let controller = controllerConfiguration(configuration: configuration)
         let fakeIPMode = configuration.mihomoProcess
             .map { inspectFakeIPMode(path: $0.configPath) } ?? false
         let routeInterface = fakeIPRouteInterface()
@@ -131,9 +130,9 @@ public enum MihomoRuntimeInspector {
         return false
     }
 
-    public static func flushMihomoDNSCaches() {
-        _ = httpRequest(method: "POST", path: "/cache/fakeip/flush")
-        _ = httpRequest(method: "POST", path: "/cache/dns/flush")
+    public static func flushMihomoDNSCaches(configuration: ProxyConfiguration) {
+        _ = httpRequest(method: "POST", path: "/cache/fakeip/flush", configuration: configuration)
+        _ = httpRequest(method: "POST", path: "/cache/dns/flush", configuration: configuration)
     }
 
     private static func dnsEndpointResponds(endpoint: Endpoint) -> Bool {
@@ -152,8 +151,10 @@ public enum MihomoRuntimeInspector {
         )) != nil
     }
 
-    private static func controllerConfiguration() -> (reachable: Bool, tunEnabled: Bool) {
-        guard let data = httpRequest(method: "GET", path: "/configs"),
+    private static func controllerConfiguration(
+        configuration: ProxyConfiguration
+    ) -> (reachable: Bool, tunEnabled: Bool) {
+        guard let data = httpRequest(method: "GET", path: "/configs", configuration: configuration),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let tun = object["tun"] as? [String: Any],
               let enabled = tun["enable"] as? Bool else {
@@ -162,7 +163,12 @@ public enum MihomoRuntimeInspector {
         return (true, enabled)
     }
 
-    private static func httpRequest(method: String, path: String) -> Data? {
+    private static func httpRequest(
+        method: String,
+        path: String,
+        configuration: ProxyConfiguration
+    ) -> Data? {
+        let controller = configuration.controllerEndpoint ?? defaultController
         let descriptor = socket(AF_INET, SOCK_STREAM, 0)
         guard descriptor >= 0 else { return nil }
         defer { close(descriptor) }
@@ -173,8 +179,8 @@ public enum MihomoRuntimeInspector {
         var address = sockaddr_in()
         address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
         address.sin_family = sa_family_t(AF_INET)
-        address.sin_port = controllerPort.bigEndian
-        address.sin_addr = in_addr(s_addr: inet_addr(controllerHost))
+        address.sin_port = UInt16(controller.port).bigEndian
+        address.sin_addr = in_addr(s_addr: inet_addr(controller.host))
         let connected = withUnsafePointer(to: &address) { pointer in
             pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
                 connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
@@ -182,7 +188,11 @@ public enum MihomoRuntimeInspector {
         }
         guard connected == 0 else { return nil }
 
-        let request = "\(method) \(path) HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        let authorization = configuration.controllerSecret
+            .flatMap { $0.isEmpty ? nil : "Authorization: Bearer \($0)\r\n" } ?? ""
+        let request = "\(method) \(path) HTTP/1.0\r\n" +
+            "Host: \(controller.host):\(controller.port)\r\n" + authorization +
+            "Content-Length: 0\r\nConnection: close\r\n\r\n"
         let sent = request.withCString { pointer in
             Darwin.send(descriptor, pointer, strlen(pointer), 0)
         }
@@ -312,7 +322,7 @@ public final class NetworkConsistencyController: @unchecked Sendable {
             managedDNSFailureCount += 1
             if !kernelReady || managedDNSFailureCount >= 2 {
                 restoreSafeNetwork(source: "runtime_unhealthy")
-                MihomoRuntimeInspector.flushMihomoDNSCaches()
+                MihomoRuntimeInspector.flushMihomoDNSCaches(configuration: configuration)
                 DNSCacheMaintenance.flushSystemCaches()
                 unsafeRuntimeHandler()
                 action = "rollback_safe"

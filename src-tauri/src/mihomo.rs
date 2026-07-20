@@ -5,6 +5,7 @@ use std::time::Duration;
 #[derive(Clone)]
 pub struct MihomoClient {
     base_url: String,
+    secret: String,
     client: reqwest::Client,
 }
 
@@ -147,13 +148,27 @@ struct DelayEntry {
 }
 
 impl MihomoClient {
+    #[cfg(test)]
     pub fn new(base_url: impl Into<String>) -> Self {
+        Self::with_secret(base_url, "")
+    }
+
+    pub fn with_secret(base_url: impl Into<String>, secret: impl Into<String>) -> Self {
         Self {
             base_url: base_url.into(),
+            secret: secret.into(),
             client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(4))
                 .build()
                 .expect("reqwest client"),
+        }
+    }
+
+    fn authorize(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        if self.secret.is_empty() {
+            request
+        } else {
+            request.bearer_auth(&self.secret)
         }
     }
 
@@ -163,16 +178,14 @@ impl MihomoClient {
 
     async fn fetch_snapshot(&self) -> reqwest::Result<Snapshot> {
         let configs = self
-            .client
-            .get(format!("{}/configs", self.base_url))
+            .authorize(self.client.get(format!("{}/configs", self.base_url)))
             .send()
             .await?
             .error_for_status()?
             .json::<ConfigResponse>()
             .await?;
         let proxies = self
-            .client
-            .get(format!("{}/proxies", self.base_url))
+            .authorize(self.client.get(format!("{}/proxies", self.base_url)))
             .send()
             .await?
             .error_for_status()?
@@ -223,8 +236,7 @@ impl MihomoClient {
     }
 
     pub async fn set_tun(&self, enabled: bool) -> reqwest::Result<()> {
-        self.client
-            .patch(format!("{}/configs", self.base_url))
+        self.authorize(self.client.patch(format!("{}/configs", self.base_url)))
             .json(&serde_json::json!({ "tun": { "enable": enabled } }))
             .send()
             .await?
@@ -233,8 +245,7 @@ impl MihomoClient {
     }
 
     pub async fn set_mode(&self, mode: &str) -> reqwest::Result<()> {
-        self.client
-            .patch(format!("{}/configs", self.base_url))
+        self.authorize(self.client.patch(format!("{}/configs", self.base_url)))
             .json(&serde_json::json!({ "mode": mode }))
             .send()
             .await?
@@ -264,17 +275,44 @@ impl MihomoClient {
     }
 
     pub async fn select_proxy(&self, group: &str, proxy: &str) -> reqwest::Result<()> {
-        self.client
-            .put(format!(
-                "{}/proxies/{}",
-                self.base_url,
-                urlencoding::encode(group)
-            ))
-            .json(&serde_json::json!({ "name": proxy }))
-            .send()
-            .await?
-            .error_for_status()?;
+        self.authorize(self.client.put(format!(
+            "{}/proxies/{}",
+            self.base_url,
+            urlencoding::encode(group)
+        )))
+        .json(&serde_json::json!({ "name": proxy }))
+        .send()
+        .await?
+        .error_for_status()?;
         Ok(())
+    }
+
+    pub async fn test_delays(&self, proxies: &[String]) -> usize {
+        let mut tests = tokio::task::JoinSet::new();
+        for proxy in proxies {
+            let client = self.clone();
+            let url = format!(
+                "{}/proxies/{}/delay?timeout=5000&url={}",
+                client.base_url,
+                urlencoding::encode(proxy),
+                urlencoding::encode("https://cp.cloudflare.com/generate_204")
+            );
+            tests.spawn(async move {
+                client
+                    .authorize(client.client.get(url))
+                    .send()
+                    .await
+                    .and_then(reqwest::Response::error_for_status)
+                    .is_ok()
+            });
+        }
+        let mut succeeded = 0;
+        while let Some(result) = tests.join_next().await {
+            if result.unwrap_or(false) {
+                succeeded += 1;
+            }
+        }
+        succeeded
     }
 }
 
@@ -341,6 +379,28 @@ mod tests {
         assert!(requests[1].contains(r#"{"mode":"global"}"#));
         assert!(requests[2].starts_with("PUT /proxies/Primary%20Group HTTP/1.1\r\n"));
         assert!(requests[2].contains(r#"{"name":"Node B"}"#));
+    }
+
+    #[test]
+    fn authenticated_delay_test_uses_bearer_secret() {
+        let (base_url, server, requests) = capture(1);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let succeeded = runtime.block_on(
+            MihomoClient::with_secret(base_url, "managed-secret")
+                .test_delays(&["Node A".to_string()]),
+        );
+        server.join().expect("server");
+        let requests = requests.recv().expect("requests");
+
+        assert_eq!(succeeded, 1);
+        assert!(requests[0].starts_with("GET /proxies/Node%20A/delay?"));
+        assert!(
+            requests[0].contains("authorization: Bearer managed-secret\r\n")
+                || requests[0].contains("Authorization: Bearer managed-secret\r\n")
+        );
     }
 
     #[test]

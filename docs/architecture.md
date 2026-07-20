@@ -27,7 +27,7 @@ bundle or a source checkout.
 | Resource | Owner | Reason |
 |---|---|---|
 | Main window and tray | current user Tauri process | UI must not run as root |
-| Mihomo controller reads/writes | Tauri via `127.0.0.1:9090` | loopback API is the state source |
+| Mihomo controller reads/writes | Tauri via the active profile's authenticated loopback endpoint | controller API is the state source |
 | Mihomo kernel process | root daemon | Enhanced TUN must not change process owner |
 | `lo0` alias and system DNS | root daemon | SystemConfiguration and interface changes require privilege |
 | MetaCubeXD files | immutable App resources | no remote UI code execution |
@@ -51,6 +51,6 @@ bundle or a source checkout.
 | `127.0.0.53:53` UDP/TCP | macOS → daemon | system DNS through Mihomo, with original-DNS fallback |
 | `127.0.0.1:1153` UDP/TCP | daemon → Mihomo | Mihomo DNS listener |
 | `127.0.0.1:1054` UDP/TCP | Mihomo → daemon | nonrecursive path to current DHCP DNS |
-| `127.0.0.1:9090` HTTP/WS | GUI/MetaCubeXD → Mihomo | controller API |
+| `127.0.0.1:<profile port>` HTTP/WS | GUI/MetaCubeXD → Mihomo | bearer-authenticated controller API |
 
 See [daemon-and-dns.md](daemon-and-dns.md) for failure and restoration rules.

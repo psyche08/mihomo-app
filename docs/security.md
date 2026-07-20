@@ -4,10 +4,11 @@
 
 - MetaCubeXD is immutable local content inside the signed App. It receives no
   shell or privileged Tauri capability. Its CSP permits controller traffic
-  only to loopback `127.0.0.1:9090`.
-- The controller is loopback-only. The default deployment uses no bearer secret
-  because no non-loopback client can connect; changing the bind address requires
-  adding authentication first.
+  only to loopback `127.0.0.1` ports.
+- The controller is loopback-only and always uses bearer authentication. An
+  empty profile secret is replaced by a persistent random 256-bit secret during
+  privileged profile activation. Wildcard binds are reduced to loopback and a
+  concrete remote host is rejected.
 - Privileged installation is an explicit menu action and uses the macOS
   administrator dialog. No credential is captured by the application.
 - Remote installation uses the same bundled installer through an authenticated
@@ -35,6 +36,11 @@ Do not log or publish:
 
 Tray labels necessarily show configured proxy names and current latency to the
 local logged-in user; they are never written to daemon logs.
+
+The controller secret is stored in mode-`0600` root-owned runtime files and a
+mode-`0640`, root:`admin` GUI metadata file. It is injected into the local
+MetaCubeXD endpoint only when the main window is shown and is never printed by
+installer, tray, or daemon logging.
 
 HTTP subscription credentials live only in the importing process and are not
 persisted. Tray credential fields use hidden input. CLI secrets use a hidden

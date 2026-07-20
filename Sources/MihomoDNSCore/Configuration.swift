@@ -23,6 +23,8 @@ public struct ProxyConfiguration: Codable, Equatable {
     public var queryTimeoutMilliseconds: Int
     public var fallbackDNSServers: [String]
     public var mihomoProcess: MihomoProcessConfiguration?
+    public var controllerEndpoint: Endpoint?
+    public var controllerSecret: String?
 
     public init(
         systemDNSListen: Endpoint = Endpoint(host: "127.0.0.53", port: 53),
@@ -36,7 +38,9 @@ public struct ProxyConfiguration: Codable, Equatable {
         aliasMarkerPath: String = "/Library/Application Support/Mihomo App/alias-created",
         queryTimeoutMilliseconds: Int = 5_000,
         fallbackDNSServers: [String] = [],
-        mihomoProcess: MihomoProcessConfiguration? = nil
+        mihomoProcess: MihomoProcessConfiguration? = nil,
+        controllerEndpoint: Endpoint? = nil,
+        controllerSecret: String? = nil
     ) {
         self.systemDNSListen = systemDNSListen
         self.mihomoDNS = mihomoDNS
@@ -50,6 +54,8 @@ public struct ProxyConfiguration: Codable, Equatable {
         self.queryTimeoutMilliseconds = queryTimeoutMilliseconds
         self.fallbackDNSServers = fallbackDNSServers
         self.mihomoProcess = mihomoProcess
+        self.controllerEndpoint = controllerEndpoint
+        self.controllerSecret = controllerSecret
     }
 
     public static func load(path: String) throws -> ProxyConfiguration {
@@ -76,6 +82,20 @@ public struct ProxyConfiguration: Codable, Equatable {
         if manageSystemDNS {
             guard systemDNSListen.host == loopbackAlias, systemDNSListen.port == 53 else {
                 throw ConfigurationError.invalidSystemDNSListener
+            }
+        }
+        if let controllerEndpoint {
+            guard controllerEndpoint.host == "127.0.0.1",
+                  controllerEndpoint.port > 0,
+                  controllerEndpoint.port <= 65_535 else {
+                throw ConfigurationError.invalidControllerEndpoint
+            }
+        }
+        if let controllerSecret {
+            if controllerSecret.count > 256 || controllerSecret.unicodeScalars.contains(where: {
+                CharacterSet.controlCharacters.contains($0)
+            }) {
+                throw ConfigurationError.invalidControllerSecret
             }
         }
     }
@@ -111,6 +131,8 @@ public enum ConfigurationError: Error, Equatable, CustomStringConvertible {
     case invalidTimeout
     case recursiveEndpoint
     case invalidSystemDNSListener
+    case invalidControllerEndpoint
+    case invalidControllerSecret
 
     public var description: String {
         switch self {
@@ -118,6 +140,8 @@ public enum ConfigurationError: Error, Equatable, CustomStringConvertible {
         case .invalidTimeout: return "query timeout must be in 100...60000 ms"
         case .recursiveEndpoint: return "ingress and upstream endpoints must be distinct"
         case .invalidSystemDNSListener: return "managed system DNS must listen on the configured loopback alias port 53"
+        case .invalidControllerEndpoint: return "Mihomo controller must use a valid 127.0.0.1 port"
+        case .invalidControllerSecret: return "Mihomo controller secret is invalid"
         }
     }
 }

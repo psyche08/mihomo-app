@@ -101,7 +101,7 @@ public final class ProxyService {
     }
 
     public static func restoreSystemDNS(configuration: ProxyConfiguration) throws {
-        MihomoRuntimeInspector.flushMihomoDNSCaches()
+        MihomoRuntimeInspector.flushMihomoDNSCaches(configuration: configuration)
         let preferences = GlobalDNSPreferences(
             servers: [configuration.systemDNSListen.host],
             backupPath: configuration.systemDNSBackupPath
@@ -144,7 +144,7 @@ public final class ProxyService {
         stopLock.unlock()
 
         safetyState.setRuntimeReady(false)
-        MihomoRuntimeInspector.flushMihomoDNSCaches()
+        MihomoRuntimeInspector.flushMihomoDNSCaches(configuration: configuration)
         consistencyController?.stopAndRestore()
         consistencyController = nil
         if configuration.manageSystemDNS {

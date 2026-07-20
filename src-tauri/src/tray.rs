@@ -1,6 +1,8 @@
 use crate::mihomo::{MihomoClient, Snapshot};
-use std::collections::HashMap;
-use std::fs;
+use std::collections::{HashMap, HashSet};
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read, Write};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -12,9 +14,11 @@ use tauri::{AppHandle, Manager};
 const TRAY_ID: &str = "mihomo-app-tray";
 const PROFILES_DIR: &str = "/Library/Application Support/Mihomo App/profiles";
 const ACTIVE_PROFILE_PATH: &str = "/Library/Application Support/Mihomo App/active-profile";
+const USER_PROFILE_ROOT: &str = "Library/Application Support/MihomoBox";
 const DAEMON_PATH: &str = "/Library/Application Support/Mihomo App/mihomo-daemon";
 const DAEMON_CONFIG_PATH: &str = "/Library/Application Support/Mihomo App/daemon.json";
 const DAEMON_PLIST_PATH: &str = "/Library/LaunchDaemons/dev.linsheng.mihomo.daemon.plist";
+const CONTROLLER_METADATA_PATH: &str = "/Library/Application Support/Mihomo App/controller.json";
 
 #[derive(Default, serde::Deserialize)]
 struct NetworkHealth {
@@ -29,6 +33,7 @@ enum DynamicAction {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TunAction {
+    RequireProfile,
     InstallDaemon,
     StartDaemon,
     EnableTun,
@@ -36,12 +41,25 @@ enum TunAction {
 }
 
 struct TrayState {
-    client: MihomoClient,
     snapshot: Mutex<Snapshot>,
     actions: Mutex<HashMap<String, DynamicAction>>,
     profile_busy: Mutex<bool>,
     last_menu_signature: Mutex<Option<MenuSignature>>,
     last_action_error: Mutex<Option<String>>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, Eq, PartialEq)]
+struct ControllerConnection {
+    url: String,
+    secret: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct FlatProxyNode {
+    group: String,
+    name: String,
+    delay: Option<u64>,
+    selected: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -95,7 +113,6 @@ impl MenuSignature {
 
 pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     let state = Arc::new(TrayState {
-        client: MihomoClient::new("http://127.0.0.1:9090"),
         snapshot: Mutex::new(Snapshot::default()),
         actions: Mutex::new(HashMap::new()),
         profile_busy: Mutex::new(false),
@@ -206,66 +223,65 @@ fn build_menu(
     let mode_menu = Submenu::with_items(app, "Outbound Mode", true, &mode_refs)?;
 
     let mut actions = HashMap::new();
-    let mut group_menus = Vec::new();
-    for (group_index, group) in snapshot
-        .groups
+    let test_now = MenuItem::with_id(
+        app,
+        "proxy-test",
+        "Test Now",
+        snapshot.reachable,
+        None::<&str>,
+    )?;
+    let proxy_separator = PredefinedMenuItem::separator(app)?;
+    let flat_nodes = flat_proxy_nodes(snapshot);
+    let node_items = flat_nodes
         .iter()
-        .filter(|group| is_user_proxy_group(&group.name))
         .enumerate()
-    {
-        let nodes = group
-            .proxies
-            .iter()
-            .enumerate()
-            .map(|(node_index, node)| {
-                let id = format!("proxy:{group_index}:{node_index}");
-                actions.insert(
-                    id.clone(),
-                    DynamicAction::Proxy {
-                        group: group.name.clone(),
-                        proxy: node.name.clone(),
-                    },
-                );
-                let label = match node.delay {
-                    Some(delay) => format!("{}  {} ms", node.name, delay),
-                    None => format!("{}  --", node.name),
-                };
-                CheckMenuItem::with_id(
-                    app,
-                    id,
-                    label,
-                    true,
-                    group.current == node.name,
-                    None::<&str>,
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let node_refs = nodes
-            .iter()
-            .map(|item| item as &dyn IsMenuItem<tauri::Wry>)
-            .collect::<Vec<_>>();
-        group_menus.push(Submenu::with_items(app, &group.name, true, &node_refs)?);
-    }
-    let proxy_menu = if group_menus.is_empty() {
-        let empty = MenuItem::with_id(
+        .map(|(index, node)| {
+            let id = format!("proxy:{index}");
+            actions.insert(
+                id.clone(),
+                DynamicAction::Proxy {
+                    group: node.group.clone(),
+                    proxy: node.name.clone(),
+                },
+            );
+            CheckMenuItem::with_id(
+                app,
+                id,
+                format!("{}    {}", node.name, delay_label(node.delay)),
+                true,
+                node.selected,
+                None::<&str>,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let empty = node_items.is_empty().then(|| {
+        MenuItem::with_id(
             app,
             "proxy-empty",
             if snapshot.reachable {
-                "No proxy groups"
+                "No proxy nodes"
             } else {
                 "Mihomo daemon unavailable"
             },
             false,
             None::<&str>,
-        )?;
-        Submenu::with_items(app, "Proxy List", true, &[&empty])?
-    } else {
-        let group_refs = group_menus
-            .iter()
-            .map(|item| item as &dyn IsMenuItem<tauri::Wry>)
-            .collect::<Vec<_>>();
-        Submenu::with_items(app, "Proxy List", true, &group_refs)?
+        )
+    });
+    let empty = match empty {
+        Some(item) => Some(item?),
+        None => None,
     };
+    let mut proxy_refs: Vec<&dyn IsMenuItem<tauri::Wry>> = vec![&test_now, &proxy_separator];
+    if let Some(empty) = empty.as_ref() {
+        proxy_refs.push(empty);
+    } else {
+        proxy_refs.extend(
+            node_items
+                .iter()
+                .map(|item| item as &dyn IsMenuItem<tauri::Wry>),
+        );
+    }
+    let proxy_menu = Submenu::with_items(app, "Proxy List", true, &proxy_refs)?;
 
     let import_profile = MenuItem::with_id(
         app,
@@ -364,6 +380,7 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
     let id = event.id().as_ref().to_string();
     if id == "show" {
         if let Some(window) = app.get_webview_window("main") {
+            prepare_main_window(&window);
             let _ = window.unminimize();
             let _ = window.show();
             let _ = window.set_focus();
@@ -375,7 +392,7 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
         return;
     }
     if id == "install" {
-        install_daemon();
+        install_daemon(selected_local_profile().as_deref());
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
             tokio::time::sleep(Duration::from_secs(2)).await;
@@ -418,23 +435,45 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
         match id.as_str() {
             "tun" => {
                 let snapshot = state.snapshot.lock().expect("snapshot lock").clone();
-                match tun_action(daemon_installed(), &snapshot) {
-                    TunAction::InstallDaemon => install_daemon(),
+                let profiles = profile_state();
+                match tun_action(daemon_installed(), profiles.active.is_some(), &snapshot) {
+                    TunAction::RequireProfile => show_profile_required_prompt(),
+                    TunAction::InstallDaemon => install_daemon(selected_local_profile().as_deref()),
                     TunAction::StartDaemon => start_daemon(),
                     TunAction::EnableTun => {
-                        let _ = state.client.set_tun(true).await;
+                        let _ = controller_client().set_tun(true).await;
                     }
                     TunAction::StopAndRestore => restore_network(),
                 }
             }
             value if value.starts_with("mode:") => {
                 let requested = &value[5..];
-                let applied = state.client.apply_outbound_mode(requested).await.is_ok();
+                let applied = controller_client()
+                    .apply_outbound_mode(requested)
+                    .await
+                    .is_ok();
                 set_action_error(
                     &state,
                     (!applied)
                         .then(|| "Action failed: outbound mode was not safely applied".to_string()),
                 );
+            }
+            "proxy-test" => {
+                let nodes = flat_proxy_nodes(&state.snapshot.lock().expect("snapshot lock"))
+                    .into_iter()
+                    .map(|node| node.name)
+                    .collect::<Vec<_>>();
+                let succeeded = controller_client().test_delays(&nodes).await;
+                set_action_error(
+                    &state,
+                    (!nodes.is_empty() && succeeded == 0).then(|| {
+                        "Action failed: latency test could not reach any node".to_string()
+                    }),
+                );
+                *state
+                    .last_menu_signature
+                    .lock()
+                    .expect("menu signature lock") = None;
             }
             _ => {
                 let action = state
@@ -444,7 +483,7 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
                     .get(&id)
                     .cloned();
                 if let Some(DynamicAction::Proxy { group, proxy }) = action {
-                    let _ = state.client.select_proxy(&group, &proxy).await;
+                    let _ = controller_client().select_proxy(&group, &proxy).await;
                 }
             }
         }
@@ -454,7 +493,7 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
 
 fn refresh(app: AppHandle, state: Arc<TrayState>) {
     tauri::async_runtime::spawn(async move {
-        let snapshot = state.client.snapshot().await;
+        let snapshot = controller_client().snapshot().await;
         *state.snapshot.lock().expect("snapshot lock") = snapshot.clone();
         let profiles = profile_state();
         let profile_busy = *state.profile_busy.lock().expect("profile busy lock");
@@ -516,11 +555,13 @@ fn set_action_error(state: &TrayState, error: Option<String>) {
     *state.last_action_error.lock().expect("action error lock") = error;
 }
 
-fn tun_action(daemon_installed: bool, snapshot: &Snapshot) -> TunAction {
-    if !daemon_installed {
-        TunAction::InstallDaemon
-    } else if snapshot.enhanced_tun {
+fn tun_action(daemon_installed: bool, profile_selected: bool, snapshot: &Snapshot) -> TunAction {
+    if snapshot.enhanced_tun {
         TunAction::StopAndRestore
+    } else if !profile_selected {
+        TunAction::RequireProfile
+    } else if !daemon_installed {
+        TunAction::InstallDaemon
     } else if snapshot.reachable {
         TunAction::EnableTun
     } else {
@@ -530,6 +571,117 @@ fn tun_action(daemon_installed: bool, snapshot: &Snapshot) -> TunAction {
 
 fn is_user_proxy_group(name: &str) -> bool {
     !name.eq_ignore_ascii_case("GLOBAL")
+}
+
+fn is_proxy_builtin(name: &str) -> bool {
+    matches!(
+        name.to_ascii_uppercase().as_str(),
+        "DIRECT" | "REJECT" | "REJECT-DROP" | "PASS"
+    )
+}
+
+fn flat_proxy_nodes(snapshot: &Snapshot) -> Vec<FlatProxyNode> {
+    let group_names = snapshot
+        .groups
+        .iter()
+        .map(|group| group.name.to_lowercase())
+        .collect::<HashSet<_>>();
+    let mut node_indexes: HashMap<String, usize> = HashMap::new();
+    let mut nodes: Vec<FlatProxyNode> = Vec::new();
+    for group in snapshot
+        .groups
+        .iter()
+        .filter(|group| is_user_proxy_group(&group.name))
+    {
+        for proxy in &group.proxies {
+            if is_proxy_builtin(&proxy.name) || group_names.contains(&proxy.name.to_lowercase()) {
+                continue;
+            }
+            let selected = group.current == proxy.name;
+            if let Some(index) = node_indexes.get(&proxy.name).copied() {
+                let node = &mut nodes[index];
+                if node.delay.is_none() {
+                    node.delay = proxy.delay;
+                }
+                if selected {
+                    node.group = group.name.clone();
+                    node.selected = true;
+                }
+                continue;
+            }
+            node_indexes.insert(proxy.name.clone(), nodes.len());
+            nodes.push(FlatProxyNode {
+                group: group.name.clone(),
+                name: proxy.name.clone(),
+                delay: proxy.delay,
+                selected,
+            });
+        }
+    }
+    nodes
+}
+
+fn delay_label(delay: Option<u64>) -> String {
+    match delay.filter(|delay| *delay > 0) {
+        Some(delay) if delay <= 300 => format!("🟢 {delay} ms"),
+        Some(delay) if delay <= 800 => format!("🟠 {delay} ms"),
+        Some(delay) => format!("🔴 {delay} ms"),
+        None => "⚪ --".to_string(),
+    }
+}
+
+fn controller_connection_at(path: &Path) -> Option<ControllerConnection> {
+    let connection = serde_json::from_slice::<ControllerConnection>(&fs::read(path).ok()?).ok()?;
+    let parsed = reqwest::Url::parse(&connection.url).ok()?;
+    if parsed.scheme() != "http"
+        || parsed.host_str() != Some("127.0.0.1")
+        || parsed.port_or_known_default().is_none()
+        || !parsed.path().is_empty() && parsed.path() != "/"
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || connection.secret.len() > 256
+        || connection.secret.chars().any(char::is_control)
+    {
+        return None;
+    }
+    Some(ControllerConnection {
+        url: connection.url.trim_end_matches('/').to_string(),
+        secret: connection.secret,
+    })
+}
+
+fn controller_connection() -> ControllerConnection {
+    controller_connection_at(Path::new(CONTROLLER_METADATA_PATH)).unwrap_or(ControllerConnection {
+        url: "http://127.0.0.1:9090".to_string(),
+        secret: String::new(),
+    })
+}
+
+fn controller_client() -> MihomoClient {
+    let connection = controller_connection();
+    MihomoClient::with_secret(connection.url, connection.secret)
+}
+
+fn prepare_main_window(window: &tauri::WebviewWindow<tauri::Wry>) {
+    let endpoint = controller_connection();
+    let Ok(endpoint_json) = serde_json::to_string(&endpoint) else {
+        return;
+    };
+    let script = format!(
+        r#"(() => {{
+            const endpoint = {endpoint_json};
+            const managed = {{ id: 'local-mihomo', url: endpoint.url, secret: endpoint.secret, label: 'Local mihomo (desktop)' }};
+            let list = [];
+            try {{ list = JSON.parse(localStorage.getItem('endpointList') || '[]'); }} catch (_) {{}}
+            if (!Array.isArray(list)) list = [];
+            list = [managed, ...list.filter(item => item && item.id !== managed.id)];
+            localStorage.setItem('endpointList', JSON.stringify(list));
+            localStorage.setItem('selectedEndpoint', managed.id);
+            window.metacubexd = {{ ...(window.metacubexd || {{}}), endpoint }};
+            window.location.replace('/');
+        }})()"#
+    );
+    let _ = window.eval(&script);
 }
 
 fn title_case(value: &str) -> String {
@@ -572,7 +724,41 @@ struct ProfileState {
 }
 
 fn profile_state() -> ProfileState {
-    profile_state_at(Path::new(PROFILES_DIR), Path::new(ACTIVE_PROFILE_PATH))
+    let system = profile_state_at(Path::new(PROFILES_DIR), Path::new(ACTIVE_PROFILE_PATH));
+    let Some((directory, active_path)) = user_profile_paths() else {
+        return system;
+    };
+    let user = profile_state_at(&directory, &active_path);
+    merge_profile_states(system, user, daemon_installed())
+}
+
+fn merge_profile_states(
+    system: ProfileState,
+    user: ProfileState,
+    prefer_system_active: bool,
+) -> ProfileState {
+    let mut names = system.names;
+    names.extend(user.names);
+    names.sort_by_key(|name| name.to_lowercase());
+    names.dedup();
+    let active = if prefer_system_active {
+        system.active.or(user.active)
+    } else {
+        user.active.or(system.active)
+    };
+    ProfileState { names, active }
+}
+
+fn user_profile_paths() -> Option<(PathBuf, PathBuf)> {
+    let root = PathBuf::from(std::env::var_os("HOME")?).join(USER_PROFILE_ROOT);
+    Some((root.join("profiles"), root.join("active-profile")))
+}
+
+fn selected_local_profile() -> Option<PathBuf> {
+    let active = profile_state().active?;
+    let (directory, _) = user_profile_paths()?;
+    let path = directory.join(active);
+    path.is_file().then_some(path)
 }
 
 fn profile_state_at(directory: &Path, active_path: &Path) -> ProfileState {
@@ -606,9 +792,21 @@ fn import_local_profile(app: AppHandle, state: Arc<TrayState>) {
     }
     spawn_profile_operation(app, state, "local-import", || {
         if let Some(path) = choose_yaml_file() {
-            let path = path.to_string_lossy().into_owned();
-            let _ = run_profile_installer(&["--import-profile", &path, "--activate"]);
+            let (directory, active_path) = user_profile_paths().ok_or_else(|| {
+                "Action failed: user profile directory is unavailable".to_string()
+            })?;
+            let name = stage_local_profile(&path, &directory)?;
+            if daemon_installed() {
+                let staged = directory.join(&name);
+                let staged = staged.to_string_lossy().into_owned();
+                if !run_profile_installer(&["--import-profile", &staged, "--activate"]) {
+                    return Err("Action failed: profile import was not completed".to_string());
+                }
+            }
+            write_active_profile(&active_path, &name)
+                .map_err(|_| "Action failed: profile selection was not saved".to_string())?;
         }
+        Ok(())
     });
 }
 
@@ -620,11 +818,16 @@ fn import_http_profile(app: AppHandle, state: Arc<TrayState>) {
         if let Some(bundle) = app_bundle_path() {
             let cli = bundle.join("Contents/MacOS/mihomoboxctl");
             if cli.is_file() {
-                let _ = Command::new(cli)
+                let succeeded = Command::new(cli)
                     .args(["profile", "import-url", "--interactive"])
-                    .status();
+                    .status()
+                    .is_ok_and(|status| status.success());
+                if !succeeded {
+                    return Err("Action failed: subscription import was not completed".to_string());
+                }
             }
         }
+        Ok(())
     });
 }
 
@@ -633,20 +836,37 @@ fn switch_local_profile(app: AppHandle, state: Arc<TrayState>, name: String) {
         return;
     }
     spawn_profile_operation(app, state, "profile-switch", move || {
-        let _ = run_profile_installer(&["--switch-profile", &name]);
+        let Some((directory, active_path)) = user_profile_paths() else {
+            return Err("Action failed: user profile directory is unavailable".to_string());
+        };
+        if daemon_installed() {
+            let local = directory.join(&name);
+            let succeeded = if local.is_file() {
+                let local = local.to_string_lossy().into_owned();
+                run_profile_installer(&["--import-profile", &local, "--activate"])
+            } else {
+                run_profile_installer(&["--switch-profile", &name])
+            };
+            if !succeeded {
+                return Err("Action failed: profile switch was not completed".to_string());
+            }
+        }
+        write_active_profile(&active_path, &name)
+            .map_err(|_| "Action failed: profile selection was not saved".to_string())?;
+        Ok(())
     });
 }
 
 fn spawn_profile_operation<F>(app: AppHandle, state: Arc<TrayState>, name: &str, operation: F)
 where
-    F: FnOnce() + Send + 'static,
+    F: FnOnce() -> Result<(), String> + Send + 'static,
 {
     let worker_app = app.clone();
     let worker_state = state.clone();
     let result = std::thread::Builder::new()
         .name(format!("mihomobox-{name}"))
         .spawn(move || {
-            operation();
+            set_action_error(&worker_state, operation().err());
             end_profile_operation(&worker_state);
             refresh(worker_app, worker_state);
         });
@@ -658,6 +878,94 @@ where
         end_profile_operation(&state);
         refresh(app, state);
     }
+}
+
+fn stage_local_profile(source: &Path, directory: &Path) -> Result<String, String> {
+    let metadata = fs::symlink_metadata(source)
+        .map_err(|_| "Action failed: selected profile is unavailable".to_string())?;
+    if !metadata.file_type().is_file() || metadata.len() == 0 || metadata.len() > 16 * 1024 * 1024 {
+        return Err("Action failed: profile must be a 1 byte to 16 MiB YAML file".to_string());
+    }
+    let name = source
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "Action failed: invalid profile filename".to_string())?;
+    validate_profile_filename(name)?;
+
+    fs::create_dir_all(directory)
+        .map_err(|_| "Action failed: profile directory could not be created".to_string())?;
+    fs::set_permissions(directory, fs::Permissions::from_mode(0o700))
+        .map_err(|_| "Action failed: profile directory could not be secured".to_string())?;
+    let staged = directory.join(format!(".import-{}", std::process::id()));
+    let result =
+        copy_private_file(source, &staged).and_then(|_| fs::rename(&staged, directory.join(name)));
+    if result.is_err() {
+        let _ = fs::remove_file(&staged);
+        return Err("Action failed: profile could not be saved".to_string());
+    }
+    Ok(name.to_string())
+}
+
+fn copy_private_file(source: &Path, target: &Path) -> io::Result<()> {
+    let mut input = File::open(source)?;
+    let mut output = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(target)?;
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut total = 0_u64;
+    loop {
+        let count = input.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        total += count as u64;
+        if total > 16 * 1024 * 1024 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "profile exceeds 16 MiB",
+            ));
+        }
+        output.write_all(&buffer[..count])?;
+    }
+    output.sync_all()
+}
+
+fn validate_profile_filename(name: &str) -> Result<(), String> {
+    let valid_extension = Path::new(name)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("yaml") || extension.eq_ignore_ascii_case("yml")
+        });
+    if name.is_empty()
+        || name.len() > 128
+        || name.starts_with('.')
+        || name.contains('/')
+        || name.chars().any(char::is_control)
+        || !valid_extension
+    {
+        return Err("Action failed: invalid profile filename".to_string());
+    }
+    Ok(())
+}
+
+fn write_active_profile(path: &Path, name: &str) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::other("missing parent"))?;
+    fs::create_dir_all(parent)?;
+    fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
+    let staged = parent.join(format!(".active-profile-{}", std::process::id()));
+    let mut output = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&staged)?;
+    output.write_all(format!("{name}\n").as_bytes())?;
+    output.sync_all()?;
+    fs::rename(staged, path)
 }
 
 fn begin_profile_operation(state: &TrayState) -> bool {
@@ -715,7 +1023,7 @@ fn run_profile_installer(arguments: &[&str]) -> bool {
         .is_ok_and(|status| status.success())
 }
 
-fn install_daemon() {
+fn install_daemon(initial_profile: Option<&Path>) {
     let Some(bundle) = app_bundle_path() else {
         return;
     };
@@ -723,11 +1031,15 @@ fn install_daemon() {
     if !script.exists() {
         return;
     }
-    let command = format!(
+    let mut command = format!(
         "/bin/bash {} --app-bundle {}",
         shell_quote(&script.to_string_lossy()),
         shell_quote(&bundle.to_string_lossy())
     );
+    if let Some(profile) = initial_profile {
+        command.push_str(" --initial-profile ");
+        command.push_str(&shell_quote(&profile.to_string_lossy()));
+    }
     let apple_script = format!(
         "do shell script {} with administrator privileges",
         apple_script_quote(&command)
@@ -735,6 +1047,15 @@ fn install_daemon() {
     let _ = Command::new("/usr/bin/osascript")
         .args(["-e", &apple_script])
         .spawn();
+}
+
+fn show_profile_required_prompt() {
+    let _ = Command::new("/usr/bin/osascript")
+        .args([
+            "-e",
+            "display dialog \"Add a profile before enabling Enhanced TUN. Use Profiles > Import Local YAML… or Import HTTP Subscription….\" buttons {\"OK\"} default button \"OK\" with title \"MihomoBox\"",
+        ])
+        .status();
 }
 
 fn start_daemon() {
@@ -862,22 +1183,145 @@ mod tests {
     }
 
     #[test]
+    fn proxy_list_is_flat_unique_and_excludes_groups_and_builtins() {
+        let snapshot = Snapshot {
+            reachable: true,
+            groups: vec![
+                crate::mihomo::ProxyGroup {
+                    name: "Proxy".to_string(),
+                    current: "🇯🇵 Tokyo".to_string(),
+                    proxies: vec![
+                        crate::mihomo::ProxyNode {
+                            name: "Auto".to_string(),
+                            delay: Some(20),
+                        },
+                        crate::mihomo::ProxyNode {
+                            name: "🇯🇵 Tokyo".to_string(),
+                            delay: Some(256),
+                        },
+                        crate::mihomo::ProxyNode {
+                            name: "DIRECT".to_string(),
+                            delay: None,
+                        },
+                    ],
+                },
+                crate::mihomo::ProxyGroup {
+                    name: "Auto".to_string(),
+                    current: "🇺🇸 Virginia".to_string(),
+                    proxies: vec![
+                        crate::mihomo::ProxyNode {
+                            name: "🇯🇵 Tokyo".to_string(),
+                            delay: Some(256),
+                        },
+                        crate::mihomo::ProxyNode {
+                            name: "🇺🇸 Virginia".to_string(),
+                            delay: Some(324),
+                        },
+                    ],
+                },
+            ],
+            ..Snapshot::default()
+        };
+
+        let nodes = flat_proxy_nodes(&snapshot);
+        assert_eq!(
+            nodes
+                .iter()
+                .map(|node| node.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["🇯🇵 Tokyo", "🇺🇸 Virginia"]
+        );
+        assert!(nodes[0].selected);
+        assert!(nodes[1].selected);
+        assert_eq!(delay_label(nodes[0].delay), "🟢 256 ms");
+        assert_eq!(delay_label(nodes[1].delay), "🟠 324 ms");
+    }
+
+    #[test]
+    fn controller_metadata_requires_loopback_and_preserves_secret() {
+        let root = std::env::temp_dir().join(format!(
+            "mihomobox-controller-metadata-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("create fixture");
+        let metadata = root.join("controller.json");
+        fs::write(
+            &metadata,
+            r#"{"url":"http://127.0.0.1:9191","secret":"persistent-secret"}"#,
+        )
+        .expect("write metadata");
+        assert_eq!(
+            controller_connection_at(&metadata),
+            Some(ControllerConnection {
+                url: "http://127.0.0.1:9191".to_string(),
+                secret: "persistent-secret".to_string(),
+            })
+        );
+        fs::write(
+            &metadata,
+            r#"{"url":"http://192.0.2.1:9090","secret":"secret"}"#,
+        )
+        .expect("write remote metadata");
+        assert_eq!(controller_connection_at(&metadata), None);
+        fs::remove_dir_all(root).expect("remove fixture");
+    }
+
+    #[test]
     fn enhanced_tun_item_maps_runtime_state_to_safe_actions() {
         let stopped = Snapshot::default();
-        assert_eq!(tun_action(false, &stopped), TunAction::InstallDaemon);
-        assert_eq!(tun_action(true, &stopped), TunAction::StartDaemon);
+        assert_eq!(
+            tun_action(false, false, &stopped),
+            TunAction::RequireProfile
+        );
+        assert_eq!(tun_action(true, false, &stopped), TunAction::RequireProfile);
+        assert_eq!(tun_action(false, true, &stopped), TunAction::InstallDaemon);
+        assert_eq!(tun_action(true, true, &stopped), TunAction::StartDaemon);
 
         let reachable = Snapshot {
             reachable: true,
             ..Snapshot::default()
         };
-        assert_eq!(tun_action(true, &reachable), TunAction::EnableTun);
+        assert_eq!(tun_action(true, true, &reachable), TunAction::EnableTun);
 
         let enabled = Snapshot {
             reachable: true,
             enhanced_tun: true,
             ..Snapshot::default()
         };
-        assert_eq!(tun_action(true, &enabled), TunAction::StopAndRestore);
+        assert_eq!(tun_action(true, false, &enabled), TunAction::StopAndRestore);
+    }
+
+    #[test]
+    fn local_import_is_visible_and_selected_without_a_system_profile() {
+        let root = std::env::temp_dir().join(format!(
+            "mihomobox-local-profile-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let source = root.join("sheng.yaml");
+        let directory = root.join("user/profiles");
+        let active = root.join("user/active-profile");
+        fs::create_dir_all(&root).expect("create fixture");
+        fs::write(&source, "tun:\n  enable: true\ndns:\n  enable: true\n").expect("write source");
+
+        let name = stage_local_profile(&source, &directory).expect("stage profile");
+        write_active_profile(&active, &name).expect("select profile");
+        let state = merge_profile_states(
+            ProfileState::default(),
+            profile_state_at(&directory, &active),
+            false,
+        );
+
+        assert_eq!(state.names, vec!["sheng.yaml"]);
+        assert_eq!(state.active.as_deref(), Some("sheng.yaml"));
+        assert_eq!(
+            fs::metadata(directory.join("sheng.yaml"))
+                .expect("profile metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        fs::remove_dir_all(root).expect("remove fixture");
     }
 }

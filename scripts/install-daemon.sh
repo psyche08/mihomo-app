@@ -6,6 +6,8 @@ APP_SUPPORT="/Library/Application Support/Mihomo App"
 MIHOMO_DATA="$APP_SUPPORT/mihomo-data"
 PROFILES_DIR="$APP_SUPPORT/profiles"
 ACTIVE_PROFILE="$APP_SUPPORT/active-profile"
+CONTROLLER_SECRET="$APP_SUPPORT/controller-secret"
+CONTROLLER_METADATA="$APP_SUPPORT/controller.json"
 CLI_ENTRY="/usr/local/bin/mihomoboxctl"
 LOG_DIR="/Library/Logs/Mihomo App"
 PLIST="/Library/LaunchDaemons/dev.linsheng.mihomo.daemon.plist"
@@ -23,6 +25,7 @@ START_SERVICE=0
 RESTART_SERVICE=0
 IMPORT_PROFILE=""
 SWITCH_PROFILE=""
+INITIAL_PROFILE=""
 ACTIVATE_PROFILE=0
 ROLLBACK_DIR=""
 PROFILE_ROLLBACK_DIR=""
@@ -35,7 +38,7 @@ PREVIOUS_CLI_LINK_PRESENT=0
 CLI_LINK_CHANGED=0
 
 usage() {
-  echo "usage: $0 [--app-bundle PATH] [--dry-run] [--restore | --restore-network | --start | --restart | --import-profile PATH [--activate] | --switch-profile NAME]"
+  echo "usage: $0 [--app-bundle PATH] [--initial-profile PATH] [--dry-run] [--restore | --restore-network | --start | --restart | --import-profile PATH [--activate] | --switch-profile NAME]"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -48,6 +51,7 @@ while [[ $# -gt 0 ]]; do
     --restart) RESTART_SERVICE=1; shift ;;
     --import-profile) IMPORT_PROFILE="${2:?missing profile path}"; shift 2 ;;
     --switch-profile) SWITCH_PROFILE="${2:?missing profile name}"; shift 2 ;;
+    --initial-profile) INITIAL_PROFILE="${2:?missing initial profile path}"; shift 2 ;;
     --activate) ACTIVATE_PROFILE=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -64,6 +68,10 @@ if [[ $((RESTORE + RESTORE_NETWORK + START_SERVICE + RESTART_SERVICE + (${#IMPOR
 fi
 if [[ "$ACTIVATE_PROFILE" -eq 1 && -z "$IMPORT_PROFILE" ]]; then
   echo "--activate requires --import-profile" >&2
+  exit 2
+fi
+if [[ -n "$INITIAL_PROFILE" && $((RESTORE + RESTORE_NETWORK + START_SERVICE + RESTART_SERVICE + (${#IMPORT_PROFILE} > 0) + (${#SWITCH_PROFILE} > 0))) -gt 0 ]]; then
+  echo "--initial-profile is only valid while installing the daemon" >&2
   exit 2
 fi
 if [[ "$DRY_RUN" -eq 1 && ( -n "$IMPORT_PROFILE" || -n "$SWITCH_PROFILE" ) ]]; then
@@ -173,6 +181,12 @@ managed_network_ready() {
   done
 }
 
+managed_controller_ready() {
+  local health
+  health="$("$APP_SUPPORT/mihomo-daemon" --config "$APP_SUPPORT/daemon.json" --health)" || return 1
+  [[ "$health" == *'"controller_reachable":true'* ]]
+}
+
 managed_cli_link() {
   local target="$1"
   [[ "$target" == */MihomoBox.app/Contents/MacOS/mihomoboxctl ]]
@@ -226,6 +240,7 @@ validate_profile_name() {
 prepare_profile() {
   local source="$1"
   local output="$2"
+  local publish_controller="${3:-0}"
   local backup="$output.original"
   [[ -f "$source" ]] || { echo "profile does not exist" >&2; return 1; }
   local size
@@ -235,11 +250,64 @@ prepare_profile() {
     return 1
   }
   /usr/bin/install -o root -g wheel -m 0600 "$source" "$output"
-  /usr/bin/python3 "$RESOURCE_ROOT/configure_mihomo.py" \
-    --config "$output" \
-    --backup "$backup"
+  if [[ "$publish_controller" -eq 1 ]]; then
+    /usr/bin/python3 "$RESOURCE_ROOT/configure_mihomo.py" \
+      --config "$output" \
+      --backup "$backup" \
+      --secret-file "$CONTROLLER_SECRET" \
+      --controller-metadata "$CONTROLLER_METADATA" \
+      --daemon-config "$APP_SUPPORT/daemon.json"
+    /usr/sbin/chown root:wheel "$CONTROLLER_SECRET" "$APP_SUPPORT/daemon.json"
+    /bin/chmod 0600 "$CONTROLLER_SECRET" "$APP_SUPPORT/daemon.json"
+    /usr/sbin/chown root:admin "$CONTROLLER_METADATA"
+    /bin/chmod 0640 "$CONTROLLER_METADATA"
+  else
+    /usr/bin/python3 "$RESOURCE_ROOT/configure_mihomo.py" \
+      --config "$output" \
+      --backup "$backup"
+  fi
   /bin/rm -f "$backup"
   "$APP_SUPPORT/mihomo" -t -d "$MIHOMO_DATA" -f "$output"
+}
+
+write_active_profile_name() {
+  local name="$1"
+  local active_staged
+  active_staged="$(/usr/bin/mktemp "$APP_SUPPORT/.active-profile.XXXXXX")"
+  /usr/bin/printf '%s\n' "$name" > "$active_staged"
+  /bin/chmod 0644 "$active_staged"
+  /usr/sbin/chown root:wheel "$active_staged"
+  /bin/mv -f "$active_staged" "$ACTIVE_PROFILE"
+}
+
+install_profile_for_first_start() {
+  local source="$1"
+  local name="${source##*/}"
+  validate_profile_name "$name"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "+ validate, install, and activate initial profile $name"
+    return 0
+  fi
+  [[ -f "$source" && ! -L "$source" ]] || {
+    echo "selected profile does not exist or is not a regular file" >&2
+    return 1
+  }
+  /bin/mkdir -p "$PROFILES_DIR" "$MIHOMO_DATA"
+  /usr/sbin/chown root:wheel "$PROFILES_DIR"
+  /bin/chmod 0755 "$PROFILES_DIR"
+
+  local stored
+  stored="$(/usr/bin/mktemp "$PROFILES_DIR/.import.XXXXXX")"
+  /usr/bin/install -o root -g wheel -m 0600 "$source" "$stored"
+  local staged_config
+  staged_config="$(/usr/bin/mktemp "$MIHOMO_DATA/.profile-install.XXXXXX")"
+  prepare_profile "$stored" "$staged_config" 1
+  /bin/chmod 0600 "$staged_config"
+  /usr/sbin/chown root:wheel "$staged_config"
+  /bin/mv -f "$stored" "$PROFILES_DIR/$name"
+  /bin/mv -f "$staged_config" "$MIHOMO_DATA/config.yaml"
+  write_active_profile_name "$name"
+  echo "selected profile $name for first start"
 }
 
 rollback_profile_switch() {
@@ -259,6 +327,13 @@ rollback_profile_switch() {
   else
     /bin/rm -f "$ACTIVE_PROFILE"
   fi
+  for controller_file in daemon.json controller.json controller-secret; do
+    if [[ -f "$PROFILE_ROLLBACK_DIR/$controller_file" ]]; then
+      /bin/cp -p "$PROFILE_ROLLBACK_DIR/$controller_file" "$APP_SUPPORT/$controller_file"
+    else
+      /bin/rm -f "$APP_SUPPORT/$controller_file"
+    fi
+  done
   if [[ "$PROFILE_DAEMON_WAS_RUNNING" -eq 1 && -f "$PLIST" ]]; then
     /bin/launchctl bootstrap system "$PLIST" >/dev/null 2>&1 || true
     /bin/launchctl enable "system/$LABEL" >/dev/null 2>&1 || true
@@ -285,11 +360,16 @@ switch_profile() {
   if [[ -f "$ACTIVE_PROFILE" ]]; then
     /bin/cp -p "$ACTIVE_PROFILE" "$PROFILE_ROLLBACK_DIR/active-profile"
   fi
+  for controller_file in daemon.json controller.json controller-secret; do
+    if [[ -f "$APP_SUPPORT/$controller_file" ]]; then
+      /bin/cp -p "$APP_SUPPORT/$controller_file" "$PROFILE_ROLLBACK_DIR/$controller_file"
+    fi
+  done
   trap rollback_profile_switch ERR
 
   local staged
   staged="$(/usr/bin/mktemp "$MIHOMO_DATA/.profile.XXXXXX")"
-  prepare_profile "$source" "$staged"
+  prepare_profile "$source" "$staged" 1
   if /bin/launchctl print "system/$LABEL" >/dev/null 2>&1; then
     PROFILE_DAEMON_WAS_RUNNING=1
     /bin/launchctl bootout "system/$LABEL"
@@ -297,23 +377,18 @@ switch_profile() {
     wait_for_managed_process_absent
     "$APP_SUPPORT/mihomo-daemon" --config "$APP_SUPPORT/daemon.json" --restore-system-dns
   fi
-  /bin/chmod 0644 "$staged"
+  /bin/chmod 0600 "$staged"
   /usr/sbin/chown root:wheel "$staged"
   /bin/mv -f "$staged" "$MIHOMO_DATA/config.yaml"
 
-  local active_staged
-  active_staged="$(/usr/bin/mktemp "$APP_SUPPORT/.active-profile.XXXXXX")"
-  /usr/bin/printf '%s\n' "$name" > "$active_staged"
-  /bin/chmod 0644 "$active_staged"
-  /usr/sbin/chown root:wheel "$active_staged"
-  /bin/mv -f "$active_staged" "$ACTIVE_PROFILE"
+  write_active_profile_name "$name"
 
   if [[ "$PROFILE_DAEMON_WAS_RUNNING" -eq 1 ]]; then
     [[ -f "$PLIST" ]] || { echo "missing LaunchDaemon plist" >&2; false; }
     /bin/launchctl bootstrap system "$PLIST"
     /bin/launchctl enable "system/$LABEL"
     /bin/launchctl kickstart -k "system/$LABEL"
-    wait_for "Mihomo controller after profile switch" /usr/bin/curl -fsS http://127.0.0.1:9090/version
+    wait_for "authenticated Mihomo controller after profile switch" managed_controller_ready
     wait_for "macOS PrimaryService DNS after profile switch" \
       "$APP_SUPPORT/mihomo-daemon" --config "$APP_SUPPORT/daemon.json" --check-system-dns
     wait_for "fully managed network after profile switch" managed_network_ready
@@ -475,7 +550,7 @@ start_service() {
   run /bin/launchctl bootstrap system "$PLIST"
   run /bin/launchctl enable "system/$LABEL"
   run /bin/launchctl kickstart -k "system/$LABEL"
-  wait_for "Mihomo controller 127.0.0.1:9090" /usr/bin/curl -fsS http://127.0.0.1:9090/version
+  wait_for "authenticated Mihomo controller" managed_controller_ready
   wait_for "macOS PrimaryService DNS preferences" \
     "$APP_SUPPORT/mihomo-daemon" --config "$APP_SUPPORT/daemon.json" --check-system-dns
   wait_for "effective macOS DNS" \
@@ -523,20 +598,38 @@ install_daemon() {
   run /bin/mkdir -p "$APP_SUPPORT" "$MIHOMO_DATA" "$LOG_DIR"
   run /usr/bin/install -o root -g wheel -m 0755 "$DAEMON_SOURCE" "$APP_SUPPORT/mihomo-daemon"
   run /usr/bin/install -o root -g wheel -m 0755 "$MIHOMO_SOURCE" "$APP_SUPPORT/mihomo"
-  run /usr/bin/install -o root -g wheel -m 0644 "$RESOURCE_ROOT/daemon.json" "$APP_SUPPORT/daemon.json"
+  run /usr/bin/install -o root -g wheel -m 0600 "$RESOURCE_ROOT/daemon.json" "$APP_SUPPORT/daemon.json"
 
-  if [[ ! -f "$MIHOMO_DATA/config.yaml" ]]; then
-    if [[ -d "$LEGACY_DIR" ]]; then
-      run /bin/cp -R "$LEGACY_DIR/." "$MIHOMO_DATA/"
-    else
-      run /usr/bin/install -o root -g wheel -m 0644 \
-        "$RESOURCE_ROOT/default-config.yaml" "$MIHOMO_DATA/config.yaml"
-    fi
+  local selected_profile="$INITIAL_PROFILE"
+  if [[ -z "$selected_profile" && -f "$ACTIVE_PROFILE" ]]; then
+    local selected_name
+    selected_name="$(/usr/bin/sed -n '1p' "$ACTIVE_PROFILE")"
+    validate_profile_name "$selected_name"
+    selected_profile="$PROFILES_DIR/$selected_name"
   fi
-  run /usr/bin/python3 "$RESOURCE_ROOT/configure_mihomo.py" \
-    --config "$MIHOMO_DATA/config.yaml" \
-    --backup "$APP_SUPPORT/config.before-mihomo-app.yaml"
-  run "$APP_SUPPORT/mihomo" -t -d "$MIHOMO_DATA" -f "$MIHOMO_DATA/config.yaml"
+  if [[ -n "$selected_profile" ]]; then
+    install_profile_for_first_start "$selected_profile"
+  else
+    if [[ ! -f "$MIHOMO_DATA/config.yaml" ]]; then
+      if [[ -d "$LEGACY_DIR" ]]; then
+        run /bin/cp -R "$LEGACY_DIR/." "$MIHOMO_DATA/"
+      else
+        run /usr/bin/install -o root -g wheel -m 0644 \
+          "$RESOURCE_ROOT/default-config.yaml" "$MIHOMO_DATA/config.yaml"
+      fi
+    fi
+    run /usr/bin/python3 "$RESOURCE_ROOT/configure_mihomo.py" \
+      --config "$MIHOMO_DATA/config.yaml" \
+      --backup "$APP_SUPPORT/config.before-mihomo-app.yaml" \
+      --secret-file "$CONTROLLER_SECRET" \
+      --controller-metadata "$CONTROLLER_METADATA" \
+      --daemon-config "$APP_SUPPORT/daemon.json"
+    run /usr/sbin/chown root:wheel "$CONTROLLER_SECRET" "$APP_SUPPORT/daemon.json" "$MIHOMO_DATA/config.yaml" "$APP_SUPPORT/config.before-mihomo-app.yaml"
+    run /bin/chmod 0600 "$CONTROLLER_SECRET" "$APP_SUPPORT/daemon.json" "$MIHOMO_DATA/config.yaml" "$APP_SUPPORT/config.before-mihomo-app.yaml"
+    run /usr/sbin/chown root:admin "$CONTROLLER_METADATA"
+    run /bin/chmod 0640 "$CONTROLLER_METADATA"
+    run "$APP_SUPPORT/mihomo" -t -d "$MIHOMO_DATA" -f "$MIHOMO_DATA/config.yaml"
+  fi
 
   if /bin/launchctl print "system/$LEGACY_LABEL" >/dev/null 2>&1; then
     run /usr/bin/touch "$LEGACY_MARKER"
@@ -559,7 +652,7 @@ install_daemon() {
   run /bin/launchctl enable "system/$LABEL"
   run /bin/launchctl kickstart -k "system/$LABEL"
 
-  wait_for "Mihomo controller 127.0.0.1:9090" /usr/bin/curl -fsS http://127.0.0.1:9090/version
+  wait_for "authenticated Mihomo controller" managed_controller_ready
   wait_for "system DNS 127.0.0.53:53" /usr/bin/dig @127.0.0.53 -p 53 test.invalid A +time=1 +tries=1
   wait_for "macOS PrimaryService DNS preferences" \
     "$APP_SUPPORT/mihomo-daemon" --config "$APP_SUPPORT/daemon.json" --check-system-dns
