@@ -14,8 +14,8 @@ MihomoBox.app (current user, Tauri)
 └── /Library/Application Support/Mihomo App/mihomo-daemon
     ├── supervises copied Mihomo kernel as root
     ├── listens on 127.0.0.53:53 and 127.0.0.1:1054
-    ├── manages CurrentSet/Network/Global/DNS
-    └── tracks DHCP DNS and the active physical interface
+    ├── manages CurrentSet/Network/Service/<PrimaryService>/DNS
+    └── tracks DHCP and split DNS resolvers per interface
 ```
 
 The App bundle is the distribution source. Installation copies privileged
@@ -29,17 +29,18 @@ bundle or a source checkout.
 | Main window and tray | current user Tauri process | UI must not run as root |
 | Mihomo controller reads/writes | Tauri via `127.0.0.1:9090` | loopback API is the state source |
 | Mihomo kernel process | root daemon | Enhanced TUN must not change process owner |
-| `lo0` alias and Global DNS | root daemon | SystemConfiguration and interface changes require privilege |
+| `lo0` alias and system DNS | root daemon | SystemConfiguration and interface changes require privilege |
 | MetaCubeXD files | immutable App resources | no remote UI code execution |
 
 ## Startup Sequence
 
 1. launchd starts `mihomo-daemon` before user login.
-2. The daemon discovers DHCP option 6 and the primary interface.
+2. The daemon discovers DHCP/supplemental resolvers and their interfaces.
 3. It binds the original-DNS listener on `127.0.0.1:1054`.
-4. It idempotently adds `127.0.0.53` to `lo0`, binds UDP/TCP 53, backs up and
-   applies Global DNS.
-5. It starts the copied Mihomo binary using the managed config directory.
+4. It adds `127.0.0.53` to `lo0`, binds UDP/TCP 53, and starts the copied Mihomo
+   binary using the managed config directory.
+5. After controller, TUN, fake-IP route, and DNS validation, it backs up and
+   applies DNS to the active PrimaryService.
 6. Tauri starts later as an accessory application; the main window remains
    hidden and the tray polls the Mihomo controller.
 

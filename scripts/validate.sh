@@ -15,6 +15,16 @@ Tests/e2e.sh
 scripts/install-daemon.sh --dry-run
 
 /usr/bin/env npm run prepare:binaries
+if .build/release/mihomoboxctl profile import-url ftp://invalid.example/profile.yaml \
+  >/dev/null 2>&1; then
+  echo "CLI accepted a non-HTTP subscription URL" >&2
+  exit 1
+fi
+if .build/release/mihomoboxctl profile import-url https://invalid.example/profile.yaml \
+  --auth header --header Host >/dev/null 2>&1; then
+  echo "CLI accepted a restricted subscription authentication header" >&2
+  exit 1
+fi
 /usr/bin/env cargo fmt --manifest-path src-tauri/Cargo.toml --check
 /usr/bin/env cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 /usr/bin/env cargo test --manifest-path src-tauri/Cargo.toml

@@ -36,6 +36,14 @@ Do not log or publish:
 Tray labels necessarily show configured proxy names and current latency to the
 local logged-in user; they are never written to daemon logs.
 
+HTTP subscription credentials live only in the importing process and are not
+persisted. Tray credential fields use hidden input. CLI secrets use a hidden
+TTY prompt or `--secret-stdin`; password/token values are never command-line
+arguments. Downloads use an ephemeral URL session, reject non-HTTP(S) and HTTPS
+downgrade redirects, remove authentication headers on cross-origin redirects,
+cap the response at 16 MiB, and pass only a mode-0600 temporary YAML file to the
+root installer.
+
 ## Recovery Guarantees
 
 - Original DNS is backed up before mutation.

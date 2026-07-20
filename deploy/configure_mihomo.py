@@ -13,6 +13,7 @@ from typing import Optional
 MANAGED_SCALARS = {
     "listen": "127.0.0.1:1153",
     "respect-rules": "false",
+    "fake-ip-ttl": "1",
 }
 
 MANAGED_LISTS = {

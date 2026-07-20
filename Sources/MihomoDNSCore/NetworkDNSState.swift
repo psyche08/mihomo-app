@@ -15,7 +15,7 @@ private func dhcpInfoGetOptionData(
     _ code: UInt8
 ) -> Unmanaged<CFData>?
 
-public struct NetworkDNSSnapshot: Equatable {
+public struct DNSUpstreamSelection: Equatable {
     public var interfaceName: String?
     public var serviceID: String?
     public var servers: [String]
@@ -24,6 +24,64 @@ public struct NetworkDNSSnapshot: Equatable {
         self.interfaceName = interfaceName
         self.serviceID = serviceID
         self.servers = servers
+    }
+}
+
+public struct SplitDNSRoute: Equatable {
+    public var domain: String
+    public var matchOrder: Int
+    public var upstream: DNSUpstreamSelection
+
+    public init(domain: String, matchOrder: Int = Int.max, upstream: DNSUpstreamSelection) {
+        self.domain = Self.normalize(domain)
+        self.matchOrder = matchOrder
+        self.upstream = upstream
+    }
+
+    fileprivate static func normalize(_ domain: String) -> String {
+        domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+            .lowercased()
+    }
+}
+
+public struct NetworkDNSSnapshot: Equatable {
+    public var interfaceName: String?
+    public var serviceID: String?
+    public var servers: [String]
+    public var splitRoutes: [SplitDNSRoute]
+
+    public init(
+        interfaceName: String?,
+        serviceID: String?,
+        servers: [String],
+        splitRoutes: [SplitDNSRoute] = []
+    ) {
+        self.interfaceName = interfaceName
+        self.serviceID = serviceID
+        self.servers = servers
+        self.splitRoutes = splitRoutes
+    }
+
+    public func upstream(for questionName: String?) -> DNSUpstreamSelection {
+        let defaultUpstream = DNSUpstreamSelection(
+            interfaceName: interfaceName,
+            serviceID: serviceID,
+            servers: servers
+        )
+        guard let questionName else { return defaultUpstream }
+        let name = SplitDNSRoute.normalize(questionName)
+        guard !name.isEmpty else { return defaultUpstream }
+        return splitRoutes
+            .filter { route in
+                name == route.domain || name.hasSuffix(".\(route.domain)")
+            }
+            .sorted { lhs, rhs in
+                if lhs.domain.count != rhs.domain.count {
+                    return lhs.domain.count > rhs.domain.count
+                }
+                return lhs.matchOrder < rhs.matchOrder
+            }
+            .first?.upstream ?? defaultUpstream
     }
 }
 
@@ -81,6 +139,7 @@ public final class NetworkDNSState: @unchecked Sendable {
         let patterns = [
             "State:/Network/Service/.*/DNS" as CFString,
             "State:/Network/Service/.*/IPv4" as CFString,
+            "State:/Network/Service/.*/IPv6" as CFString,
         ] as CFArray
         guard SCDynamicStoreSetNotificationKeys(store, keys, patterns),
               SCDynamicStoreSetDispatchQueue(store, queue) else {
@@ -113,6 +172,7 @@ public final class NetworkDNSState: @unchecked Sendable {
 
     fileprivate func refresh() {
         guard let store else { return }
+        let previous = snapshot()
         let globalIPv4 = SCDynamicStoreCopyValue(store, "State:/Network/Global/IPv4" as CFString)
             as? [String: Any]
         let globalIPv6 = SCDynamicStoreCopyValue(store, "State:/Network/Global/IPv6" as CFString)
@@ -122,17 +182,7 @@ public final class NetworkDNSState: @unchecked Sendable {
         let interfaceName = (globalIPv4?["PrimaryInterface"] as? String)
             ?? (globalIPv6?["PrimaryInterface"] as? String)
 
-        var servers: [String] = []
-        if let serviceID,
-           let info = copyDHCPInfo(store, serviceID as CFString)?.takeRetainedValue(),
-           let option = dhcpInfoGetOptionData(info, 6)?.takeUnretainedValue() {
-            let bytes = Data(option as Data)
-            if bytes.count % 4 == 0 {
-                for offset in stride(from: 0, to: bytes.count, by: 4) {
-                    servers.append("\(bytes[offset]).\(bytes[offset + 1]).\(bytes[offset + 2]).\(bytes[offset + 3])")
-                }
-            }
-        }
+        var servers = serviceID.map { dhcpServers(store: store, serviceID: $0) } ?? []
 
         if servers.isEmpty, let serviceID {
             let key = "State:/Network/Service/\(serviceID)/DNS" as CFString
@@ -141,12 +191,28 @@ public final class NetworkDNSState: @unchecked Sendable {
         }
 
         servers = unique(servers.filter(isUsableServer))
+        if servers.isEmpty,
+           serviceID == previous.serviceID,
+           interfaceName == previous.interfaceName,
+           !previous.servers.isEmpty {
+            // Static/manual DNS disappears from the live service dictionary
+            // after that service is pointed at our loopback bridge. Retain only
+            // within the same service/interface identity; never leak it across
+            // a PrimaryService transition.
+            servers = previous.servers
+        }
         if servers.isEmpty {
             servers = unique(fallbackServers.filter(isUsableServer))
         }
 
+        let splitRoutes = readSplitRoutes(
+            store: store,
+            primaryServiceID: serviceID,
+            primaryInterfaceName: interfaceName,
+            primaryServers: servers
+        )
+
         lock.lock()
-        let previous = value
         var retainedInterface = interfaceName
         var retainedService = serviceID
         if servers.isEmpty, !previous.servers.isEmpty {
@@ -157,7 +223,8 @@ public final class NetworkDNSState: @unchecked Sendable {
         let next = NetworkDNSSnapshot(
             interfaceName: retainedInterface,
             serviceID: retainedService,
-            servers: servers
+            servers: servers,
+            splitRoutes: splitRoutes
         )
         value = next
         let handler = refreshHandler
@@ -165,9 +232,99 @@ public final class NetworkDNSState: @unchecked Sendable {
 
         if previous != next {
             let interfaceDescription = next.interfaceName ?? "none"
-            ServiceLog.info("event=network_dns_changed interface=\(interfaceDescription) upstream_count=\(next.servers.count)")
+            ServiceLog.info(
+                "event=network_dns_changed interface=\(interfaceDescription) " +
+                "upstream_count=\(next.servers.count) split_route_count=\(next.splitRoutes.count)"
+            )
         }
         handler?()
+    }
+
+    private func readSplitRoutes(
+        store: SCDynamicStore,
+        primaryServiceID: String?,
+        primaryInterfaceName: String?,
+        primaryServers: [String]
+    ) -> [SplitDNSRoute] {
+        guard let keys = SCDynamicStoreCopyKeyList(
+            store,
+            "State:/Network/Service/.*/DNS" as CFString
+        ) as? [String] else {
+            return []
+        }
+        var routes: [SplitDNSRoute] = []
+        for key in keys.sorted() {
+            let components = key.split(separator: "/", omittingEmptySubsequences: false)
+            guard components.count == 5,
+                  components[0] == "State:",
+                  components[1] == "Network",
+                  components[2] == "Service",
+                  components[4] == "DNS" else {
+                continue
+            }
+            let serviceID = String(components[3])
+            guard let dns = SCDynamicStoreCopyValue(store, key as CFString) as? [String: Any] else {
+                continue
+            }
+            let domains = dns["SupplementalMatchDomains"] as? [String] ?? []
+            let orders = dns["SupplementalMatchOrders"] as? [Int] ?? []
+            guard !domains.isEmpty else { continue }
+
+            var routeServers = unique(
+                (dns[kSCPropNetDNSServerAddresses as String] as? [String] ?? []).filter(isUsableServer)
+            )
+            if routeServers.isEmpty {
+                routeServers = unique(dhcpServers(store: store, serviceID: serviceID).filter(isUsableServer))
+            }
+            if routeServers.isEmpty, serviceID == primaryServiceID {
+                routeServers = primaryServers
+            }
+            guard !routeServers.isEmpty else { continue }
+
+            let interface = serviceInterfaceName(store: store, serviceID: serviceID)
+                ?? (serviceID == primaryServiceID ? primaryInterfaceName : nil)
+            let upstream = DNSUpstreamSelection(
+                interfaceName: interface,
+                serviceID: serviceID,
+                servers: routeServers
+            )
+            for (index, rawDomain) in domains.enumerated() {
+                let domain = SplitDNSRoute.normalize(rawDomain)
+                // A root scoped resolver requires client/interface provenance,
+                // which is lost after macOS sends the query to the loopback bridge.
+                guard !domain.isEmpty else { continue }
+                routes.append(SplitDNSRoute(
+                    domain: domain,
+                    matchOrder: index < orders.count ? orders[index] : Int.max,
+                    upstream: upstream
+                ))
+            }
+        }
+        return routes
+    }
+
+    private func serviceInterfaceName(store: SCDynamicStore, serviceID: String) -> String? {
+        for family in ["IPv4", "IPv6"] {
+            let key = "State:/Network/Service/\(serviceID)/\(family)" as CFString
+            if let state = SCDynamicStoreCopyValue(store, key) as? [String: Any],
+               let interface = state["InterfaceName"] as? String,
+               !interface.isEmpty {
+                return interface
+            }
+        }
+        return nil
+    }
+
+    private func dhcpServers(store: SCDynamicStore, serviceID: String) -> [String] {
+        guard let info = copyDHCPInfo(store, serviceID as CFString)?.takeRetainedValue(),
+              let option = dhcpInfoGetOptionData(info, 6)?.takeUnretainedValue() else {
+            return []
+        }
+        let bytes = Data(option as Data)
+        guard bytes.count % 4 == 0 else { return [] }
+        return stride(from: 0, to: bytes.count, by: 4).map { offset in
+            "\(bytes[offset]).\(bytes[offset + 1]).\(bytes[offset + 2]).\(bytes[offset + 3])"
+        }
     }
 
     private func isUsableServer(_ server: String) -> Bool {

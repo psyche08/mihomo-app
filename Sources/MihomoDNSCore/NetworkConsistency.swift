@@ -356,7 +356,7 @@ public final class NetworkConsistencyController: @unchecked Sendable {
         do {
             try globalDNS.restore()
         } catch {
-            ServiceLog.error("event=network_restore_failed source=\(source) component=global_dns")
+            ServiceLog.error("event=network_restore_failed source=\(source) component=system_dns")
         }
         do {
             try aliasManager.removeIfManaged()

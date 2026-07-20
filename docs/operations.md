@@ -27,7 +27,7 @@ The installer:
 5. stops a running Homebrew Mihomo service to prevent duplicate owners;
 6. installs and starts the root LaunchDaemon;
 7. verifies controller, TUN, Fake-IP route, DNS bridge, Mihomo DNS, persisted
-   system DNS, and effective Global DNS.
+   PrimaryService DNS, and effective resolver state.
 
 It also installs `/usr/local/bin/mihomoboxctl` as a symlink to the signed App
 bundle. An unrelated existing file or symlink at that path is preserved.
@@ -52,7 +52,7 @@ sudo scripts/install-daemon.sh --restore-network
 ```
 
 The tray exposes the same operation as `Stop Service & Restore Network…`.
-It restores Global DNS, removes the managed alias, flushes system/Mihomo DNS
+It restores system DNS, removes the managed alias, flushes system/Mihomo DNS
 caches, stops TUN, and removes its routes.
 
 To remove the installed service and files entirely:
@@ -61,7 +61,7 @@ To remove the installed service and files entirely:
 sudo scripts/install-daemon.sh --restore
 ```
 
-Restore stops the daemon/Mihomo child, restores the backed-up Global DNS,
+Restore stops the daemon/Mihomo child, restores the backed-up service/global DNS,
 removes only a daemon-created alias, restarts a previously active Homebrew
 Mihomo service, removes the managed CLI symlink, and removes installed system
 files.
@@ -72,6 +72,9 @@ files.
 mihomoboxctl status [--json]
 mihomoboxctl profile list [--json]
 mihomoboxctl profile import /path/to/profile.yaml [--activate]
+mihomoboxctl profile import-url URL [--name profile.yaml] [--activate]
+  [--auth none|basic|digest|bearer|header]
+  [--username USER] [--header NAME] [--secret-stdin]
 mihomoboxctl profile switch profile.yaml
 mihomoboxctl install
 mihomoboxctl start
@@ -85,6 +88,37 @@ commands map to a fixed set of operations in the App's bundled installer; the
 CLI cannot pass arbitrary privileged commands. `start` and `restart` restore
 real DNS before launch and do not report success until the managed network is
 consistent. `stop` restores real DNS before unloading the LaunchDaemon.
+
+For automation, `status` exits with `0` for a running or safely stopped
+consistent network, `1` when MihomoBox is not installed, `2` for an inconsistent
+network, and `3` when launchd has the job loaded but its runtime is unavailable.
+Invalid CLI usage exits with `64`.
+
+HTTP authentication examples:
+
+```bash
+# Basic and Digest prompt for the password without echoing it.
+mihomoboxctl profile import-url https://example.invalid/basic \
+  --name work.yaml --auth basic --username example-user --activate
+mihomoboxctl profile import-url https://example.invalid/digest \
+  --name digest.yaml --auth digest --username example-user
+
+# Bearer token from stdin for SSH/automation; avoid putting it in shell history.
+printf '%s\n' "$MIHOMOBOX_SUBSCRIPTION_TOKEN" | \
+  mihomoboxctl profile import-url https://example.invalid/bearer \
+    --name remote.yaml --auth bearer --secret-stdin --activate
+
+# API key or another provider-specific header.
+printf '%s\n' "$MIHOMOBOX_SUBSCRIPTION_KEY" | \
+  mihomoboxctl profile import-url https://example.invalid/header \
+    --name api-key.yaml --auth header --header X-API-Key --secret-stdin
+```
+
+The URL is never printed or passed to the privileged installer. The downloaded
+profile is limited to 16 MiB, stored temporarily with mode `0600`, validated by
+the same Mihomo transaction as a local YAML, and removed afterward. Credentials
+are intentionally not persisted; importing or refreshing requires supplying
+them again.
 
 ## Runtime Paths
 
@@ -118,8 +152,9 @@ dig @127.0.0.1 -p 1054 example.com
 scutil --dns
 ```
 
-The `--check-system-dns` command verifies the persisted CurrentSet Global DNS
-value. `scutil --dns` verifies the effective dynamic resolver state; the
+The `--check-system-dns` command verifies the persisted CurrentSet
+PrimaryService DNS value (or the Global fallback when no primary service is
+available). `scutil --dns` verifies the effective dynamic resolver state; the
 installer requires both checks to pass.
 
 `--health` reports controller, TUN, Fake-IP route, DNS bridge, Mihomo DNS, and

@@ -131,6 +131,39 @@ wait_for_job_absent() {
   return 1
 }
 
+managed_daemon_pids() {
+  /usr/bin/pgrep -f -x "$APP_SUPPORT/mihomo-daemon --config $APP_SUPPORT/daemon.json" 2>/dev/null || true
+}
+
+signal_managed_daemon_pids() {
+  local signal="$1"
+  local pid
+  while IFS= read -r pid; do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    /bin/kill "-$signal" "$pid" >/dev/null 2>&1 || true
+  done <<< "$(managed_daemon_pids)"
+}
+
+wait_for_managed_process_absent() {
+  [[ "$DRY_RUN" -eq 0 ]] || { echo "+ wait for managed daemon process exit"; return; }
+  local deadline=$((SECONDS + 5))
+  while (( SECONDS < deadline )); do
+    [[ -z "$(managed_daemon_pids)" ]] && return
+    /bin/sleep 0.25
+  done
+  echo "managed daemon did not exit after launchd unload; sending SIGTERM" >&2
+  signal_managed_daemon_pids TERM
+  deadline=$((SECONDS + 5))
+  while (( SECONDS < deadline )); do
+    [[ -z "$(managed_daemon_pids)" ]] && return
+    /bin/sleep 0.25
+  done
+  echo "managed daemon remained stuck after cleanup; sending SIGKILL" >&2
+  signal_managed_daemon_pids KILL
+  wait_for "managed daemon process exit" /bin/sh -c \
+    "! /usr/bin/pgrep -f -x '$APP_SUPPORT/mihomo-daemon --config $APP_SUPPORT/daemon.json' >/dev/null"
+}
+
 managed_network_ready() {
   local health
   health="$("$APP_SUPPORT/mihomo-daemon" --config "$APP_SUPPORT/daemon.json" --health)" || return 1
@@ -215,6 +248,7 @@ rollback_profile_switch() {
   echo "profile switch failed; restoring the previous active profile" >&2
   /bin/launchctl bootout "system/$LABEL" >/dev/null 2>&1 || true
   wait_for_job_absent "$LABEL" || true
+  wait_for_managed_process_absent || true
   if [[ -f "$PROFILE_ROLLBACK_DIR/config.yaml" ]]; then
     /usr/bin/install -o root -g wheel -m 0644 \
       "$PROFILE_ROLLBACK_DIR/config.yaml" "$MIHOMO_DATA/config.yaml"
@@ -260,6 +294,7 @@ switch_profile() {
     PROFILE_DAEMON_WAS_RUNNING=1
     /bin/launchctl bootout "system/$LABEL"
     wait_for_job_absent "$LABEL"
+    wait_for_managed_process_absent
     "$APP_SUPPORT/mihomo-daemon" --config "$APP_SUPPORT/daemon.json" --restore-system-dns
   fi
   /bin/chmod 0644 "$staged"
@@ -279,7 +314,7 @@ switch_profile() {
     /bin/launchctl enable "system/$LABEL"
     /bin/launchctl kickstart -k "system/$LABEL"
     wait_for "Mihomo controller after profile switch" /usr/bin/curl -fsS http://127.0.0.1:9090/version
-    wait_for "macOS Global DNS after profile switch" \
+    wait_for "macOS PrimaryService DNS after profile switch" \
       "$APP_SUPPORT/mihomo-daemon" --config "$APP_SUPPORT/daemon.json" --check-system-dns
     wait_for "fully managed network after profile switch" managed_network_ready
   else
@@ -354,6 +389,7 @@ rollback_installation() {
   /bin/launchctl bootout "system/$RENAMED_LABEL" >/dev/null 2>&1 || true
   wait_for_job_absent "$LABEL" || true
   wait_for_job_absent "$RENAMED_LABEL" || true
+  wait_for_managed_process_absent || true
   if [[ -x "$APP_SUPPORT/mihomo-daemon" && -f "$APP_SUPPORT/daemon.json" ]]; then
     "$APP_SUPPORT/mihomo-daemon" --config "$APP_SUPPORT/daemon.json" --restore-system-dns \
       >/dev/null 2>&1 || true
@@ -399,6 +435,9 @@ restore() {
   if /bin/launchctl print "system/$RENAMED_LABEL" >/dev/null 2>&1; then
     run /bin/launchctl bootout "system/$RENAMED_LABEL"
   fi
+  wait_for_job_absent "$LABEL"
+  wait_for_job_absent "$RENAMED_LABEL"
+  wait_for_managed_process_absent
   if [[ -x "$APP_SUPPORT/mihomo-daemon" && -f "$APP_SUPPORT/daemon.json" ]]; then
     run "$APP_SUPPORT/mihomo-daemon" --config "$APP_SUPPORT/daemon.json" --restore-system-dns
   fi
@@ -429,6 +468,7 @@ start_service() {
     run /bin/launchctl bootout "system/$LABEL"
     wait_for_job_absent "$LABEL"
   fi
+  wait_for_managed_process_absent
   if [[ -x "$APP_SUPPORT/mihomo-daemon" && -f "$APP_SUPPORT/daemon.json" ]]; then
     run "$APP_SUPPORT/mihomo-daemon" --config "$APP_SUPPORT/daemon.json" --restore-system-dns
   fi
@@ -436,9 +476,9 @@ start_service() {
   run /bin/launchctl enable "system/$LABEL"
   run /bin/launchctl kickstart -k "system/$LABEL"
   wait_for "Mihomo controller 127.0.0.1:9090" /usr/bin/curl -fsS http://127.0.0.1:9090/version
-  wait_for "macOS Global DNS preferences" \
+  wait_for "macOS PrimaryService DNS preferences" \
     "$APP_SUPPORT/mihomo-daemon" --config "$APP_SUPPORT/daemon.json" --check-system-dns
-  wait_for "effective macOS Global DNS" \
+  wait_for "effective macOS DNS" \
     /bin/sh -c "/usr/sbin/scutil --dns | /usr/bin/grep -q '127\\.0\\.0\\.53'"
   wait_for "fully managed network" managed_network_ready
   echo "started $LABEL with a consistent network"
@@ -457,6 +497,7 @@ restore_network() {
     run /bin/launchctl bootout "system/$RENAMED_LABEL"
     wait_for_job_absent "$RENAMED_LABEL"
   fi
+  wait_for_managed_process_absent
   if [[ -x "$APP_SUPPORT/mihomo-daemon" && -f "$APP_SUPPORT/daemon.json" ]]; then
     run "$APP_SUPPORT/mihomo-daemon" --config "$APP_SUPPORT/daemon.json" --restore-system-dns
   fi
@@ -510,6 +551,7 @@ install_daemon() {
     run /bin/launchctl bootout "system/$LABEL"
     wait_for_job_absent "$LABEL"
   fi
+  wait_for_managed_process_absent
   run /usr/bin/install -o root -g wheel -m 0644 \
     "$RESOURCE_ROOT/dev.linsheng.mihomo.daemon.plist" "$PLIST"
   run /bin/rm -f "$RENAMED_PLIST"
@@ -519,9 +561,9 @@ install_daemon() {
 
   wait_for "Mihomo controller 127.0.0.1:9090" /usr/bin/curl -fsS http://127.0.0.1:9090/version
   wait_for "system DNS 127.0.0.53:53" /usr/bin/dig @127.0.0.53 -p 53 test.invalid A +time=1 +tries=1
-  wait_for "macOS Global DNS preferences" \
+  wait_for "macOS PrimaryService DNS preferences" \
     "$APP_SUPPORT/mihomo-daemon" --config "$APP_SUPPORT/daemon.json" --check-system-dns
-  wait_for "effective macOS Global DNS" \
+  wait_for "effective macOS DNS" \
     /bin/sh -c "/usr/sbin/scutil --dns | /usr/bin/grep -q '127\\.0\\.0\\.53'"
   wait_for "fully managed network" managed_network_ready
   install_cli_entry

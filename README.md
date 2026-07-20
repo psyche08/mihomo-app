@@ -6,8 +6,8 @@ An open-source native macOS menu-bar controller for Mihomo.
 - App and tray artwork is derived from Mihomo's official `Meta.png`.
 - MetaCubeXD is built and embedded as the main dashboard.
 - Tray controls required Enhanced TUN, outbound mode, proxy selection with
-  latency, local YAML import/switch, network recovery, daemon installation,
-  and exit.
+  latency, local and authenticated HTTP(S) YAML import/switch, network
+  recovery, daemon installation, and exit.
 - The App bundle contains architecture-matched `mihomo`, `mihomo-daemon`, and
   `mihomoboxctl` executables under `Contents/MacOS`.
 - The root daemon supervises Mihomo and provides DHCP-aware system DNS without
@@ -32,7 +32,7 @@ first:
 sudo scripts/install-daemon.sh --dry-run
 ```
 
-Restore Global DNS and remove the daemon:
+Restore system DNS and remove the daemon:
 
 ```bash
 sudo scripts/install-daemon.sh --restore
@@ -49,7 +49,9 @@ After installation, the same safe operations are available through the CLI:
 ```bash
 mihomoboxctl status
 mihomoboxctl profile list
-mihomoboxctl profile import ~/Desktop/sheng.yaml --activate
+mihomoboxctl profile import ~/Desktop/profile.yaml --activate
+mihomoboxctl profile import-url https://example.invalid/profile.yaml \
+  --name remote.yaml --auth bearer --activate
 mihomoboxctl restart
 mihomoboxctl stop
 ```

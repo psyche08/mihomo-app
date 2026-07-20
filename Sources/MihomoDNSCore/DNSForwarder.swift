@@ -63,17 +63,18 @@ public final class DynamicDNSForwarder: DNSForwarding, @unchecked Sendable {
     public func forward(_ query: Data) throws -> Data {
         try DNSMessage.validate(query)
         let snapshot = state.snapshot()
-        guard !snapshot.servers.isEmpty else {
+        let upstream = snapshot.upstream(for: try? DNSMessage.questionName(query))
+        guard !upstream.servers.isEmpty else {
             throw DNSForwardingError.noUpstream
         }
-        for server in snapshot.servers {
+        for server in upstream.servers {
             let endpoint = Endpoint(host: server, port: 53)
             do {
                 return try SocketDNSClient.queryTCP(
                     query,
                     endpoint: endpoint,
                     timeoutMilliseconds: timeoutMilliseconds,
-                    interfaceName: snapshot.interfaceName
+                    interfaceName: upstream.interfaceName
                 )
             } catch {
                 do {
@@ -81,7 +82,7 @@ public final class DynamicDNSForwarder: DNSForwarding, @unchecked Sendable {
                         query,
                         endpoint: endpoint,
                         timeoutMilliseconds: timeoutMilliseconds,
-                        interfaceName: snapshot.interfaceName
+                        interfaceName: upstream.interfaceName
                     )
                 } catch {
                     continue

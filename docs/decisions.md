@@ -23,11 +23,12 @@ A LaunchDaemon that executes inside `/Applications/MihomoBox.app` breaks when
 the user moves, replaces, or deletes the App. The signed bundle is the install
 source; root-owned copies are the runtime.
 
-## Global DNS API instead of DNS Settings profile
+## SystemConfiguration DNS instead of a DNS Settings profile
 
-The daemon uses public SystemConfiguration preference APIs and observes network
-changes. This removes interactive profile enrollment, certificate/DoH plumbing,
-and `mDNSResponder` resolver-path ambiguity.
+The daemon uses public SystemConfiguration preference APIs, manages the active
+PrimaryService, and observes per-service resolver changes. This removes
+interactive profile enrollment and certificate/DoH plumbing while retaining
+macOS supplemental-domain and interface routing information.
 
 ## Separate port 53 and port 1054
 

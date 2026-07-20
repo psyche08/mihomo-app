@@ -14,6 +14,43 @@ final class CoreTests: XCTestCase {
         XCTAssertFalse(DNSMessage.isTruncated(Data([0, 0, 0x01, 0])))
     }
 
+    func testDNSQuestionNameParsing() throws {
+        XCTAssertEqual(try DNSMessage.questionName(query(for: "API.Corp.Example")), "api.corp.example")
+        XCTAssertThrowsError(try DNSMessage.questionName(Data(repeating: 0, count: 12)))
+    }
+
+    func testSplitDNSUsesLongestSuffixThenMatchOrder() {
+        let broad = DNSUpstreamSelection(
+            interfaceName: "en7",
+            serviceID: "vpn-broad",
+            servers: ["10.0.0.53"]
+        )
+        let specificLowPriority = DNSUpstreamSelection(
+            interfaceName: "utun7",
+            serviceID: "vpn-specific-low",
+            servers: ["10.1.0.53"]
+        )
+        let specificHighPriority = DNSUpstreamSelection(
+            interfaceName: "utun8",
+            serviceID: "vpn-specific-high",
+            servers: ["10.2.0.53"]
+        )
+        let snapshot = NetworkDNSSnapshot(
+            interfaceName: "en0",
+            serviceID: "primary",
+            servers: ["192.0.2.53"],
+            splitRoutes: [
+                SplitDNSRoute(domain: "example", matchOrder: 1, upstream: broad),
+                SplitDNSRoute(domain: "corp.example", matchOrder: 200, upstream: specificLowPriority),
+                SplitDNSRoute(domain: "corp.example", matchOrder: 100, upstream: specificHighPriority),
+            ]
+        )
+
+        XCTAssertEqual(snapshot.upstream(for: "api.corp.example"), specificHighPriority)
+        XCTAssertEqual(snapshot.upstream(for: "public.example"), broad)
+        XCTAssertEqual(snapshot.upstream(for: "example.net").interfaceName, "en0")
+    }
+
     func testConfigurationRejectsRecursiveEndpoint() {
         let shared = Endpoint(host: "127.0.0.1", port: 1054)
         let config = ProxyConfiguration(mihomoDNS: shared, upstreamListen: shared)
@@ -110,6 +147,61 @@ final class CoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: backupPath))
     }
 
+    func testDNSPreferencesTargetsPrimaryServiceAndRestoresExactly() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let preferencesPath = root.appendingPathComponent("preferences.plist").path
+        let backupPath = root.appendingPathComponent("backup.plist").path
+        guard let preferences = SCPreferencesCreate(
+            nil,
+            "dev.linsheng.mihomo.daemon.tests.service-seed" as CFString,
+            preferencesPath as CFString
+        ) else {
+            return XCTFail("cannot create test preferences")
+        }
+        XCTAssertTrue(SCPreferencesSetValue(preferences, kSCPrefCurrentSet, "/Sets/Test" as CFString))
+        let globalPath = "/Sets/Test/Network/Global/DNS" as CFString
+        let servicePath = "/Sets/Test/Network/Service/service-1/DNS" as CFString
+        let global = [kSCPropNetDNSServerAddresses as String: ["9.9.9.9"]] as CFDictionary
+        let service = [
+            kSCPropNetDNSServerAddresses as String: ["10.0.0.53"],
+            kSCPropNetDNSSearchDomains as String: ["corp.example"],
+        ] as CFDictionary
+        XCTAssertTrue(SCPreferencesPathSetValue(preferences, globalPath, global))
+        XCTAssertTrue(SCPreferencesPathSetValue(preferences, servicePath, service))
+        guard SCPreferencesCommitChanges(preferences) else {
+            throw XCTSkip("SCPreferences custom-file commit requires privileged SystemConfiguration access")
+        }
+
+        let manager = GlobalDNSPreferences(
+            servers: ["127.0.0.53"],
+            backupPath: backupPath,
+            preferencesID: preferencesPath,
+            primaryServiceIDOverride: "service-1"
+        )
+        try manager.apply()
+        SCPreferencesSynchronize(preferences)
+        let managedService = SCPreferencesPathGetValue(preferences, servicePath) as? [String: Any]
+        let untouchedGlobal = SCPreferencesPathGetValue(preferences, globalPath) as? [String: Any]
+        XCTAssertEqual(
+            managedService?[kSCPropNetDNSServerAddresses as String] as? [String],
+            ["127.0.0.53"]
+        )
+        XCTAssertEqual(
+            managedService?[kSCPropNetDNSSearchDomains as String] as? [String],
+            ["corp.example"]
+        )
+        XCTAssertEqual(untouchedGlobal?[kSCPropNetDNSServerAddresses as String] as? [String], ["9.9.9.9"])
+
+        try manager.restore()
+        SCPreferencesSynchronize(preferences)
+        let restored = SCPreferencesPathGetValue(preferences, servicePath) as? [String: Any]
+        XCTAssertEqual(restored?[kSCPropNetDNSServerAddresses as String] as? [String], ["10.0.0.53"])
+        XCTAssertEqual(restored?[kSCPropNetDNSSearchDomains as String] as? [String], ["corp.example"])
+    }
+
     func testFallbackForwarderUsesPrimaryWhenAvailable() throws {
         let expected = Data(repeating: 1, count: 12)
         let primary = StubForwarder(result: .success(expected))
@@ -147,6 +239,19 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(primary.callCount, 0)
         XCTAssertEqual(fallback.callCount, 1)
     }
+}
+
+private func query(for domain: String) -> Data {
+    var data = Data([
+        0x12, 0x34, 0x01, 0x00, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ])
+    for label in domain.split(separator: ".") {
+        data.append(UInt8(label.utf8.count))
+        data.append(contentsOf: label.utf8)
+    }
+    data.append(contentsOf: [0x00, 0x00, 0x01, 0x00, 0x01])
+    return data
 }
 
 private enum TestError: Error {

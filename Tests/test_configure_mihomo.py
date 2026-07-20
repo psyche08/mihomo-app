@@ -36,6 +36,7 @@ rules:
             self.assertEqual(config.read_text(), once)
             self.assertIn("  listen: 127.0.0.1:1153\n", once)
             self.assertIn("  respect-rules: false\n", once)
+            self.assertIn("  fake-ip-ttl: 1\n", once)
             for key in ("nameserver", "direct-nameserver", "proxy-server-nameserver"):
                 self.assertIn(f"  {key}:\n    - tcp://127.0.0.1:1054\n", once)
             self.assertIn("external-controller: 127.0.0.1:9090\n", once)

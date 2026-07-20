@@ -14,6 +14,7 @@ const PROFILES_DIR: &str = "/Library/Application Support/Mihomo App/profiles";
 const ACTIVE_PROFILE_PATH: &str = "/Library/Application Support/Mihomo App/active-profile";
 const DAEMON_PATH: &str = "/Library/Application Support/Mihomo App/mihomo-daemon";
 const DAEMON_CONFIG_PATH: &str = "/Library/Application Support/Mihomo App/daemon.json";
+const DAEMON_PLIST_PATH: &str = "/Library/LaunchDaemons/dev.linsheng.mihomo.daemon.plist";
 
 #[derive(Default, serde::Deserialize)]
 struct NetworkHealth {
@@ -26,11 +27,70 @@ enum DynamicAction {
     Profile { name: String },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TunAction {
+    InstallDaemon,
+    StartDaemon,
+    EnableTun,
+    StopAndRestore,
+}
+
 struct TrayState {
     client: MihomoClient,
     snapshot: Mutex<Snapshot>,
     actions: Mutex<HashMap<String, DynamicAction>>,
     profile_busy: Mutex<bool>,
+    last_menu_signature: Mutex<Option<MenuSignature>>,
+    last_action_error: Mutex<Option<String>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct MenuSignature {
+    reachable: bool,
+    enhanced_tun: bool,
+    mode: String,
+    groups: Vec<(String, String, Vec<String>)>,
+    profiles: Vec<String>,
+    active_profile: Option<String>,
+    profile_busy: bool,
+    network_healthy: Option<bool>,
+    action_error: Option<String>,
+}
+
+impl MenuSignature {
+    fn new(
+        snapshot: &Snapshot,
+        profiles: &ProfileState,
+        profile_busy: bool,
+        network_healthy: Option<bool>,
+        action_error: Option<String>,
+    ) -> Self {
+        Self {
+            reachable: snapshot.reachable,
+            enhanced_tun: snapshot.enhanced_tun,
+            mode: snapshot.mode.clone(),
+            groups: snapshot
+                .groups
+                .iter()
+                .map(|group| {
+                    (
+                        group.name.clone(),
+                        group.current.clone(),
+                        group
+                            .proxies
+                            .iter()
+                            .map(|proxy| proxy.name.clone())
+                            .collect(),
+                    )
+                })
+                .collect(),
+            profiles: profiles.names.clone(),
+            active_profile: profiles.active.clone(),
+            profile_busy,
+            network_healthy,
+            action_error,
+        }
+    }
 }
 
 pub fn setup(app: &AppHandle) -> tauri::Result<()> {
@@ -39,10 +99,33 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         snapshot: Mutex::new(Snapshot::default()),
         actions: Mutex::new(HashMap::new()),
         profile_busy: Mutex::new(false),
+        last_menu_signature: Mutex::new(None),
+        last_action_error: Mutex::new(None),
     });
     app.manage(state.clone());
 
-    let menu = build_menu(app, &state, &Snapshot::default())?;
+    let snapshot = Snapshot::default();
+    let profiles = profile_state();
+    let network_healthy = local_network_health().map(|health| health.network_consistent);
+    let menu = build_menu(
+        app,
+        &state,
+        &snapshot,
+        &profiles,
+        false,
+        network_healthy,
+        None,
+    )?;
+    *state
+        .last_menu_signature
+        .lock()
+        .expect("menu signature lock") = Some(MenuSignature::new(
+        &snapshot,
+        &profiles,
+        false,
+        network_healthy,
+        None,
+    ));
     let icon = app.default_window_icon().cloned();
     let mut tray = TrayIconBuilder::with_id(TRAY_ID)
         .tooltip("MihomoBox")
@@ -71,19 +154,21 @@ fn build_menu(
     app: &AppHandle,
     state: &Arc<TrayState>,
     snapshot: &Snapshot,
+    profiles: &ProfileState,
+    profile_busy: bool,
+    network_healthy: Option<bool>,
+    action_error: Option<&str>,
 ) -> tauri::Result<Menu<tauri::Wry>> {
     let show = MenuItem::with_id(app, "show", "Show Main Window", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
-    let health = local_network_health();
-    let network_healthy = health
-        .as_ref()
-        .is_some_and(|value| value.network_consistent);
     let network_status = MenuItem::with_id(
         app,
         "network-status",
-        if !snapshot.reachable {
+        if let Some(error) = action_error {
+            error
+        } else if !snapshot.reachable {
             "Network: Daemon unavailable"
-        } else if network_healthy {
+        } else if network_healthy == Some(true) {
             "Network: Healthy"
         } else {
             "Network: Inconsistent — DNS restored"
@@ -94,11 +179,12 @@ fn build_menu(
     let tun = CheckMenuItem::with_id(
         app,
         "tun",
-        "Enhanced TUN (required by managed DNS)",
-        snapshot.reachable && !snapshot.enhanced_tun,
+        "Enhanced TUN",
+        app_bundle_path().is_some(),
         snapshot.enhanced_tun,
         None::<&str>,
     )?;
+    let network_separator = PredefinedMenuItem::separator(app)?;
 
     let modes = ["rule", "global", "direct"]
         .into_iter()
@@ -121,7 +207,12 @@ fn build_menu(
 
     let mut actions = HashMap::new();
     let mut group_menus = Vec::new();
-    for (group_index, group) in snapshot.groups.iter().enumerate() {
+    for (group_index, group) in snapshot
+        .groups
+        .iter()
+        .filter(|group| is_user_proxy_group(&group.name))
+        .enumerate()
+    {
         let nodes = group
             .proxies
             .iter()
@@ -176,12 +267,17 @@ fn build_menu(
         Submenu::with_items(app, "Proxy List", true, &group_refs)?
     };
 
-    let profiles = profile_state();
-    let profile_busy = *state.profile_busy.lock().expect("profile busy lock");
     let import_profile = MenuItem::with_id(
         app,
         "profile-import",
         "Import Local YAML…",
+        app_bundle_path().is_some() && !profile_busy,
+        None::<&str>,
+    )?;
+    let import_http_profile = MenuItem::with_id(
+        app,
+        "profile-import-http",
+        "Import HTTP Subscription…",
         app_bundle_path().is_some() && !profile_busy,
         None::<&str>,
     )?;
@@ -213,7 +309,7 @@ fn build_menu(
         None => None,
     };
     let mut profile_refs: Vec<&dyn IsMenuItem<tauri::Wry>> =
-        vec![&import_profile, &profile_separator];
+        vec![&import_profile, &import_http_profile, &profile_separator];
     if let Some(empty) = empty_profile.as_ref() {
         profile_refs.push(empty);
     } else {
@@ -229,7 +325,7 @@ fn build_menu(
     let reload = MenuItem::with_id(
         app,
         "reload",
-        "Restart Active Profile Safely",
+        "Reload Profiles",
         profiles.active.is_some() && !profile_busy,
         None::<&str>,
     )?;
@@ -240,14 +336,9 @@ fn build_menu(
         app_bundle_path().is_some(),
         None::<&str>,
     )?;
-    let restore_network = MenuItem::with_id(
-        app,
-        "restore-network",
-        "Stop Service & Restore Network…",
-        app_bundle_path().is_some(),
-        None::<&str>,
-    )?;
+    let tools_menu = Submenu::with_items(app, "Tools", true, &[&install])?;
     let exit = MenuItem::with_id(app, "exit", "Exit", true, None::<&str>)?;
+    let tools_separator = PredefinedMenuItem::separator(app)?;
     let final_separator = PredefinedMenuItem::separator(app)?;
     Menu::with_items(
         app,
@@ -256,12 +347,13 @@ fn build_menu(
             &separator,
             &network_status,
             &tun,
+            &network_separator,
             &mode_menu,
             &proxy_menu,
             &profiles_menu,
             &reload,
-            &install,
-            &restore_network,
+            &tools_separator,
+            &tools_menu,
             &final_separator,
             &exit,
         ],
@@ -293,17 +385,16 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
         });
         return;
     }
-    if id == "restore-network" {
-        restore_network();
-        return;
-    }
-
     let Some(state) = app.try_state::<Arc<TrayState>>() else {
         return;
     };
     let state = state.inner().clone();
     if id == "profile-import" {
         import_local_profile(app.clone(), state);
+        return;
+    }
+    if id == "profile-import-http" {
+        import_http_profile(app.clone(), state);
         return;
     }
     let selected_action = state
@@ -326,13 +417,24 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
     tauri::async_runtime::spawn(async move {
         match id.as_str() {
             "tun" => {
-                let enabled = state.snapshot.lock().expect("snapshot lock").enhanced_tun;
-                if !enabled {
-                    let _ = state.client.set_tun(true).await;
+                let snapshot = state.snapshot.lock().expect("snapshot lock").clone();
+                match tun_action(daemon_installed(), &snapshot) {
+                    TunAction::InstallDaemon => install_daemon(),
+                    TunAction::StartDaemon => start_daemon(),
+                    TunAction::EnableTun => {
+                        let _ = state.client.set_tun(true).await;
+                    }
+                    TunAction::StopAndRestore => restore_network(),
                 }
             }
             value if value.starts_with("mode:") => {
-                let _ = state.client.set_mode(&value[5..]).await;
+                let requested = &value[5..];
+                let applied = state.client.apply_outbound_mode(requested).await.is_ok();
+                set_action_error(
+                    &state,
+                    (!applied)
+                        .then(|| "Action failed: outbound mode was not safely applied".to_string()),
+                );
             }
             _ => {
                 let action = state
@@ -354,25 +456,80 @@ fn refresh(app: AppHandle, state: Arc<TrayState>) {
     tauri::async_runtime::spawn(async move {
         let snapshot = state.client.snapshot().await;
         *state.snapshot.lock().expect("snapshot lock") = snapshot.clone();
+        let profiles = profile_state();
+        let profile_busy = *state.profile_busy.lock().expect("profile busy lock");
+        let network_healthy = local_network_health().map(|health| health.network_consistent);
+        let action_error = state
+            .last_action_error
+            .lock()
+            .expect("action error lock")
+            .clone();
+        let signature = MenuSignature::new(
+            &snapshot,
+            &profiles,
+            profile_busy,
+            network_healthy,
+            action_error.clone(),
+        );
         let menu_app = app.clone();
         let _ = app.run_on_main_thread(move || {
-            let Ok(menu) = build_menu(&menu_app, &state, &snapshot) else {
-                return;
-            };
             if let Some(tray) = menu_app.tray_by_id(TRAY_ID) {
-                let _ = tray.set_menu(Some(menu));
-                let healthy =
-                    local_network_health().is_some_and(|health| health.network_consistent);
-                let _ = tray.set_tooltip(Some(if snapshot.reachable && healthy {
-                    "MihomoBox · network healthy"
-                } else if snapshot.reachable {
-                    "MihomoBox · network inconsistent"
-                } else {
-                    "MihomoBox · daemon unavailable"
-                }));
+                let should_rebuild = state
+                    .last_menu_signature
+                    .lock()
+                    .expect("menu signature lock")
+                    .as_ref()
+                    != Some(&signature);
+                if should_rebuild {
+                    if let Ok(menu) = build_menu(
+                        &menu_app,
+                        &state,
+                        &snapshot,
+                        &profiles,
+                        profile_busy,
+                        network_healthy,
+                        action_error.as_deref(),
+                    ) {
+                        if tray.set_menu(Some(menu)).is_ok() {
+                            *state
+                                .last_menu_signature
+                                .lock()
+                                .expect("menu signature lock") = Some(signature);
+                        }
+                    }
+                }
+                let _ = tray.set_tooltip(Some(
+                    if snapshot.reachable && network_healthy == Some(true) {
+                        "MihomoBox · network healthy"
+                    } else if snapshot.reachable {
+                        "MihomoBox · network inconsistent"
+                    } else {
+                        "MihomoBox · daemon unavailable"
+                    },
+                ));
             }
         });
     });
+}
+
+fn set_action_error(state: &TrayState, error: Option<String>) {
+    *state.last_action_error.lock().expect("action error lock") = error;
+}
+
+fn tun_action(daemon_installed: bool, snapshot: &Snapshot) -> TunAction {
+    if !daemon_installed {
+        TunAction::InstallDaemon
+    } else if snapshot.enhanced_tun {
+        TunAction::StopAndRestore
+    } else if snapshot.reachable {
+        TunAction::EnableTun
+    } else {
+        TunAction::StartDaemon
+    }
+}
+
+fn is_user_proxy_group(name: &str) -> bool {
+    !name.eq_ignore_ascii_case("GLOBAL")
 }
 
 fn title_case(value: &str) -> String {
@@ -404,7 +561,11 @@ fn app_bundle_path() -> Option<std::path::PathBuf> {
         .then(|| bundle.to_path_buf())
 }
 
-#[derive(Default)]
+fn daemon_installed() -> bool {
+    Path::new(DAEMON_PATH).is_file() && Path::new(DAEMON_PLIST_PATH).is_file()
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct ProfileState {
     names: Vec<String>,
     active: Option<String>,
@@ -443,13 +604,27 @@ fn import_local_profile(app: AppHandle, state: Arc<TrayState>) {
     if !begin_profile_operation(&state) {
         return;
     }
-    std::thread::spawn(move || {
+    spawn_profile_operation(app, state, "local-import", || {
         if let Some(path) = choose_yaml_file() {
             let path = path.to_string_lossy().into_owned();
             let _ = run_profile_installer(&["--import-profile", &path, "--activate"]);
         }
-        end_profile_operation(&state);
-        refresh(app, state);
+    });
+}
+
+fn import_http_profile(app: AppHandle, state: Arc<TrayState>) {
+    if !begin_profile_operation(&state) {
+        return;
+    }
+    spawn_profile_operation(app, state, "http-import", || {
+        if let Some(bundle) = app_bundle_path() {
+            let cli = bundle.join("Contents/MacOS/mihomoboxctl");
+            if cli.is_file() {
+                let _ = Command::new(cli)
+                    .args(["profile", "import-url", "--interactive"])
+                    .status();
+            }
+        }
     });
 }
 
@@ -457,11 +632,32 @@ fn switch_local_profile(app: AppHandle, state: Arc<TrayState>, name: String) {
     if !begin_profile_operation(&state) {
         return;
     }
-    std::thread::spawn(move || {
+    spawn_profile_operation(app, state, "profile-switch", move || {
         let _ = run_profile_installer(&["--switch-profile", &name]);
+    });
+}
+
+fn spawn_profile_operation<F>(app: AppHandle, state: Arc<TrayState>, name: &str, operation: F)
+where
+    F: FnOnce() + Send + 'static,
+{
+    let worker_app = app.clone();
+    let worker_state = state.clone();
+    let result = std::thread::Builder::new()
+        .name(format!("mihomobox-{name}"))
+        .spawn(move || {
+            operation();
+            end_profile_operation(&worker_state);
+            refresh(worker_app, worker_state);
+        });
+    if result.is_err() {
+        set_action_error(
+            &state,
+            Some("Action failed: unable to start profile operation".to_string()),
+        );
         end_profile_operation(&state);
         refresh(app, state);
-    });
+    }
 }
 
 fn begin_profile_operation(state: &TrayState) -> bool {
@@ -541,6 +737,28 @@ fn install_daemon() {
         .spawn();
 }
 
+fn start_daemon() {
+    let Some(bundle) = app_bundle_path() else {
+        return;
+    };
+    let script = bundle.join("Contents/Resources/scripts/install-daemon.sh");
+    if !script.exists() {
+        return;
+    }
+    let command = format!(
+        "/bin/bash {} --app-bundle {} --start",
+        shell_quote(&script.to_string_lossy()),
+        shell_quote(&bundle.to_string_lossy())
+    );
+    let apple_script = format!(
+        "do shell script {} with administrator privileges",
+        apple_script_quote(&command)
+    );
+    let _ = Command::new("/usr/bin/osascript")
+        .args(["-e", &apple_script])
+        .spawn();
+}
+
 fn restore_network() {
     let confirmation = Command::new("/usr/bin/osascript")
         .args([
@@ -589,5 +807,77 @@ mod tests {
         assert_eq!(state.names, vec!["alpha.yaml", "Beta.yml"]);
         assert_eq!(state.active.as_deref(), Some("Beta.yml"));
         fs::remove_dir_all(root).expect("remove fixture");
+    }
+
+    #[test]
+    fn menu_signature_ignores_delay_only_updates() {
+        let mut snapshot = Snapshot {
+            reachable: true,
+            enhanced_tun: true,
+            mode: "rule".to_string(),
+            groups: vec![crate::mihomo::ProxyGroup {
+                name: "PROXY".to_string(),
+                current: "Node A".to_string(),
+                proxies: vec![crate::mihomo::ProxyNode {
+                    name: "Node A".to_string(),
+                    delay: Some(42),
+                }],
+            }],
+        };
+        let profiles = ProfileState::default();
+        let first = MenuSignature::new(&snapshot, &profiles, false, Some(true), None);
+        snapshot.groups[0].proxies[0].delay = Some(88);
+        let second = MenuSignature::new(&snapshot, &profiles, false, Some(true), None);
+
+        assert_eq!(first, second);
+        snapshot.groups[0].current = "Node B".to_string();
+        let third = MenuSignature::new(&snapshot, &profiles, false, Some(true), None);
+        assert_ne!(second, third);
+    }
+
+    #[test]
+    fn outbound_mode_requires_controller_readback() {
+        let observed = Snapshot {
+            reachable: true,
+            mode: "global".to_string(),
+            groups: vec![crate::mihomo::ProxyGroup {
+                name: "GLOBAL".to_string(),
+                current: "Node A".to_string(),
+                proxies: vec![crate::mihomo::ProxyNode {
+                    name: "Node A".to_string(),
+                    delay: None,
+                }],
+            }],
+            ..Snapshot::default()
+        };
+        assert!(observed.outbound_mode_applied("global"));
+        assert!(!observed.outbound_mode_applied("direct"));
+    }
+
+    #[test]
+    fn internal_global_selector_is_not_a_user_proxy_group() {
+        assert!(!is_user_proxy_group("GLOBAL"));
+        assert!(!is_user_proxy_group("global"));
+        assert!(is_user_proxy_group("Proxy"));
+    }
+
+    #[test]
+    fn enhanced_tun_item_maps_runtime_state_to_safe_actions() {
+        let stopped = Snapshot::default();
+        assert_eq!(tun_action(false, &stopped), TunAction::InstallDaemon);
+        assert_eq!(tun_action(true, &stopped), TunAction::StartDaemon);
+
+        let reachable = Snapshot {
+            reachable: true,
+            ..Snapshot::default()
+        };
+        assert_eq!(tun_action(true, &reachable), TunAction::EnableTun);
+
+        let enabled = Snapshot {
+            reachable: true,
+            enhanced_tun: true,
+            ..Snapshot::default()
+        };
+        assert_eq!(tun_action(true, &enabled), TunAction::StopAndRestore);
     }
 }
