@@ -100,6 +100,7 @@ final class ComponentUpdater: @unchecked Sendable {
                 return ComponentUpdateResult(updated: [], restartDaemon: false)
             }
 
+            let restartDaemon = changed.contains(.daemon)
             let wasRunning = agent.isRunning
             agent.stop()
             do {
@@ -116,7 +117,10 @@ final class ComponentUpdater: @unchecked Sendable {
                         requirement: requirement
                     )
                 }
-                if wasRunning {
+                // When this process replaces itself, leave the agent stopped.
+                // launchd starts the new daemon, which restores the single-agent
+                // invariant and reapplies managed networking exactly once.
+                if wasRunning, !restartDaemon {
                     try agent.start()
                     _ = try agent.health()
                 }
@@ -140,7 +144,7 @@ final class ComponentUpdater: @unchecked Sendable {
 
             return ComponentUpdateResult(
                 updated: changed.map(\.rawValue).sorted(),
-                restartDaemon: changed.contains(.daemon)
+                restartDaemon: restartDaemon
             )
         }
     }
