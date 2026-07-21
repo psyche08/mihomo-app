@@ -20,5 +20,7 @@ env \
 /bin/mkdir -p "$ROOT/src-tauri/binaries"
 /usr/bin/install -m 0755 "$ROOT/.build/release/mihomo-daemon" \
   "$ROOT/src-tauri/binaries/mihomo-daemon-$TRIPLE"
+/usr/bin/install -m 0755 "$ROOT/.build/release/mihomo-agent" \
+  "$ROOT/src-tauri/binaries/mihomo-agent-$TRIPLE"
 /usr/bin/install -m 0755 "$ROOT/.build/release/mihomoboxctl" \
   "$ROOT/src-tauri/binaries/mihomoboxctl-$TRIPLE"

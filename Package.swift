@@ -9,6 +9,7 @@ let package = Package(
     ],
     products: [
         .executable(name: "mihomo-daemon", targets: ["MihomoDaemon"]),
+        .executable(name: "mihomo-agent", targets: ["MihomoAgent"]),
         .executable(name: "mihomoboxctl", targets: ["MihomoBoxCLI"]),
     ],
     dependencies: [
@@ -16,6 +17,10 @@ let package = Package(
     ],
     targets: [
         .target(name: "CMihomoDNSSystem"),
+        .target(
+            name: "MihomoControl",
+            linkerSettings: [.linkedFramework("Security")]
+        ),
         .target(
             name: "MihomoDNSCore",
             dependencies: [
@@ -30,9 +35,13 @@ let package = Package(
         ),
         .executableTarget(
             name: "MihomoDaemon",
+            dependencies: ["MihomoControl", "MihomoDNSCore"]
+        ),
+        .executableTarget(
+            name: "MihomoAgent",
             dependencies: ["MihomoDNSCore"]
         ),
-        .executableTarget(name: "MihomoBoxCLI"),
+        .executableTarget(name: "MihomoBoxCLI", dependencies: ["MihomoControl"]),
         .testTarget(
             name: "MihomoDNSCoreTests",
             dependencies: ["MihomoDNSCore"]

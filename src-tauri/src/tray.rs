@@ -1,3 +1,4 @@
+use crate::dashboard::DashboardBridge;
 use crate::mihomo::{MihomoClient, Snapshot};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
@@ -12,17 +13,18 @@ use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager};
 
 const TRAY_ID: &str = "mihomo-app-tray";
-const PROFILES_DIR: &str = "/Library/Application Support/Mihomo App/profiles";
-const ACTIVE_PROFILE_PATH: &str = "/Library/Application Support/Mihomo App/active-profile";
 const USER_PROFILE_ROOT: &str = "Library/Application Support/MihomoBox";
 const DAEMON_PATH: &str = "/Library/Application Support/Mihomo App/mihomo-daemon";
-const DAEMON_CONFIG_PATH: &str = "/Library/Application Support/Mihomo App/daemon.json";
 const DAEMON_PLIST_PATH: &str = "/Library/LaunchDaemons/dev.linsheng.mihomo.daemon.plist";
-const CONTROLLER_METADATA_PATH: &str = "/Library/Application Support/Mihomo App/controller.json";
 
 #[derive(Default, serde::Deserialize)]
 struct NetworkHealth {
     network_consistent: bool,
+}
+
+#[derive(Default, serde::Deserialize)]
+struct ServiceStatus {
+    health: Option<NetworkHealth>,
 }
 
 #[derive(Clone)]
@@ -41,17 +43,12 @@ enum TunAction {
 }
 
 struct TrayState {
+    dashboard: Option<DashboardBridge>,
     snapshot: Mutex<Snapshot>,
     actions: Mutex<HashMap<String, DynamicAction>>,
     profile_busy: Mutex<bool>,
     last_menu_signature: Mutex<Option<MenuSignature>>,
     last_action_error: Mutex<Option<String>>,
-}
-
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, Eq, PartialEq)]
-struct ControllerConnection {
-    url: String,
-    secret: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -112,7 +109,9 @@ impl MenuSignature {
 }
 
 pub fn setup(app: &AppHandle) -> tauri::Result<()> {
+    let dashboard = cli_path().and_then(|path| DashboardBridge::start(&path));
     let state = Arc::new(TrayState {
+        dashboard,
         snapshot: Mutex::new(Snapshot::default()),
         actions: Mutex::new(HashMap::new()),
         profile_busy: Mutex::new(false),
@@ -379,12 +378,27 @@ fn build_menu(
 fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
     let id = event.id().as_ref().to_string();
     if id == "show" {
-        if let Some(window) = app.get_webview_window("main") {
-            prepare_main_window(&window);
-            let _ = window.unminimize();
-            let _ = window.show();
-            let _ = window.set_focus();
-        }
+        let Some(state) = app.try_state::<Arc<TrayState>>() else {
+            return;
+        };
+        let state = state.inner().clone();
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let available = controller_client().controller_available().await;
+            let main_app = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                if !available {
+                    show_service_unavailable_prompt();
+                    return;
+                }
+                if let Some(window) = main_app.get_webview_window("main") {
+                    prepare_main_window(&window, state.dashboard.as_ref());
+                    let _ = window.unminimize();
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            });
+        });
         return;
     }
     if id == "exit" {
@@ -425,9 +439,7 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
         return;
     }
     if id == "reload" {
-        if let Some(name) = profile_state().active {
-            switch_local_profile(app.clone(), state, name);
-        }
+        reload_profile(app.clone(), state);
         return;
     }
     let app = app.clone();
@@ -630,47 +642,25 @@ fn delay_label(delay: Option<u64>) -> String {
     }
 }
 
-fn controller_connection_at(path: &Path) -> Option<ControllerConnection> {
-    let connection = serde_json::from_slice::<ControllerConnection>(&fs::read(path).ok()?).ok()?;
-    let parsed = reqwest::Url::parse(&connection.url).ok()?;
-    if parsed.scheme() != "http"
-        || parsed.host_str() != Some("127.0.0.1")
-        || parsed.port_or_known_default().is_none()
-        || !parsed.path().is_empty() && parsed.path() != "/"
-        || parsed.query().is_some()
-        || parsed.fragment().is_some()
-        || connection.secret.len() > 256
-        || connection.secret.chars().any(char::is_control)
-    {
-        return None;
-    }
-    Some(ControllerConnection {
-        url: connection.url.trim_end_matches('/').to_string(),
-        secret: connection.secret,
-    })
-}
-
-fn controller_connection() -> ControllerConnection {
-    controller_connection_at(Path::new(CONTROLLER_METADATA_PATH)).unwrap_or(ControllerConnection {
-        url: "http://127.0.0.1:9090".to_string(),
-        secret: String::new(),
-    })
-}
-
 fn controller_client() -> MihomoClient {
-    let connection = controller_connection();
-    MihomoClient::with_secret(connection.url, connection.secret)
+    MihomoClient::new(cli_path().unwrap_or_else(|| PathBuf::from("/nonexistent/mihomoboxctl")))
 }
 
-fn prepare_main_window(window: &tauri::WebviewWindow<tauri::Wry>) {
-    let endpoint = controller_connection();
-    let Ok(endpoint_json) = serde_json::to_string(&endpoint) else {
+fn prepare_main_window(
+    window: &tauri::WebviewWindow<tauri::Wry>,
+    dashboard: Option<&DashboardBridge>,
+) {
+    let Some(dashboard) = dashboard else {
         return;
     };
+    let endpoint = serde_json::json!({
+        "url": dashboard.url,
+        "secret": dashboard.secret,
+    });
     let script = format!(
         r#"(() => {{
-            const endpoint = {endpoint_json};
-            const managed = {{ id: 'local-mihomo', url: endpoint.url, secret: endpoint.secret, label: 'Local mihomo (desktop)' }};
+            const endpoint = {endpoint};
+            const managed = {{ id: 'local-mihomo', url: endpoint.url, secret: endpoint.secret, label: 'Local mihomo (XPC)' }};
             let list = [];
             try {{ list = JSON.parse(localStorage.getItem('endpointList') || '[]'); }} catch (_) {{}}
             if (!Array.isArray(list)) list = [];
@@ -679,7 +669,7 @@ fn prepare_main_window(window: &tauri::WebviewWindow<tauri::Wry>) {
             localStorage.setItem('selectedEndpoint', managed.id);
             window.metacubexd = {{ ...(window.metacubexd || {{}}), endpoint }};
             window.location.replace('/');
-        }})()"#
+        }})()"#,
     );
     let _ = window.eval(&script);
 }
@@ -693,14 +683,26 @@ fn title_case(value: &str) -> String {
 }
 
 fn local_network_health() -> Option<NetworkHealth> {
-    let output = Command::new(DAEMON_PATH)
-        .args(["--config", DAEMON_CONFIG_PATH, "--health"])
+    let output = Command::new(cli_path()?)
+        .args(["status", "--json"])
         .output()
         .ok()?;
     if !output.status.success() {
         return None;
     }
-    serde_json::from_slice(&output.stdout).ok()
+    serde_json::from_slice::<ServiceStatus>(&output.stdout)
+        .ok()?
+        .health
+}
+
+fn cli_path() -> Option<PathBuf> {
+    Some(
+        app_bundle_path()?
+            .join("Contents")
+            .join("MacOS")
+            .join("mihomoboxctl"),
+    )
+    .filter(|path| path.is_file())
 }
 
 fn app_bundle_path() -> Option<std::path::PathBuf> {
@@ -724,29 +726,35 @@ struct ProfileState {
 }
 
 fn profile_state() -> ProfileState {
-    let system = profile_state_at(Path::new(PROFILES_DIR), Path::new(ACTIVE_PROFILE_PATH));
+    if daemon_installed() {
+        if let Some(state) = xpc_profile_state() {
+            return state;
+        }
+    }
     let Some((directory, active_path)) = user_profile_paths() else {
-        return system;
+        return ProfileState::default();
     };
-    let user = profile_state_at(&directory, &active_path);
-    merge_profile_states(system, user, daemon_installed())
+    profile_state_at(&directory, &active_path)
 }
 
-fn merge_profile_states(
-    system: ProfileState,
-    user: ProfileState,
-    prefer_system_active: bool,
-) -> ProfileState {
-    let mut names = system.names;
-    names.extend(user.names);
-    names.sort_by_key(|name| name.to_lowercase());
-    names.dedup();
-    let active = if prefer_system_active {
-        system.active.or(user.active)
-    } else {
-        user.active.or(system.active)
-    };
-    ProfileState { names, active }
+fn xpc_profile_state() -> Option<ProfileState> {
+    #[derive(serde::Deserialize)]
+    struct Response {
+        profiles: Vec<String>,
+        active_profile: Option<String>,
+    }
+    let output = Command::new(cli_path()?)
+        .args(["profile", "list", "--json"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let response = serde_json::from_slice::<Response>(&output.stdout).ok()?;
+    Some(ProfileState {
+        names: response.profiles,
+        active: response.active_profile,
+    })
 }
 
 fn user_profile_paths() -> Option<(PathBuf, PathBuf)> {
@@ -799,7 +807,7 @@ fn import_local_profile(app: AppHandle, state: Arc<TrayState>) {
             if daemon_installed() {
                 let staged = directory.join(&name);
                 let staged = staged.to_string_lossy().into_owned();
-                if !run_profile_installer(&["--import-profile", &staged, "--activate"]) {
+                if !run_cli(&["profile", "import", &staged, "--activate"]) {
                     return Err("Action failed: profile import was not completed".to_string());
                 }
             }
@@ -843,9 +851,9 @@ fn switch_local_profile(app: AppHandle, state: Arc<TrayState>, name: String) {
             let local = directory.join(&name);
             let succeeded = if local.is_file() {
                 let local = local.to_string_lossy().into_owned();
-                run_profile_installer(&["--import-profile", &local, "--activate"])
+                run_cli(&["profile", "import", &local, "--activate"])
             } else {
-                run_profile_installer(&["--switch-profile", &name])
+                run_cli(&["profile", "switch", &name])
             };
             if !succeeded {
                 return Err("Action failed: profile switch was not completed".to_string());
@@ -854,6 +862,19 @@ fn switch_local_profile(app: AppHandle, state: Arc<TrayState>, name: String) {
         write_active_profile(&active_path, &name)
             .map_err(|_| "Action failed: profile selection was not saved".to_string())?;
         Ok(())
+    });
+}
+
+fn reload_profile(app: AppHandle, state: Arc<TrayState>) {
+    if !begin_profile_operation(&state) {
+        return;
+    }
+    spawn_profile_operation(app, state, "profile-reload", || {
+        if run_cli(&["profile", "reload"]) {
+            Ok(())
+        } else {
+            Err("Action failed: active profile reload was not completed".to_string())
+        }
     });
 }
 
@@ -996,29 +1017,12 @@ fn choose_yaml_file() -> Option<PathBuf> {
     (!path.is_empty()).then(|| PathBuf::from(path))
 }
 
-fn run_profile_installer(arguments: &[&str]) -> bool {
-    let Some(bundle) = app_bundle_path() else {
+fn run_cli(arguments: &[&str]) -> bool {
+    let Some(cli) = cli_path() else {
         return false;
     };
-    let script = bundle.join("Contents/Resources/scripts/install-daemon.sh");
-    if !script.exists() {
-        return false;
-    }
-    let mut command = format!(
-        "/bin/bash {} --app-bundle {}",
-        shell_quote(&script.to_string_lossy()),
-        shell_quote(&bundle.to_string_lossy())
-    );
-    for argument in arguments {
-        command.push(' ');
-        command.push_str(&shell_quote(argument));
-    }
-    let apple_script = format!(
-        "do shell script {} with administrator privileges",
-        apple_script_quote(&command)
-    );
-    Command::new("/usr/bin/osascript")
-        .args(["-e", &apple_script])
+    Command::new(cli)
+        .args(arguments)
         .status()
         .is_ok_and(|status| status.success())
 }
@@ -1058,26 +1062,19 @@ fn show_profile_required_prompt() {
         .status();
 }
 
-fn start_daemon() {
-    let Some(bundle) = app_bundle_path() else {
-        return;
-    };
-    let script = bundle.join("Contents/Resources/scripts/install-daemon.sh");
-    if !script.exists() {
-        return;
-    }
-    let command = format!(
-        "/bin/bash {} --app-bundle {} --start",
-        shell_quote(&script.to_string_lossy()),
-        shell_quote(&bundle.to_string_lossy())
-    );
-    let apple_script = format!(
-        "do shell script {} with administrator privileges",
-        apple_script_quote(&command)
-    );
+fn show_service_unavailable_prompt() {
     let _ = Command::new("/usr/bin/osascript")
-        .args(["-e", &apple_script])
+        .args([
+            "-e",
+            "display dialog \"The current Mihomo service is unavailable. Start the service or repair the daemon before opening the Main Window.\" buttons {\"OK\"} default button \"OK\" with title \"MihomoBox\" with icon caution",
+        ])
         .spawn();
+}
+
+fn start_daemon() {
+    std::thread::spawn(|| {
+        let _ = run_cli(&["start"]);
+    });
 }
 
 fn restore_network() {
@@ -1091,7 +1088,7 @@ fn restore_network() {
         return;
     }
     std::thread::spawn(|| {
-        let _ = run_profile_installer(&["--restore-network"]);
+        let _ = run_cli(&["stop"]);
     });
 }
 
@@ -1238,35 +1235,6 @@ mod tests {
     }
 
     #[test]
-    fn controller_metadata_requires_loopback_and_preserves_secret() {
-        let root = std::env::temp_dir().join(format!(
-            "mihomobox-controller-metadata-{}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&root).expect("create fixture");
-        let metadata = root.join("controller.json");
-        fs::write(
-            &metadata,
-            r#"{"url":"http://127.0.0.1:9191","secret":"persistent-secret"}"#,
-        )
-        .expect("write metadata");
-        assert_eq!(
-            controller_connection_at(&metadata),
-            Some(ControllerConnection {
-                url: "http://127.0.0.1:9191".to_string(),
-                secret: "persistent-secret".to_string(),
-            })
-        );
-        fs::write(
-            &metadata,
-            r#"{"url":"http://192.0.2.1:9090","secret":"secret"}"#,
-        )
-        .expect("write remote metadata");
-        assert_eq!(controller_connection_at(&metadata), None);
-        fs::remove_dir_all(root).expect("remove fixture");
-    }
-
-    #[test]
     fn enhanced_tun_item_maps_runtime_state_to_safe_actions() {
         let stopped = Snapshot::default();
         assert_eq!(
@@ -1306,11 +1274,7 @@ mod tests {
 
         let name = stage_local_profile(&source, &directory).expect("stage profile");
         write_active_profile(&active, &name).expect("select profile");
-        let state = merge_profile_states(
-            ProfileState::default(),
-            profile_state_at(&directory, &active),
-            false,
-        );
+        let state = profile_state_at(&directory, &active);
 
         assert_eq!(state.names, vec!["sheng.yaml"]);
         assert_eq!(state.active.as_deref(), Some("sheng.yaml"));

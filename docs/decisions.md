@@ -11,11 +11,29 @@ its proxy, rule, connection, and log interfaces.
 Bundled static assets work offline, have deterministic reviewable provenance,
 and avoid executing UI code that changed after the App was signed.
 
-## Root daemon owns Mihomo continuously
+## Root agent owns Mihomo continuously
 
 Switching between a GUI-owned unprivileged process and a root TUN process creates
-duplicate-owner and handoff races. One daemon owner keeps the PID, controller,
+duplicate-owner and handoff races. One agent owner keeps the PID, controller,
 DNS, and Enhanced TUN state coherent. The GUI never starts a second kernel.
+
+## Privileged daemon is an authenticated XPC broker
+
+Putting XPC policy, DNS, network observation, and Mihomo supervision in one
+process makes the privileged attack surface unnecessarily broad. The daemon is
+therefore limited to mutual code-signing authentication, typed command
+authorization, serialized profile/lifecycle transactions, and agent
+supervision. The agent owns the network data plane and has no client-facing
+service.
+
+## Exact signing certificate instead of Team ID only
+
+The App and CLI use different signing identifiers, so requiring one identifier
+would reject a legitimate peer. Team ID alone accepts any other product signed
+by that team. Both XPC sides instead derive a peer code-signing requirement from
+their leaf certificate. This permits the signed MihomoBox family while
+rejecting another certificate, invalid signature, ad-hoc build, or unsigned
+binary.
 
 ## Copy bundle payloads to stable system paths
 
@@ -25,7 +43,7 @@ source; root-owned copies are the runtime.
 
 ## SystemConfiguration DNS instead of a DNS Settings profile
 
-The daemon uses public SystemConfiguration preference APIs, manages the active
+The agent uses public SystemConfiguration preference APIs, manages the active
 PrimaryService, and observes per-service resolver changes. This removes
 interactive profile enrollment and certificate/DoH plumbing while retaining
 macOS supplemental-domain and interface routing information.

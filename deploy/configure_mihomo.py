@@ -171,7 +171,7 @@ def persist_controller(
         atomic_write(secret_file, f"{secret}\n", 0o600)
     if controller_metadata:
         metadata = {"url": f"http://{host}:{port}", "secret": secret}
-        atomic_write(controller_metadata, json.dumps(metadata, indent=2) + "\n", 0o640)
+        atomic_write(controller_metadata, json.dumps(metadata, indent=2) + "\n", 0o600)
     if daemon_config:
         configuration = json.loads(daemon_config.read_text(encoding="utf-8"))
         configuration["controllerEndpoint"] = {"host": host, "port": port}

@@ -1,12 +1,11 @@
 import Darwin
 import Foundation
+import MihomoControl
 
 private let appSupport = URL(fileURLWithPath: "/Library/Application Support/Mihomo App")
 private let daemonPath = appSupport.appendingPathComponent("mihomo-daemon")
-private let daemonConfigPath = appSupport.appendingPathComponent("daemon.json")
-private let profilesPath = appSupport.appendingPathComponent("profiles")
-private let activeProfilePath = appSupport.appendingPathComponent("active-profile")
 private let launchDaemonLabel = "dev.linsheng.mihomo.daemon"
+private let controlClient = MihomoControlClient()
 
 private struct CLIError: LocalizedError {
     let message: String
@@ -84,21 +83,6 @@ private func runInstaller(_ arguments: [String]) throws -> Int32 {
     }
 }
 
-private func shellQuote(_ value: String) -> String {
-    "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
-}
-
-private func appleScriptQuote(_ value: String) -> String {
-    "\"\(value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\""))\""
-}
-
-private func runInstallerWithAdministratorDialog(_ arguments: [String]) throws -> Int32 {
-    let (_, _, command) = try installerCommand(arguments)
-    let shellCommand = (["/bin/bash"] + command).map(shellQuote).joined(separator: " ")
-    let script = "do shell script \(appleScriptQuote(shellCommand)) with administrator privileges"
-    return try runInteractive("/usr/bin/osascript", ["-e", script])
-}
-
 private enum SubscriptionAuthentication {
     case none
     case basic(username: String, password: String)
@@ -112,7 +96,6 @@ private struct SubscriptionImport {
     let name: String
     let authentication: SubscriptionAuthentication
     let activate: Bool
-    let administratorDialog: Bool
 }
 
 private final class SubscriptionDownloadDelegate: NSObject, URLSessionDataDelegate {
@@ -409,8 +392,7 @@ private func interactiveSubscriptionImport() throws -> SubscriptionImport? {
         url: try validatedSubscriptionURL(urlText),
         name: name,
         authentication: authentication,
-        activate: activate,
-        administratorDialog: true
+        activate: activate
     )
 }
 
@@ -499,59 +481,41 @@ private func parseSubscriptionImport(_ arguments: [String]) throws -> Subscripti
         url: try validatedSubscriptionURL(urlText),
         name: name,
         authentication: authentication,
-        activate: activate,
-        administratorDialog: false
+        activate: activate
     )
 }
 
 private func importSubscription(_ subscription: SubscriptionImport) throws -> Int32 {
     let data = try downloadSubscription(subscription)
-    let temporaryDirectory = URL(fileURLWithPath: "/private/tmp")
-        .appendingPathComponent("mihomobox-subscription-\(UUID().uuidString)", isDirectory: true)
-    try FileManager.default.createDirectory(
-        at: temporaryDirectory,
-        withIntermediateDirectories: false,
-        attributes: [.posixPermissions: 0o700]
+    _ = try sendControl(
+        .importProfile,
+        arguments: [
+            "name": subscription.name,
+            "activate": subscription.activate ? "true" : "false",
+        ],
+        payload: data
     )
-    defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
-
-    let profile = temporaryDirectory.appendingPathComponent(subscription.name)
-    guard FileManager.default.createFile(
-        atPath: profile.path,
-        contents: nil,
-        attributes: [.posixPermissions: 0o600]
-    ) else {
-        throw CLIError(message: "could not create secure temporary profile", exitCode: 1)
-    }
-    let file = try FileHandle(forWritingTo: profile)
-    do {
-        try file.write(contentsOf: data)
-        try file.close()
-    } catch {
-        try? file.close()
-        throw error
-    }
-
-    let arguments = ["--import-profile", profile.path] + (subscription.activate ? ["--activate"] : [])
-    return subscription.administratorDialog
-        ? try runInstallerWithAdministratorDialog(arguments)
-        : try runInstaller(arguments)
+    return 0
 }
 
-private func activeProfile() -> String? {
-    guard let value = try? String(contentsOf: activeProfilePath, encoding: .utf8)
-        .trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
-        return nil
-    }
-    return value
+private func sendControl(
+    _ operation: ControlOperation,
+    arguments: [String: String] = [:],
+    payload: Data? = nil
+) throws -> Data? {
+    try controlClient.send(ControlRequest(
+        operation: operation,
+        arguments: arguments,
+        payload: payload
+    )).payload
 }
 
-private func profiles() -> [String] {
-    let names = (try? FileManager.default.contentsOfDirectory(atPath: profilesPath.path)) ?? []
-    return names.filter {
-        let suffix = URL(fileURLWithPath: $0).pathExtension.lowercased()
-        return suffix == "yaml" || suffix == "yml"
-    }.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+private func controlObject(_ operation: ControlOperation) throws -> [String: Any] {
+    guard let data = try sendControl(operation),
+          let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        throw CLIError(message: "the daemon returned an invalid response", exitCode: 1)
+    }
+    return object
 }
 
 private func serviceLoaded() -> Bool {
@@ -559,17 +523,6 @@ private func serviceLoaded() -> Bool {
         return false
     }
     return result.status == 0
-}
-
-private func health() -> [String: Any]? {
-    guard FileManager.default.isExecutableFile(atPath: daemonPath.path),
-          FileManager.default.fileExists(atPath: daemonConfigPath.path),
-          let result = try? capture(daemonPath.path, ["--config", daemonConfigPath.path, "--health"]),
-          result.status == 0,
-          let object = try? JSONSerialization.jsonObject(with: result.stdout) as? [String: Any] else {
-        return nil
-    }
-    return object
 }
 
 private func printJSON(_ object: Any) throws {
@@ -580,10 +533,10 @@ private func printJSON(_ object: Any) throws {
 private func printStatus(json: Bool) throws -> Int32 {
     let installed = FileManager.default.isExecutableFile(atPath: daemonPath.path)
     let loaded = serviceLoaded()
-    let currentHealth = health()
+    let currentHealth = try? controlObject(.status)
     let consistent = currentHealth?["network_consistent"] as? Bool ?? false
     let runtimeReady = currentHealth?["controller_reachable"] as? Bool ?? false
-    let current = activeProfile()
+    let current = (try? controlObject(.listProfiles)["active_profile"]) as? String
 
     if json {
         var object: [String: Any] = [
@@ -623,8 +576,9 @@ private func printStatus(json: Bool) throws -> Int32 {
 }
 
 private func printProfiles(json: Bool) throws {
-    let current = activeProfile()
-    let names = profiles()
+    let response = try controlObject(.listProfiles)
+    let current = response["active_profile"] as? String
+    let names = response["profiles"] as? [String] ?? []
     if json {
         let object: [String: Any] = [
             "active_profile": current as Any? ?? NSNull(),
@@ -655,20 +609,108 @@ private func usage() {
         [--username USER] [--header NAME] [--secret-stdin]
                                       Download, validate, and import HTTP(S) YAML
       profile switch NAME             Transactionally activate a profile
+      profile reload                  Reload the active profile
       install                         Install or repair the LaunchDaemon
-      start                           Start the installed service safely
-      restart                         Restart the service through DNS-safe shutdown
-      stop                            Stop Mihomo and restore real system DNS
+      start                           Start the agent over authenticated XPC
+      restart                         Restart the agent over authenticated XPC
+      stop                            Stop the agent and restore real system DNS
       uninstall                       Restore networking and remove installed files
 
     Authentication secrets are read from a hidden prompt unless --secret-stdin
     is used. Secrets and subscription URLs are never passed to the root installer.
-    Mutating commands request administrator authorization through sudo.
+    Installation and removal request administrator authorization through sudo.
+    Runtime and profile commands use certificate-authenticated XPC.
     """)
 }
 
 private func requireNoExtraArguments(_ arguments: [String]) throws {
     guard arguments.isEmpty else { throw CLIError(message: "unexpected argument: \(arguments[0])") }
+}
+
+private func writePayload(_ payload: Data?) throws {
+    guard let payload else {
+        FileHandle.standardOutput.write(Data("{}\n".utf8))
+        return
+    }
+    FileHandle.standardOutput.write(payload)
+    if payload.last != 0x0a { FileHandle.standardOutput.write(Data([0x0a])) }
+}
+
+private func performRPC(_ arguments: [String]) throws -> Int32 {
+    guard let operation = arguments.first else {
+        throw CLIError(message: "missing rpc operation")
+    }
+    let values = Array(arguments.dropFirst())
+    let payload: Data?
+    switch operation {
+    case "snapshot":
+        try requireNoExtraArguments(values)
+        payload = try sendControl(.snapshot)
+    case "set-tun":
+        guard values.count == 1, values[0] == "true" || values[0] == "false" else {
+            throw CLIError(message: "usage: mihomoboxctl rpc set-tun true|false")
+        }
+        payload = try sendControl(.setTUN, arguments: ["enabled": values[0]])
+    case "set-mode":
+        guard values.count == 1 else {
+            throw CLIError(message: "usage: mihomoboxctl rpc set-mode rule|global|direct")
+        }
+        payload = try sendControl(.setOutboundMode, arguments: ["mode": values[0]])
+    case "select-proxy":
+        guard values.count == 2 else {
+            throw CLIError(message: "usage: mihomoboxctl rpc select-proxy GROUP PROXY")
+        }
+        payload = try sendControl(.selectProxy, arguments: ["group": values[0], "proxy": values[1]])
+    case "test-delay":
+        guard !values.isEmpty else {
+            throw CLIError(message: "usage: mihomoboxctl rpc test-delay PROXY...")
+        }
+        let names = try JSONSerialization.data(withJSONObject: values)
+        payload = try sendControl(.testDelay, payload: names)
+    case "version":
+        try requireNoExtraArguments(values)
+        payload = try sendControl(.controllerVersion)
+    case "rules":
+        try requireNoExtraArguments(values)
+        payload = try sendControl(.listRules)
+    case "proxy-providers":
+        try requireNoExtraArguments(values)
+        payload = try sendControl(.listProxyProviders)
+    case "rule-providers":
+        try requireNoExtraArguments(values)
+        payload = try sendControl(.listRuleProviders)
+    case "connections":
+        try requireNoExtraArguments(values)
+        payload = try sendControl(.listConnections)
+    case "close-connections":
+        try requireNoExtraArguments(values)
+        payload = try sendControl(.closeAllConnections)
+    case "controller":
+        guard values.count == 2 else {
+            throw CLIError(message: "usage: mihomoboxctl rpc controller METHOD TARGET")
+        }
+        let body = FileHandle.standardInput.readDataToEndOfFile()
+        guard body.count <= 1_048_576 else {
+            throw CLIError(message: "controller request body exceeds 1 MiB")
+        }
+        payload = try sendControl(
+            .controllerRequest,
+            arguments: ["method": values[0], "target": values[1]],
+            payload: body.isEmpty ? nil : body
+        )
+    case "stream":
+        guard values.count == 1 else {
+            throw CLIError(message: "usage: mihomoboxctl rpc stream TARGET")
+        }
+        payload = try sendControl(
+            .controllerStreamMessage,
+            arguments: ["target": values[0]]
+        )
+    default:
+        throw CLIError(message: "unknown rpc operation: \(operation)")
+    }
+    try writePayload(payload)
+    return 0
 }
 
 private func main() throws -> Int32 {
@@ -713,13 +755,27 @@ private func main() throws -> Int32 {
             guard FileManager.default.fileExists(atPath: source.path) else {
                 throw CLIError(message: "profile does not exist: \(source.path)")
             }
-            return try runInstaller(["--import-profile", source.path] + (activate ? ["--activate"] : []))
+            let name = source.lastPathComponent
+            try validateProfileName(name)
+            let data = try Data(contentsOf: source, options: [.mappedIfSafe])
+            _ = try sendControl(
+                .importProfile,
+                arguments: ["name": name, "activate": activate ? "true" : "false"],
+                payload: data
+            )
+            return 0
         case "import-url":
             guard let subscription = try parseSubscriptionImport(arguments) else { return 0 }
             return try importSubscription(subscription)
         case "switch", "use":
             guard arguments.count == 1 else { throw CLIError(message: "usage: mihomoboxctl profile switch NAME") }
-            return try runInstaller(["--switch-profile", arguments[0]])
+            try validateProfileName(arguments[0])
+            _ = try sendControl(.switchProfile, arguments: ["name": arguments[0]])
+            return 0
+        case "reload":
+            try requireNoExtraArguments(arguments)
+            _ = try sendControl(.reloadProfile)
+            return 0
         default:
             throw CLIError(message: "unknown profile operation: \(operation)")
         }
@@ -728,16 +784,21 @@ private func main() throws -> Int32 {
         return try runInstaller([])
     case "start":
         try requireNoExtraArguments(arguments)
-        return try runInstaller(["--start"])
+        _ = try sendControl(.startAgent)
+        return 0
     case "restart":
         try requireNoExtraArguments(arguments)
-        return try runInstaller(["--restart"])
+        _ = try sendControl(.restartAgent)
+        return 0
     case "stop":
         try requireNoExtraArguments(arguments)
-        return try runInstaller(["--restore-network"])
+        _ = try sendControl(.stopAgent)
+        return 0
     case "uninstall":
         try requireNoExtraArguments(arguments)
         return try runInstaller(["--restore"])
+    case "rpc":
+        return try performRPC(arguments)
     default:
         throw CLIError(message: "unknown command: \(command)")
     }

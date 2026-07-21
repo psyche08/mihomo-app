@@ -2,13 +2,13 @@
 
 ## Responsibilities
 
-`mihomo-daemon` combines two root-only responsibilities so ownership never
-splits during Enhanced TUN:
+`mihomo-agent` combines the runtime responsibilities so ownership never splits
+during Enhanced TUN:
 
 - supervise exactly one bundled Mihomo process and restart it after failure;
 - own the system DNS bridge and physical-interface upstream selection.
 
-The daemon records the child PID. A later daemon instance validates the PID's
+The agent records the Mihomo child PID. A later agent instance validates the PID's
 executable path with `proc_pidpath` before terminating a stale owned process;
 it never kills an unrelated process merely because a PID file exists.
 
@@ -27,7 +27,7 @@ The separate `1054` listener is mandatory. Pointing Mihomo at macOS `system`
 DNS would recurse back through `127.0.0.53`. The installer also forces
 `dns.respect-rules: false`, so Mihomo never routes its loopback `1054` upstream
 through a proxy rule and accidentally breaks this recursion boundary. Mihomo
-uses the daemon's TCP `1054` listener for its upstream requests so Enhanced TUN
+uses the agent's TCP `1054` listener for its upstream requests so Enhanced TUN
 cannot recapture a UDP loopback flow emitted by Mihomo itself.
 
 Managed fake-IP responses use a one-second TTL. This limits stale mappings
@@ -49,7 +49,7 @@ ambiguous. Domain-scoped VPN and enterprise resolvers remain deterministic.
 
 ## System DNS ownership
 
-The daemon reads `CurrentSet`, then manages:
+The agent reads `CurrentSet`, then manages:
 
 ```text
 <CurrentSet>/Network/Service/<PrimaryService>/DNS
@@ -71,7 +71,7 @@ administrator change therefore wins and is never overwritten by uninstall.
 ## Loopback Alias
 
 `127.0.0.53` is added to `lo0` through `SIOCAIFADDR` only when absent. A marker
-is written only after this daemon creates the alias. Restore removes the alias
+is written only after this agent creates the alias. Restore removes the alias
 only when that marker exists; a pre-existing administrator-owned alias remains.
 
 ## Network Changes
@@ -82,16 +82,19 @@ keys. On change it:
 1. resolves PrimaryService and PrimaryInterface;
 2. reads DHCP option 6 before service DNS state;
 3. builds domain-scoped resolver routes from `SupplementalMatchDomains`;
-4. excludes loopback, fake-IP, and daemon endpoints;
+4. excludes loopback, fake-IP, and managed runtime endpoints;
 5. binds original-DNS sockets using `IP_BOUND_IF`/`IPV6_BOUND_IF`;
 6. restores an old PrimaryService before managing the new service.
 
 When the persistent service DNS value already matches but the PrimaryService's
-dynamic DNS value is absent, the daemon reapplies preferences and republishes
+dynamic DNS value is absent, the agent reapplies preferences and republishes
 the service value. Persistent and dynamic dictionaries for the previous service
 are restored first with the same compare-before-write rule. This prevents an
 inactive Wi-Fi, Ethernet, or VPN service from retaining `127.0.0.53` when it is
 reactivated.
+
+The root daemon does not participate in this data plane. It authenticates XPC
+clients, serializes lifecycle/profile transactions, and supervises the agent.
 
 No query name, matched domain, resolver address, service identifier, or wire
 message is logged. Only interface names and aggregate resolver/route counts are

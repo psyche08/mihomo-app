@@ -18,14 +18,14 @@ remain stable so upgrades preserve configuration, DNS backups, and logs.
 
 The installer:
 
-1. copies `mihomo` and `mihomo-daemon` from the App to
+1. copies `mihomo`, `mihomo-daemon`, `mihomo-agent`, and the profile configurator from the App to
    `/Library/Application Support/Mihomo App/`;
 2. migrates `/opt/homebrew/etc/mihomo/` when present, otherwise installs the
    minimal default profile;
 3. forces only the loopback controller and DNS recursion-boundary keys;
 4. validates the copied Mihomo configuration;
 5. stops a running Homebrew Mihomo service to prevent duplicate owners;
-6. installs and starts the root LaunchDaemon;
+6. installs the XPC Mach service and starts the root daemon, which launches the agent;
 7. verifies controller, TUN, Fake-IP route, DNS bridge, Mihomo DNS, persisted
    PrimaryService DNS, and effective resolver state.
 
@@ -51,7 +51,7 @@ installation files:
 sudo scripts/install-daemon.sh --restore-network
 ```
 
-The tray exposes the same operation as `Stop Service & Restore Network…`.
+The tray exposes the same operation through authenticated XPC.
 It restores system DNS, removes the managed alias, flushes system/Mihomo DNS
 caches, stops TUN, and removes its routes.
 
@@ -61,7 +61,7 @@ To remove the installed service and files entirely:
 sudo scripts/install-daemon.sh --restore
 ```
 
-Restore stops the daemon/Mihomo child, restores the backed-up service/global DNS,
+Restore stops the daemon, agent, and Mihomo child, restores the backed-up service/global DNS,
 removes only a daemon-created alias, restarts a previously active Homebrew
 Mihomo service, removes the managed CLI symlink, and removes installed system
 files.
@@ -76,6 +76,7 @@ mihomoboxctl profile import-url URL [--name profile.yaml] [--activate]
   [--auth none|basic|digest|bearer|header]
   [--username USER] [--header NAME] [--secret-stdin]
 mihomoboxctl profile switch profile.yaml
+mihomoboxctl profile reload
 mihomoboxctl install
 mihomoboxctl start
 mihomoboxctl restart
@@ -83,11 +84,11 @@ mihomoboxctl stop
 mihomoboxctl uninstall
 ```
 
-`status` and `profile list` are read-only and never invoke `sudo`. Other
-commands map to a fixed set of operations in the App's bundled installer; the
-CLI cannot pass arbitrary privileged commands. `start` and `restart` restore
-real DNS before launch and do not report success until the managed network is
-consistent. `stop` restores real DNS before unloading the LaunchDaemon.
+Only `install` and `uninstall` invoke the administrator-authorized installer.
+Status, profile, lifecycle, Enhanced TUN, outbound-mode, proxy-selection, and
+latency operations use the fixed, versioned XPC allowlist. The daemon accepts
+only a CLI signed with its exact leaf certificate. `stop` terminates the agent;
+the agent restores DNS while the daemon and Mach service remain available.
 
 For automation, `status` exits with `0` for a running or safely stopped
 consistent network, `1` when MihomoBox is not installed, `2` for an inconsistent
@@ -114,11 +115,10 @@ printf '%s\n' "$MIHOMOBOX_SUBSCRIPTION_KEY" | \
     --name api-key.yaml --auth header --header X-API-Key --secret-stdin
 ```
 
-The URL is never printed or passed to the privileged installer. The downloaded
-profile is limited to 16 MiB, stored temporarily with mode `0600`, validated by
-the same Mihomo transaction as a local YAML, and removed afterward. Credentials
-are intentionally not persisted; importing or refreshing requires supplying
-them again.
+The URL is never printed or sent to root. The downloaded profile is limited to
+16 MiB and only its bytes and safe filename cross XPC for validation and an
+atomic profile transaction. Credentials are intentionally not persisted;
+importing or refreshing requires supplying them again.
 
 ## Runtime Paths
 
@@ -131,6 +131,8 @@ them again.
 /Library/Application Support/Mihomo App/controller-secret
 /Library/Application Support/Mihomo App/mihomo
 /Library/Application Support/Mihomo App/mihomo-daemon
+/Library/Application Support/Mihomo App/mihomo-agent
+/Library/Application Support/Mihomo App/configure_mihomo.py
 /Library/Application Support/Mihomo App/mihomo-data/config.yaml
 /Library/Application Support/Mihomo App/profiles/
 /Library/Application Support/Mihomo App/active-profile
@@ -147,10 +149,10 @@ administrator-authorized transaction.
 
 ```bash
 sudo launchctl print system/dev.linsheng.mihomo.daemon
-sudo '/Library/Application Support/Mihomo App/mihomo-daemon' \
+sudo '/Library/Application Support/Mihomo App/mihomo-agent' \
   --config '/Library/Application Support/Mihomo App/daemon.json' \
   --check-system-dns
-sudo '/Library/Application Support/Mihomo App/mihomo-daemon' \
+sudo '/Library/Application Support/Mihomo App/mihomo-agent' \
   --config '/Library/Application Support/Mihomo App/daemon.json' \
   --health
 tail -f '/Library/Logs/Mihomo App/mihomo-daemon.log'

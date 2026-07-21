@@ -4,6 +4,16 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+VERSION="$(/usr/bin/env node -p "require('./src-tauri/tauri.conf.json').version")"
+test "$VERSION" = "$(/usr/bin/env node -p "require('./package.json').version")"
+test "$VERSION" = "$(/usr/bin/sed -n 's/^version = "\([^"]*\)"/\1/p' \
+  src-tauri/Cargo.toml | /usr/bin/head -1)"
+/usr/bin/env node -e \
+  'for (const path of process.argv.slice(1)) JSON.parse(require("fs").readFileSync(path, "utf8"))' \
+  src-tauri/tauri.conf.json src-tauri/tauri.release.conf.json
+/usr/bin/grep -q 'github.com/psyche08/mihomo-app/releases/latest/download/latest.json' \
+  src-tauri/tauri.conf.json
+
 env \
   SWIFTPM_MODULECACHE_OVERRIDE="${SWIFTPM_MODULECACHE_OVERRIDE:-/private/tmp/mihomo-app-swift-cache}" \
   CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-/private/tmp/mihomo-app-clang-cache}" \
@@ -36,6 +46,7 @@ APP="$ROOT/src-tauri/target/release/bundle/macos/MihomoBox.app"
 test -x "$APP/Contents/MacOS/mihomo-app"
 test -x "$APP/Contents/MacOS/mihomo"
 test -x "$APP/Contents/MacOS/mihomo-daemon"
+test -x "$APP/Contents/MacOS/mihomo-agent"
 test -x "$APP/Contents/MacOS/mihomoboxctl"
 "$APP/Contents/MacOS/mihomoboxctl" --help >/dev/null
 test -x "$APP/Contents/Resources/scripts/install-daemon.sh"
@@ -45,6 +56,9 @@ test ! -e "$APP/Contents/Resources/daemon/dev.linsheng.mihomo-app.daemon.plist"
 test "$(/usr/libexec/PlistBuddy -c 'Print :Label' \
   "$APP/Contents/Resources/daemon/dev.linsheng.mihomo.daemon.plist")" = \
   "dev.linsheng.mihomo.daemon"
+test "$(/usr/libexec/PlistBuddy -c 'Print :MachServices:dev.linsheng.mihomo.daemon.control' \
+  "$APP/Contents/Resources/daemon/dev.linsheng.mihomo.daemon.plist")" = \
+  "true"
 /usr/bin/codesign --force --deep --sign - "$APP"
 /usr/bin/codesign --verify --deep --strict "$APP"
 

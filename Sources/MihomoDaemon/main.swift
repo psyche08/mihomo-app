@@ -2,11 +2,12 @@ import Darwin
 import Foundation
 import MihomoDNSCore
 
-private let defaultConfigPath = "/Library/Application Support/Mihomo App/daemon.json"
+private let root = URL(fileURLWithPath: "/Library/Application Support/Mihomo App", isDirectory: true)
+private let defaultConfigPath = root.appendingPathComponent("daemon.json").path
 private let arguments = CommandLine.arguments
 
 if arguments.contains("--help") || arguments.contains("-h") {
-    print("usage: mihomo-daemon [--config PATH] [--check] [--health] [--check-system-dns] [--restore-system-dns]")
+    print("usage: mihomo-daemon [--config PATH]")
     exit(0)
 }
 
@@ -16,53 +17,30 @@ if let index = arguments.firstIndex(of: "--config"), arguments.indices.contains(
 }
 
 do {
-    let configuration = try ProxyConfiguration.load(path: configPath)
-    if arguments.contains("--check") {
-        print("configuration valid")
-        exit(0)
-    }
-    if arguments.contains("--restore-system-dns") {
-        try ProxyService.restoreSystemDNS(configuration: configuration)
-        print("system DNS restored")
-        exit(0)
-    }
-    if arguments.contains("--check-system-dns") {
-        guard try ProxyService.isSystemDNSApplied(configuration: configuration) else {
-            print("system DNS preferences are not applied")
-            exit(1)
-        }
-        print("system DNS preferences applied")
-        exit(0)
-    }
-    if arguments.contains("--health") {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        let data = try encoder.encode(ProxyService.networkHealth(configuration: configuration))
-        print(String(decoding: data, as: UTF8.self))
-        exit(0)
-    }
-
     signal(SIGPIPE, SIG_IGN)
-    let service = ProxyService(configuration: configuration)
-    let signalQueue = DispatchQueue(label: "dev.linsheng.mihomo-app.signal")
-    let semaphore = DispatchSemaphore(value: 0)
+    let agent = AgentSupervisor(configPath: configPath)
+    defer { agent.stop() }
+    let dispatcher = ControlDispatcher(agent: agent, configPath: configPath)
+    let server = try ControlServer(dispatcher: dispatcher)
+
+    let signalQueue = DispatchQueue(label: "dev.linsheng.mihomo.daemon.signal")
+    let stopped = DispatchSemaphore(value: 0)
     var sources: [DispatchSourceSignal] = []
     for value in [SIGTERM, SIGINT] {
         signal(value, SIG_IGN)
         let source = DispatchSource.makeSignalSource(signal: value, queue: signalQueue)
-        source.setEventHandler {
-            semaphore.signal()
-        }
+        source.setEventHandler { stopped.signal() }
         source.resume()
         sources.append(source)
     }
 
-    try service.start()
-    semaphore.wait()
-    ServiceLog.info("event=service_stopping")
-    service.stop()
+    try agent.start()
+    try server.start()
+    stopped.wait()
+    server.stop()
+    ServiceLog.info("event=daemon_stopping")
     _ = sources
 } catch {
-    ServiceLog.error("event=fatal error=\(String(describing: error))")
+    ServiceLog.error("event=daemon_fatal error=control_service_unavailable")
     exit(1)
 }

@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TMP="/private/tmp/mihomo-daemon-e2e"
-BINARY="$ROOT/.build/debug/mihomo-daemon"
+TMP="/private/tmp/mihomo-agent-e2e"
+BINARY="$ROOT/.build/debug/mihomo-agent"
 FAKE_PID=""
 PROXY_PID=""
 
@@ -71,4 +71,4 @@ if grep -Eq 'test\.invalid' "$TMP/service.log"; then
   exit 1
 fi
 
-echo "mihomo-daemon E2E passed (system UDP/TCP DNS -> Mihomo UDP/TCP fallback)"
+echo "mihomo-agent E2E passed (system UDP/TCP DNS -> Mihomo UDP/TCP fallback)"

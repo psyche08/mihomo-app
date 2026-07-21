@@ -2,26 +2,55 @@
 
 ## Trust Boundaries
 
-- MetaCubeXD is immutable local content inside the signed App. It receives no
-  shell or privileged Tauri capability. Its CSP permits controller traffic
-  only to loopback `127.0.0.1` ports.
-- The controller is loopback-only and always uses bearer authentication. An
-  empty profile secret is replaced by a persistent random 256-bit secret during
-  privileged profile activation. Wildcard binds are reduced to loopback and a
-  concrete remote host is rejected.
-- Privileged installation is an explicit menu action and uses the macOS
-  administrator dialog. No credential is captured by the application.
-- Remote installation uses the same bundled installer through an authenticated
-  SSH session and `sudo`; the App does not store or relay the administrator
-  credential.
+- The only privileged client boundary is the launchd Mach service
+  `dev.linsheng.mihomo.daemon.control`.
+- The daemon and each client configure mutual libxpc code-signing requirements
+  derived from their own leaf signing certificate. Requests are delivered only
+  when both processes have valid signatures from the exact same certificate.
+- App/CLI bundle identifiers are not treated as sufficient identity. Team ID
+  alone is not sufficient either; a different certificate for the same team is
+  rejected.
+- The daemon exposes a typed allowlist, never shell execution, arbitrary file
+  reads/writes, arbitrary controller paths, or arbitrary network requests.
+  MetaCubeXD forwarding accepts only the pinned UI's known method/path shapes;
+  it strips the dashboard token and injects the root-owned controller secret.
+- `mihomo-agent` has no public XPC/Mach service. Only the root daemon may launch
+  it from its root-owned stable path.
+- MetaCubeXD is immutable local content inside the signed App. It has no shell,
+  installer, root filesystem, or direct privileged capability. Native control
+  mutations cross the authenticated XPC boundary.
+- Bootstrap/repair installation is explicit and uses the macOS administrator
+  dialog. Subsequent lifecycle, profile reload, TUN, outbound-mode, and proxy
+  operations do not elevate interactively.
 - launchd executes stable root-owned copies, never files in a user-writable Git
   checkout or movable App bundle.
+
+Release XPC intentionally fails closed for unsigned and ad-hoc development
+builds because they have no Apple-issued leaf signing certificate. XPC
+integration tests use explicitly signed fixtures; production code has no
+unsigned bypass or environment-variable override.
+
+## Process Privileges
+
+- `mihomo-daemon`: root XPC broker, authorization, transaction serialization,
+  agent supervision.
+- `mihomo-agent`: root network worker, Mihomo supervision, DNS sockets,
+  SystemConfiguration writes, and network-change observation.
+- `mihomo-app` / `mihomoboxctl`: current user, authenticated XPC clients only.
+
+The daemon never parses DNS packets or owns the Mihomo child. The agent never
+accepts Desktop/CLI requests. This separation keeps authorization policy out of
+the network data plane.
 
 ## Supply Chain
 
 - MetaCubeXD uses a pinned tag.
 - Mihomo uses a pinned release and SHA-256.
 - Cargo/npm/pnpm lockfiles pin package dependency graphs.
+- Daemon, agent, CLI, Desktop, and DMG use one Developer ID certificate.
+- Automatic App updates require both the pinned updater public key and the
+  Developer ID/notarized release chain. The updater private key never ships in
+  the App or repository.
 - Third-party license notices ship with the application.
 
 ## Sensitive Data
@@ -32,23 +61,20 @@ Do not log or publish:
 - proxy nodes containing credentials;
 - subscription URLs;
 - controller tokens;
+- XPC request payloads containing profiles;
 - notarization credentials.
 
-Tray labels necessarily show configured proxy names and current latency to the
-local logged-in user; they are never written to daemon logs.
+Tray labels necessarily show configured proxy names and latency to the local
+logged-in user; they are never written to daemon or agent logs. Controller
+credentials remain root-owned and are never returned over XPC. Profile bytes
+are capped, validated, handled in memory or mode-`0600` root-owned staging, and
+never passed through command-line arguments.
 
-The controller secret is stored in mode-`0600` root-owned runtime files and a
-mode-`0640`, root:`admin` GUI metadata file. It is injected into the local
-MetaCubeXD endpoint only when the main window is shown and is never printed by
-installer, tray, or daemon logging.
-
-HTTP subscription credentials live only in the importing process and are not
-persisted. Tray credential fields use hidden input. CLI secrets use a hidden
-TTY prompt or `--secret-stdin`; password/token values are never command-line
-arguments. Downloads use an ephemeral URL session, reject non-HTTP(S) and HTTPS
-downgrade redirects, remove authentication headers on cross-origin redirects,
-cap the response at 16 MiB, and pass only a mode-0600 temporary YAML file to the
-root installer.
+HTTP subscription credentials live only in the importing user process and are
+not persisted. Downloads use an ephemeral URL session, reject non-HTTP(S) and
+HTTPS downgrade redirects, remove authentication headers on cross-origin
+redirects, cap the response at 16 MiB, and send only the downloaded profile
+bytes to the daemon through XPC.
 
 ## Recovery Guarantees
 
@@ -57,3 +83,5 @@ root installer.
 - Pre-existing `127.0.0.53` aliases are not removed.
 - Original-DNS sockets bind to the physical interface to avoid TUN recursion.
 - A stale PID is terminated only after executable-path verification.
+- Profile reload is serialized by the daemon and rolls back configuration and
+  agent state together on failure.

@@ -99,11 +99,13 @@ require_root() {
 resolve_sources() {
   if [[ -n "$APP_BUNDLE" ]]; then
     DAEMON_SOURCE="$APP_BUNDLE/Contents/MacOS/mihomo-daemon"
+    AGENT_SOURCE="$APP_BUNDLE/Contents/MacOS/mihomo-agent"
     MIHOMO_SOURCE="$APP_BUNDLE/Contents/MacOS/mihomo"
     CLI_SOURCE="$APP_BUNDLE/Contents/MacOS/mihomoboxctl"
     RESOURCE_ROOT="$APP_BUNDLE/Contents/Resources/daemon"
   else
     DAEMON_SOURCE="$ROOT/.build/release/mihomo-daemon"
+    AGENT_SOURCE="$ROOT/.build/release/mihomo-agent"
     CLI_SOURCE="$ROOT/.build/release/mihomoboxctl"
     local triple
     triple="${TARGET_TRIPLE:-$(rustc -vV | /usr/bin/sed -n 's/^host: //p')}"
@@ -174,7 +176,7 @@ wait_for_managed_process_absent() {
 
 managed_network_ready() {
   local health
-  health="$("$APP_SUPPORT/mihomo-daemon" --config "$APP_SUPPORT/daemon.json" --health)" || return 1
+  health="$("$APP_SUPPORT/mihomo-agent" --config "$APP_SUPPORT/daemon.json" --health)" || return 1
   local field
   for field in controller_reachable dns_bridge_ready mihomo_dns_ready fake_ip_route_ready system_dns_managed tun_enabled network_consistent; do
     [[ "$health" == *"\"$field\":true"* ]] || return 1
@@ -183,7 +185,7 @@ managed_network_ready() {
 
 managed_controller_ready() {
   local health
-  health="$("$APP_SUPPORT/mihomo-daemon" --config "$APP_SUPPORT/daemon.json" --health)" || return 1
+  health="$("$APP_SUPPORT/mihomo-agent" --config "$APP_SUPPORT/daemon.json" --health)" || return 1
   [[ "$health" == *'"controller_reachable":true'* ]]
 }
 
@@ -259,8 +261,8 @@ prepare_profile() {
       --daemon-config "$APP_SUPPORT/daemon.json"
     /usr/sbin/chown root:wheel "$CONTROLLER_SECRET" "$APP_SUPPORT/daemon.json"
     /bin/chmod 0600 "$CONTROLLER_SECRET" "$APP_SUPPORT/daemon.json"
-    /usr/sbin/chown root:admin "$CONTROLLER_METADATA"
-    /bin/chmod 0640 "$CONTROLLER_METADATA"
+    /usr/sbin/chown root:wheel "$CONTROLLER_METADATA"
+    /bin/chmod 0600 "$CONTROLLER_METADATA"
   else
     /usr/bin/python3 "$RESOURCE_ROOT/configure_mihomo.py" \
       --config "$output" \
@@ -375,7 +377,7 @@ switch_profile() {
     /bin/launchctl bootout "system/$LABEL"
     wait_for_job_absent "$LABEL"
     wait_for_managed_process_absent
-    "$APP_SUPPORT/mihomo-daemon" --config "$APP_SUPPORT/daemon.json" --restore-system-dns
+    "$APP_SUPPORT/mihomo-agent" --config "$APP_SUPPORT/daemon.json" --restore-system-dns
   fi
   /bin/chmod 0600 "$staged"
   /usr/sbin/chown root:wheel "$staged"
@@ -390,7 +392,7 @@ switch_profile() {
     /bin/launchctl kickstart -k "system/$LABEL"
     wait_for "authenticated Mihomo controller after profile switch" managed_controller_ready
     wait_for "macOS PrimaryService DNS after profile switch" \
-      "$APP_SUPPORT/mihomo-daemon" --config "$APP_SUPPORT/daemon.json" --check-system-dns
+      "$APP_SUPPORT/mihomo-agent" --config "$APP_SUPPORT/daemon.json" --check-system-dns
     wait_for "fully managed network after profile switch" managed_network_ready
   else
     echo "daemon is not loaded; profile will take effect on the next start"
@@ -465,8 +467,8 @@ rollback_installation() {
   wait_for_job_absent "$LABEL" || true
   wait_for_job_absent "$RENAMED_LABEL" || true
   wait_for_managed_process_absent || true
-  if [[ -x "$APP_SUPPORT/mihomo-daemon" && -f "$APP_SUPPORT/daemon.json" ]]; then
-    "$APP_SUPPORT/mihomo-daemon" --config "$APP_SUPPORT/daemon.json" --restore-system-dns \
+  if [[ -x "$APP_SUPPORT/mihomo-agent" && -f "$APP_SUPPORT/daemon.json" ]]; then
+    "$APP_SUPPORT/mihomo-agent" --config "$APP_SUPPORT/daemon.json" --restore-system-dns \
       >/dev/null 2>&1 || true
   fi
   /bin/rm -rf "$APP_SUPPORT"
@@ -513,8 +515,8 @@ restore() {
   wait_for_job_absent "$LABEL"
   wait_for_job_absent "$RENAMED_LABEL"
   wait_for_managed_process_absent
-  if [[ -x "$APP_SUPPORT/mihomo-daemon" && -f "$APP_SUPPORT/daemon.json" ]]; then
-    run "$APP_SUPPORT/mihomo-daemon" --config "$APP_SUPPORT/daemon.json" --restore-system-dns
+  if [[ -x "$APP_SUPPORT/mihomo-agent" && -f "$APP_SUPPORT/daemon.json" ]]; then
+    run "$APP_SUPPORT/mihomo-agent" --config "$APP_SUPPORT/daemon.json" --restore-system-dns
   fi
   if [[ -f "$LEGACY_MARKER" ]]; then
     run /bin/launchctl kickstart -k "system/$LEGACY_LABEL"
@@ -544,15 +546,15 @@ start_service() {
     wait_for_job_absent "$LABEL"
   fi
   wait_for_managed_process_absent
-  if [[ -x "$APP_SUPPORT/mihomo-daemon" && -f "$APP_SUPPORT/daemon.json" ]]; then
-    run "$APP_SUPPORT/mihomo-daemon" --config "$APP_SUPPORT/daemon.json" --restore-system-dns
+  if [[ -x "$APP_SUPPORT/mihomo-agent" && -f "$APP_SUPPORT/daemon.json" ]]; then
+    run "$APP_SUPPORT/mihomo-agent" --config "$APP_SUPPORT/daemon.json" --restore-system-dns
   fi
   run /bin/launchctl bootstrap system "$PLIST"
   run /bin/launchctl enable "system/$LABEL"
   run /bin/launchctl kickstart -k "system/$LABEL"
   wait_for "authenticated Mihomo controller" managed_controller_ready
   wait_for "macOS PrimaryService DNS preferences" \
-    "$APP_SUPPORT/mihomo-daemon" --config "$APP_SUPPORT/daemon.json" --check-system-dns
+    "$APP_SUPPORT/mihomo-agent" --config "$APP_SUPPORT/daemon.json" --check-system-dns
   wait_for "effective macOS DNS" \
     /bin/sh -c "/usr/sbin/scutil --dns | /usr/bin/grep -q '127\\.0\\.0\\.53'"
   wait_for "fully managed network" managed_network_ready
@@ -561,8 +563,8 @@ start_service() {
 
 restore_network() {
   require_root
-  if [[ -x "$APP_SUPPORT/mihomo-daemon" && -f "$APP_SUPPORT/daemon.json" ]]; then
-    run "$APP_SUPPORT/mihomo-daemon" --config "$APP_SUPPORT/daemon.json" --restore-system-dns
+  if [[ -x "$APP_SUPPORT/mihomo-agent" && -f "$APP_SUPPORT/daemon.json" ]]; then
+    run "$APP_SUPPORT/mihomo-agent" --config "$APP_SUPPORT/daemon.json" --restore-system-dns
   fi
   if /bin/launchctl print "system/$LABEL" >/dev/null 2>&1; then
     run /bin/launchctl bootout "system/$LABEL"
@@ -573,8 +575,8 @@ restore_network() {
     wait_for_job_absent "$RENAMED_LABEL"
   fi
   wait_for_managed_process_absent
-  if [[ -x "$APP_SUPPORT/mihomo-daemon" && -f "$APP_SUPPORT/daemon.json" ]]; then
-    run "$APP_SUPPORT/mihomo-daemon" --config "$APP_SUPPORT/daemon.json" --restore-system-dns
+  if [[ -x "$APP_SUPPORT/mihomo-agent" && -f "$APP_SUPPORT/daemon.json" ]]; then
+    run "$APP_SUPPORT/mihomo-agent" --config "$APP_SUPPORT/daemon.json" --restore-system-dns
   fi
   echo "restored network and stopped Mihomo; configuration and installation were preserved"
 }
@@ -584,6 +586,7 @@ install_daemon() {
   resolve_sources
   if [[ "$DRY_RUN" -eq 0 ]]; then
     [[ -x "$DAEMON_SOURCE" ]] || { echo "missing daemon: $DAEMON_SOURCE" >&2; exit 1; }
+    [[ -x "$AGENT_SOURCE" ]] || { echo "missing agent: $AGENT_SOURCE" >&2; exit 1; }
     [[ -x "$MIHOMO_SOURCE" ]] || { echo "missing Mihomo: $MIHOMO_SOURCE" >&2; exit 1; }
     if [[ -n "$APP_BUNDLE" ]]; then
       [[ -x "$CLI_SOURCE" ]] || { echo "missing CLI: $CLI_SOURCE" >&2; exit 1; }
@@ -597,7 +600,9 @@ install_daemon() {
 
   run /bin/mkdir -p "$APP_SUPPORT" "$MIHOMO_DATA" "$LOG_DIR"
   run /usr/bin/install -o root -g wheel -m 0755 "$DAEMON_SOURCE" "$APP_SUPPORT/mihomo-daemon"
+  run /usr/bin/install -o root -g wheel -m 0755 "$AGENT_SOURCE" "$APP_SUPPORT/mihomo-agent"
   run /usr/bin/install -o root -g wheel -m 0755 "$MIHOMO_SOURCE" "$APP_SUPPORT/mihomo"
+  run /usr/bin/install -o root -g wheel -m 0755 "$RESOURCE_ROOT/configure_mihomo.py" "$APP_SUPPORT/configure_mihomo.py"
   run /usr/bin/install -o root -g wheel -m 0600 "$RESOURCE_ROOT/daemon.json" "$APP_SUPPORT/daemon.json"
 
   local selected_profile="$INITIAL_PROFILE"
@@ -626,8 +631,8 @@ install_daemon() {
       --daemon-config "$APP_SUPPORT/daemon.json"
     run /usr/sbin/chown root:wheel "$CONTROLLER_SECRET" "$APP_SUPPORT/daemon.json" "$MIHOMO_DATA/config.yaml" "$APP_SUPPORT/config.before-mihomo-app.yaml"
     run /bin/chmod 0600 "$CONTROLLER_SECRET" "$APP_SUPPORT/daemon.json" "$MIHOMO_DATA/config.yaml" "$APP_SUPPORT/config.before-mihomo-app.yaml"
-    run /usr/sbin/chown root:admin "$CONTROLLER_METADATA"
-    run /bin/chmod 0640 "$CONTROLLER_METADATA"
+    run /usr/sbin/chown root:wheel "$CONTROLLER_METADATA"
+    run /bin/chmod 0600 "$CONTROLLER_METADATA"
     run "$APP_SUPPORT/mihomo" -t -d "$MIHOMO_DATA" -f "$MIHOMO_DATA/config.yaml"
   fi
 
@@ -655,7 +660,7 @@ install_daemon() {
   wait_for "authenticated Mihomo controller" managed_controller_ready
   wait_for "system DNS 127.0.0.53:53" /usr/bin/dig @127.0.0.53 -p 53 test.invalid A +time=1 +tries=1
   wait_for "macOS PrimaryService DNS preferences" \
-    "$APP_SUPPORT/mihomo-daemon" --config "$APP_SUPPORT/daemon.json" --check-system-dns
+    "$APP_SUPPORT/mihomo-agent" --config "$APP_SUPPORT/daemon.json" --check-system-dns
   wait_for "effective macOS DNS" \
     /bin/sh -c "/usr/sbin/scutil --dns | /usr/bin/grep -q '127\\.0\\.0\\.53'"
   wait_for "fully managed network" managed_network_ready

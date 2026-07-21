@@ -83,6 +83,7 @@ dns:
             )
             self.assertEqual(daemon_config["controllerSecret"], secret)
             self.assertEqual(secret_file.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(metadata.stat().st_mode & 0o777, 0o600)
 
             config.write_text(original)
             MODULE.apply(config, backup, secret_file, metadata, daemon)
