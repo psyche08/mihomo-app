@@ -44,7 +44,7 @@ let package = Package(
         .executableTarget(name: "MihomoBoxCLI", dependencies: ["MihomoControl"]),
         .testTarget(
             name: "MihomoDNSCoreTests",
-            dependencies: ["MihomoDNSCore"]
+            dependencies: ["MihomoControl", "MihomoDNSCore"]
         ),
     ],
     swiftLanguageModes: [.v5]

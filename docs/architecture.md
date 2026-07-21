@@ -31,7 +31,9 @@ only operation that uses the macOS administrator dialog. It copies the daemon,
 agent, Mihomo, configuration helper, and XPC client to stable root-owned paths
 and registers the daemon's Mach service. After bootstrap, Desktop and CLI
 operations never invoke `sudo`, AppleScript elevation, or the installer again;
-they use authenticated XPC.
+they use authenticated XPC. Later App releases synchronize the fixed
+`mihomo-daemon`, `mihomo-agent`, and `mihomo` component set through that XPC
+boundary without modifying the LaunchDaemon plist.
 
 ## Ownership
 
@@ -67,10 +69,14 @@ validation before exchanging messages:
 
 Requests are typed and versioned. The broker allowlist covers status/snapshot,
 agent start-stop-restart, profile import/switch/reload, Enhanced TUN, outbound
-mode, proxy selection, latency tests, and MetaCubeXD's validated REST and live
-stream routes. Controller proxy requests are checked against the pinned UI's
-method/path contract; controller identity, managed DNS keys, arbitrary shell,
-filesystem, and arbitrary network endpoints are not exposed.
+mode, proxy selection, latency tests, signed component synchronization, and
+MetaCubeXD's validated REST and live stream routes. Component synchronization
+accepts exactly three named binary blobs with fixed size limits, validates each
+against the daemon's leaf-certificate requirement, stages and backs up inside
+the root-owned support directory, and rolls back the complete set on failure.
+Controller proxy requests are checked against the pinned UI's method/path
+contract; controller identity, managed DNS keys, arbitrary shell, filesystem,
+and arbitrary network endpoints are not exposed.
 
 ## Startup Sequence
 
@@ -82,11 +88,19 @@ filesystem, and arbitrary network endpoints are not exposed.
 5. The agent adds `127.0.0.53` to `lo0`, binds UDP/TCP 53, and starts Mihomo.
 6. After controller, TUN, fake-IP route, and DNS validation, the agent backs up
    and applies DNS to the active PrimaryService.
-7. Tauri starts later as an accessory application and polls state through XPC.
+7. Tauri starts later as an accessory application, compares bundled and
+   installed component digests through XPC, and synchronizes signed changes.
+8. Tauri polls runtime state through XPC and checks the signed App update feed.
 
 If the agent exits unexpectedly, the daemon restores the single-agent
 invariant before relaunch. Requested stop/uninstall paths suppress restart and
 wait for the agent's DNS restoration to finish.
+
+When the daemon binary changes, the old authenticated daemon returns the update
+result and exits with failure after a short grace period. launchd's existing
+`KeepAlive` policy then starts the newly verified binary. Agent or Mihomo-only
+changes restart only the agent. No administrator dialog is involved after the
+initial LaunchDaemon installation.
 
 ## Runtime Endpoints
 

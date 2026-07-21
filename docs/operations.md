@@ -36,6 +36,14 @@ Upgrades migrate the former `dev.linsheng.mihomo-app.daemon` label to
 `dev.linsheng.mihomo.daemon`. The old job is stopped and its plist removed
 before the new job starts; rollback restores the prior running label.
 
+After this bootstrap has installed an update-capable daemon, normal App updates
+do not require another administrator dialog. On launch, the App compares the
+bundled and installed daemon/agent/Mihomo digests. Changed binaries cross the
+authenticated XPC channel, are independently validated against the same leaf
+certificate, atomically replaced with rollback, and restarted by the daemon or
+launchd. Plist, configuration-helper, path-layout, or signing-certificate
+migrations still require **Install / Repair Daemon**.
+
 Inspect without changes:
 
 ```bash
@@ -81,14 +89,17 @@ mihomoboxctl install
 mihomoboxctl start
 mihomoboxctl restart
 mihomoboxctl stop
+mihomoboxctl components update
 mihomoboxctl uninstall
 ```
 
 Only `install` and `uninstall` invoke the administrator-authorized installer.
 Status, profile, lifecycle, Enhanced TUN, outbound-mode, proxy-selection, and
-latency operations use the fixed, versioned XPC allowlist. The daemon accepts
-only a CLI signed with its exact leaf certificate. `stop` terminates the agent;
-the agent restores DNS while the daemon and Mach service remain available.
+latency operations use the fixed, versioned XPC allowlist. `components update`
+uses the same boundary for the fixed signed binary set and never accepts a path
+or arbitrary filename. The daemon accepts only a CLI signed with its exact leaf
+certificate. `stop` terminates the agent; the agent restores DNS while the
+daemon and Mach service remain available.
 
 For automation, `status` exits with `0` for a running or safely stopped
 consistent network, `1` when MihomoBox is not installed, `2` for an inconsistent

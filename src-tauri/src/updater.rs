@@ -2,7 +2,7 @@ use std::time::Duration;
 use tauri::AppHandle;
 use tauri_plugin_updater::UpdaterExt;
 
-const STARTUP_CHECK_DELAY: Duration = Duration::from_secs(10);
+const STARTUP_CHECK_DELAY: Duration = Duration::from_secs(30);
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub fn start(app: AppHandle) {

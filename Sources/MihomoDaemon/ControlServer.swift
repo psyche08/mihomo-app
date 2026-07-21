@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import MihomoControl
 import XPC
@@ -6,11 +7,13 @@ final class ControlDispatcher: @unchecked Sendable {
     private let agent: AgentSupervisor
     private let controller: ControllerBroker
     private let profiles: ProfileBroker
+    private let components: ComponentUpdater
 
-    init(agent: AgentSupervisor, configPath: String) {
+    init(agent: AgentSupervisor, configPath: String) throws {
         self.agent = agent
         controller = ControllerBroker(configPath: configPath)
         profiles = ProfileBroker(agent: agent)
+        components = try ComponentUpdater(agent: agent)
     }
 
     func dispatch(_ request: ControlRequest) -> ControlResponse {
@@ -38,6 +41,22 @@ final class ControlDispatcher: @unchecked Sendable {
             case .restartAgent:
                 try agent.restart()
                 payload = nil
+            case .componentStatus:
+                payload = try components.status()
+            case .upgradeComponents:
+                guard let package = request.payload else {
+                    throw serverError("component update package is required")
+                }
+                let result = try components.perform(package)
+                payload = try JSONSerialization.data(withJSONObject: [
+                    "updated": result.updated,
+                    "daemon_restart": result.restartDaemon,
+                ], options: [.sortedKeys])
+                if result.restartDaemon {
+                    DispatchQueue.global().asyncAfter(deadline: .now() + .seconds(1)) {
+                        exit(1)
+                    }
+                }
             case .listProfiles:
                 payload = try profiles.list()
             case .importProfile, .switchProfile, .reloadProfile:
@@ -123,6 +142,14 @@ final class ControlServer: @unchecked Sendable {
             var payloadLength = 0
             if let payload = xpc_dictionary_get_data(message, "payload", &payloadLength),
                payloadLength > 0 {
+                guard payloadLength <= mihomoControlMaximumPayloadBytes else {
+                    send(
+                        ControlResponse(success: false, error: "XPC payload exceeds the size limit"),
+                        replyingTo: message,
+                        peer: peer
+                    )
+                    return
+                }
                 request.payload = Data(bytes: payload, count: payloadLength)
             }
             response = dispatcher.dispatch(request)
@@ -130,6 +157,14 @@ final class ControlServer: @unchecked Sendable {
             response = ControlResponse(success: false, error: "invalid XPC request")
         }
 
+        send(response, replyingTo: message, peer: peer)
+    }
+
+    private func send(
+        _ response: ControlResponse,
+        replyingTo message: xpc_object_t,
+        peer: xpc_connection_t
+    ) {
         guard let reply = xpc_dictionary_create_reply(message) else { return }
         var envelope = response
         envelope.payload = nil

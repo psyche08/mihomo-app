@@ -80,7 +80,8 @@ final class AgentSupervisor: @unchecked Sendable {
         child.terminationHandler = { [weak self] terminated in
             self?.queue.asyncAfter(deadline: .now() + .seconds(1)) {
                 guard let self else { return }
-                if self.process === terminated { self.process = nil }
+                guard self.process === terminated else { return }
+                self.process = nil
                 guard self.desiredRunning else { return }
                 try? self.launchLocked()
             }

@@ -5,6 +5,7 @@ import XPC
 
 public let mihomoControlServiceName = "dev.linsheng.mihomo.daemon.control"
 public let mihomoControlProtocolVersion = 1
+public let mihomoControlMaximumPayloadBytes = 256 * 1_024 * 1_024
 
 public enum ControlOperation: String, Codable, Sendable {
     case ping = "protocol.ping"
@@ -13,6 +14,8 @@ public enum ControlOperation: String, Codable, Sendable {
     case startAgent = "agent.start"
     case stopAgent = "agent.stop"
     case restartAgent = "agent.restart"
+    case componentStatus = "component.status"
+    case upgradeComponents = "component.upgrade"
     case setTUN = "runtime.set-tun"
     case setOutboundMode = "runtime.set-outbound-mode"
     case selectProxy = "runtime.select-proxy"
@@ -29,6 +32,48 @@ public enum ControlOperation: String, Codable, Sendable {
     case importProfile = "profile.import"
     case switchProfile = "profile.switch"
     case reloadProfile = "profile.reload"
+}
+
+public enum ManagedComponent: String, Codable, CaseIterable, Sendable {
+    case daemon = "mihomo-daemon"
+    case agent = "mihomo-agent"
+    case mihomo
+}
+
+public struct ComponentUpdatePackage: Codable, Sendable {
+    public static let currentFormatVersion = 1
+
+    public var formatVersion: Int
+    public var appVersion: String
+    public var components: [String: Data]
+
+    public init(appVersion: String, components: [String: Data]) {
+        formatVersion = Self.currentFormatVersion
+        self.appVersion = appVersion
+        self.components = components
+    }
+
+    public func encoded() throws -> Data {
+        let encoder = PropertyListEncoder()
+        encoder.outputFormat = .binary
+        return try encoder.encode(self)
+    }
+
+    public static func decode(_ data: Data) throws -> Self {
+        try PropertyListDecoder().decode(Self.self, from: data)
+    }
+
+    public static func digest(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+public struct ComponentStatus: Codable, Sendable {
+    public var components: [String: String]
+
+    public init(components: [String: String]) {
+        self.components = components
+    }
 }
 
 public struct ControlRequest: Codable, Sendable {
@@ -67,6 +112,7 @@ public enum ControlError: Error, LocalizedError {
     case unsignedProcess
     case invalidSigningInformation
     case invalidRequirement
+    case invalidComponentSignature
     case connectionFailed
     case invalidReply
     case rejected(String)
@@ -79,6 +125,8 @@ public enum ControlError: Error, LocalizedError {
             return "code-signing information is unavailable"
         case .invalidRequirement:
             return "the signing-certificate requirement is invalid"
+        case .invalidComponentSignature:
+            return "the managed component is not signed by the required certificate"
         case .connectionFailed:
             return "the MihomoBox XPC service is unavailable or rejected the client certificate"
         case .invalidReply:
@@ -119,6 +167,23 @@ public enum SigningCertificateRequirement {
             throw ControlError.invalidRequirement
         }
         return requirement
+    }
+
+    public static func validateStaticCode(at url: URL, requirement: String) throws {
+        var parsed: SecRequirement?
+        guard SecRequirementCreateWithString(requirement as CFString, [], &parsed) == errSecSuccess,
+              let parsed else {
+            throw ControlError.invalidRequirement
+        }
+        var staticCode: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(url as CFURL, [], &staticCode) == errSecSuccess,
+              let staticCode else {
+            throw ControlError.invalidComponentSignature
+        }
+        let flags = SecCSFlags(rawValue: kSecCSStrictValidate | kSecCSCheckAllArchitectures)
+        guard SecStaticCodeCheckValidity(staticCode, flags, parsed) == errSecSuccess else {
+            throw ControlError.invalidComponentSignature
+        }
     }
 }
 

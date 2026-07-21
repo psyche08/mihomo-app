@@ -1,3 +1,4 @@
+mod component_sync;
 mod dashboard;
 mod mihomo;
 mod tray;
@@ -11,6 +12,7 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             tray::setup(app.handle())?;
+            component_sync::start();
             updater::start(app.handle().clone());
             if std::env::var_os("MIHOMO_APP_SMOKE_SHOW_WINDOW").is_some() {
                 use tauri::Manager;

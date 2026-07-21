@@ -20,7 +20,7 @@ do {
     signal(SIGPIPE, SIG_IGN)
     let agent = AgentSupervisor(configPath: configPath)
     defer { agent.stop() }
-    let dispatcher = ControlDispatcher(agent: agent, configPath: configPath)
+    let dispatcher = try ControlDispatcher(agent: agent, configPath: configPath)
     let server = try ControlServer(dispatcher: dispatcher)
 
     let signalQueue = DispatchQueue(label: "dev.linsheng.mihomo.daemon.signal")

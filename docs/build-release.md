@@ -71,12 +71,18 @@ artifacts with Gatekeeper. Never print credential values.
 
 ## Automatic Updates
 
-The signed App checks the latest GitHub release manifest ten seconds after
-startup. A newer version is downloaded, verified with the updater public key,
-installed, and the App restarts. This updates only the user-owned App bundle;
-it never modifies the root LaunchDaemon. Daemon replacement remains an explicit
-**Install / Repair Daemon** action so the signed installer retains the sole
-privileged installation boundary.
+The signed App first synchronizes any changed root-owned `mihomo-daemon`,
+`mihomo-agent`, and `mihomo` binaries through authenticated XPC. The installed
+daemon accepts only the fixed component set, validates every replacement against
+its own leaf certificate, performs a rollback-capable atomic replacement, and
+lets launchd restart it when required. This does not replace or repair the
+LaunchDaemon plist, configuration helper, or installation layout; those remain
+explicit **Install / Repair Daemon** operations.
+
+Thirty seconds after startup, the App checks the latest GitHub release manifest.
+A newer version is downloaded, verified with the updater public key, installed,
+and the App restarts. The restarted App then synchronizes its signed root
+components without another administrator prompt.
 
 The updater private key is not part of the repository. Local releases default
 to `~/.tauri/mihomobox.key`, or use `TAURI_SIGNING_PRIVATE_KEY` /

@@ -518,6 +518,52 @@ private func controlObject(_ operation: ControlOperation) throws -> [String: Any
     return object
 }
 
+private func updateManagedComponents() throws -> Int32 {
+    let bundle = try appBundleURL()
+    let info = NSDictionary(
+        contentsOf: bundle.appendingPathComponent("Contents/Info.plist")
+    )
+    guard let appVersion = info?["CFBundleShortVersionString"] as? String,
+          !appVersion.isEmpty else {
+        throw CLIError(message: "the App bundle version is unavailable", exitCode: 1)
+    }
+
+    guard let statusData = try sendControl(.componentStatus) else {
+        throw CLIError(message: "the daemon returned no component status", exitCode: 1)
+    }
+    let status = try JSONDecoder().decode(ComponentStatus.self, from: statusData)
+    let directory = bundle.appendingPathComponent("Contents/MacOS", isDirectory: true)
+    var components: [String: Data] = [:]
+    var changed = false
+    for component in ManagedComponent.allCases {
+        let url = directory.appendingPathComponent(component.rawValue)
+        guard FileManager.default.isExecutableFile(atPath: url.path) else {
+            throw CLIError(message: "the App bundle is missing a managed component", exitCode: 1)
+        }
+        let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+        components[component.rawValue] = data
+        if status.components[component.rawValue] != ComponentUpdatePackage.digest(data) {
+            changed = true
+        }
+    }
+    guard changed else {
+        print("managed components are current")
+        return 0
+    }
+
+    let package = try ComponentUpdatePackage(
+        appVersion: appVersion,
+        components: components
+    ).encoded()
+    guard let response = try sendControl(.upgradeComponents, payload: package),
+          let result = try JSONSerialization.jsonObject(with: response) as? [String: Any],
+          let updated = result["updated"] as? [String] else {
+        throw CLIError(message: "the daemon returned an invalid component update result", exitCode: 1)
+    }
+    print("updated managed components: \(updated.sorted().joined(separator: ", "))")
+    return 0
+}
+
 private func serviceLoaded() -> Bool {
     guard let result = try? capture("/bin/launchctl", ["print", "system/\(launchDaemonLabel)"]) else {
         return false
@@ -614,6 +660,7 @@ private func usage() {
       start                           Start the agent over authenticated XPC
       restart                         Restart the agent over authenticated XPC
       stop                            Stop the agent and restore real system DNS
+      components update              Upgrade signed root components over XPC
       uninstall                       Restore networking and remove installed files
 
     Authentication secrets are read from a hidden prompt unless --secret-stdin
@@ -794,6 +841,11 @@ private func main() throws -> Int32 {
         try requireNoExtraArguments(arguments)
         _ = try sendControl(.stopAgent)
         return 0
+    case "components":
+        guard arguments == ["update"] else {
+            throw CLIError(message: "usage: mihomoboxctl components update")
+        }
+        return try updateManagedComponents()
     case "uninstall":
         try requireNoExtraArguments(arguments)
         return try runInstaller(["--restore"])

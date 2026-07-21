@@ -22,6 +22,10 @@
 - Bootstrap/repair installation is explicit and uses the macOS administrator
   dialog. Subsequent lifecycle, profile reload, TUN, outbound-mode, and proxy
   operations do not elevate interactively.
+- Post-bootstrap binary synchronization is a typed XPC operation, not an
+  installer. It accepts exactly daemon, agent, and Mihomo bytes, caps their
+  sizes, verifies every staged executable against the current daemon's exact
+  leaf certificate, and rolls back on replacement or health-check failure.
 - launchd executes stable root-owned copies, never files in a user-writable Git
   checkout or movable App bundle.
 
@@ -51,6 +55,9 @@ the network data plane.
 - Automatic App updates require both the pinned updater public key and the
   Developer ID/notarized release chain. The updater private key never ships in
   the App or repository.
+- Root component updates add a second check at the privilege boundary: each
+  executable must satisfy the already-installed daemon's certificate
+  requirement before it can replace a root-owned binary.
 - Third-party license notices ship with the application.
 
 ## Sensitive Data
