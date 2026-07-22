@@ -23,7 +23,7 @@ if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
     echo "updater private key not found: $UPDATER_KEY_PATH" >&2
     exit 1
   fi
-  export TAURI_SIGNING_PRIVATE_KEY="$UPDATER_KEY_PATH"
+  export TAURI_SIGNING_PRIVATE_KEY="$(/bin/cat "$UPDATER_KEY_PATH")"
 fi
 export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
 export APPLE_SIGNING_IDENTITY="$IDENTITY"
