@@ -15,6 +15,27 @@ if [[ -z "$IDENTITY" ]]; then
   exit 1
 fi
 
+codesign_with_retry() {
+  local target="$1"
+  shift
+  local attempt=1
+  local delay=5
+  local maximum_attempts=5
+  while true; do
+    if /usr/bin/codesign --force --timestamp --sign "$IDENTITY" "$@" "$target"; then
+      return 0
+    fi
+    if (( attempt >= maximum_attempts )); then
+      echo "secure timestamp signing failed after $attempt attempts: $target" >&2
+      return 1
+    fi
+    echo "secure timestamp signing retry attempt=$attempt delay_seconds=$delay" >&2
+    /bin/sleep "$delay"
+    attempt=$((attempt + 1))
+    delay=$((delay * 2))
+  done
+}
+
 cd "$ROOT"
 VERSION="$(/usr/bin/env node -p "require('./src-tauri/tauri.conf.json').version")"
 if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
@@ -26,9 +47,8 @@ if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
   export TAURI_SIGNING_PRIVATE_KEY="$(/bin/cat "$UPDATER_KEY_PATH")"
 fi
 export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
-export APPLE_SIGNING_IDENTITY="$IDENTITY"
 /usr/bin/env npm run prepare:bundle
-/usr/bin/env npm run tauri -- build --bundles app \
+/usr/bin/env -u APPLE_SIGNING_IDENTITY npm run tauri -- build --bundles app \
   --config src-tauri/tauri.release.conf.json
 
 APP="$ROOT/src-tauri/target/release/bundle/macos/MihomoBox.app"
@@ -46,9 +66,9 @@ cleanup() {
 trap cleanup EXIT
 
 for executable in "$APP/Contents/MacOS/"*; do
-  /usr/bin/codesign --force --options runtime --timestamp --sign "$IDENTITY" "$executable"
+  codesign_with_retry "$executable" --options runtime
 done
-/usr/bin/codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"
+codesign_with_retry "$APP" --options runtime
 /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP"
 /bin/mkdir -p "$DIST"
 /bin/rm -f "$ARCHIVE"
@@ -100,7 +120,7 @@ EOF
   -ov \
   -format UDZO \
   "$DMG"
-/usr/bin/codesign --force --timestamp --sign "$IDENTITY" "$DMG"
+codesign_with_retry "$DMG"
 /usr/bin/codesign --verify --verbose=2 "$DMG"
 /usr/bin/xcrun notarytool submit "$DMG" \
   --apple-id "$NOTARY_APPLE_ID" \
