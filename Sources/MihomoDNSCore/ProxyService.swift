@@ -6,7 +6,6 @@ import Foundation
 public final class ProxyService {
     private let configuration: ProxyConfiguration
     private let group: MultiThreadedEventLoopGroup
-    private let threadPool: NIOThreadPool
     private let networkState: NetworkDNSState
     private let aliasManager: LoopbackAliasManager
     private let globalDNS: GlobalDNSPreferences
@@ -20,7 +19,6 @@ public final class ProxyService {
     public init(configuration: ProxyConfiguration) {
         self.configuration = configuration
         self.group = MultiThreadedEventLoopGroup(numberOfThreads: max(2, System.coreCount / 2))
-        self.threadPool = NIOThreadPool(numberOfThreads: max(2, min(8, System.coreCount)))
         self.networkState = NetworkDNSState(
             excludedServers: [
                 configuration.systemDNSListen.host,
@@ -52,20 +50,23 @@ public final class ProxyService {
             try aliasManager.ensure()
         }
         try networkState.start()
-        threadPool.start()
 
-        let mihomoForwarder = FixedDNSForwarder(
+        let mihomoForwarder = FixedAsyncDNSForwarder(
             endpoint: configuration.mihomoDNS,
             timeoutMilliseconds: configuration.queryTimeoutMilliseconds
         )
-        let originalDNSForwarder = DynamicDNSForwarder(
+        let originalDNSForwarder = DynamicAsyncDNSForwarder(
             state: networkState,
             timeoutMilliseconds: configuration.queryTimeoutMilliseconds
         )
-        let systemDNSForwarder = FallbackDNSForwarder(
+        let fakeIPPolicy = FakeIPDNSPolicy(configPath: configuration.mihomoProcess?.configPath)
+        let systemDNSForwarder = FallbackAsyncDNSForwarder(
             primary: mihomoForwarder,
             fallback: originalDNSForwarder,
-            primaryAllowed: { [safetyState] in safetyState.isRuntimeReady() }
+            primaryAllowed: { [safetyState] in safetyState.isRuntimeReady() },
+            fallbackAllowed: { [fakeIPPolicy] query in
+                fakeIPPolicy.allowsOriginalDNSFallback(for: query)
+            }
         )
 
         do {
@@ -161,19 +162,17 @@ public final class ProxyService {
         }
         networkState.stop()
         mihomoSupervisor?.stop()
-        try? threadPool.syncShutdownGracefully()
         try? group.syncShutdownGracefully()
         ServiceLog.info("event=service_stopped")
     }
 
-    private func startUDP(endpoint: Endpoint, forwarder: DNSForwarding) throws -> Channel {
-        let threadPool = self.threadPool
+    private func startUDP(endpoint: Endpoint, forwarder: AsyncDNSForwarding) throws -> Channel {
         return try DatagramBootstrap(group: group)
             .channelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .channelInitializer { channel in
                 channel.eventLoop.makeCompletedFuture {
                     try channel.pipeline.syncOperations.addHandler(
-                        DNSUDPHandler(forwarder: forwarder, threadPool: threadPool)
+                        DNSUDPHandler(forwarder: forwarder)
                     )
                 }
             }
@@ -181,8 +180,7 @@ public final class ProxyService {
             .wait()
     }
 
-    private func startTCP(endpoint: Endpoint, forwarder: DNSForwarding) throws -> Channel {
-        let threadPool = self.threadPool
+    private func startTCP(endpoint: Endpoint, forwarder: AsyncDNSForwarding) throws -> Channel {
         return try ServerBootstrap(group: group)
             .serverChannelOption(ChannelOptions.backlog, value: 64)
             .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
@@ -190,7 +188,7 @@ public final class ProxyService {
                 channel.eventLoop.makeCompletedFuture {
                     try channel.pipeline.syncOperations.addHandlers(
                         ByteToMessageHandler(DNSTCPFrameDecoder()),
-                        DNSTCPHandler(forwarder: forwarder, threadPool: threadPool)
+                        DNSTCPHandler(forwarder: forwarder)
                     )
                 }
             }

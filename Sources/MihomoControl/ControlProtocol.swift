@@ -29,6 +29,9 @@ public enum ControlOperation: String, Codable, Sendable {
     case closeAllConnections = "dashboard.connections.close-all"
     case controllerRequest = "dashboard.controller-request"
     case controllerStreamMessage = "dashboard.controller-stream-message"
+    case controllerStreamOpen = "dashboard.controller-stream-open"
+    case controllerStreamNext = "dashboard.controller-stream-next"
+    case controllerStreamClose = "dashboard.controller-stream-close"
     case listProfiles = "profile.list"
     case importProfile = "profile.import"
     case switchProfile = "profile.switch"
@@ -188,10 +191,10 @@ public enum SigningCertificateRequirement {
     }
 }
 
-public final class MihomoControlClient: @unchecked Sendable {
-    public init() {}
+public final class MihomoControlSession: @unchecked Sendable {
+    private let connection: xpc_connection_t
 
-    public func send(_ request: ControlRequest) throws -> ControlResponse {
+    public init() throws {
         let requirement = try SigningCertificateRequirement.currentProcess()
         let connection = xpc_connection_create_mach_service(
             mihomoControlServiceName,
@@ -204,8 +207,14 @@ public final class MihomoControlClient: @unchecked Sendable {
         }
         xpc_connection_set_event_handler(connection) { _ in }
         xpc_connection_resume(connection)
-        defer { xpc_connection_cancel(connection) }
+        self.connection = connection
+    }
 
+    deinit {
+        xpc_connection_cancel(connection)
+    }
+
+    public func send(_ request: ControlRequest) throws -> ControlResponse {
         var envelope = request
         envelope.payload = nil
         let encoded = try JSONEncoder().encode(envelope)
@@ -239,5 +248,13 @@ public final class MihomoControlClient: @unchecked Sendable {
             throw ControlError.rejected(response.error ?? "the XPC request was rejected")
         }
         return response
+    }
+}
+
+public final class MihomoControlClient: @unchecked Sendable {
+    public init() {}
+
+    public func send(_ request: ControlRequest) throws -> ControlResponse {
+        try MihomoControlSession().send(request)
     }
 }

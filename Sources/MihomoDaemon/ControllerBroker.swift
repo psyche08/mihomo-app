@@ -4,9 +4,32 @@ import MihomoDNSCore
 
 final class ControllerBroker: @unchecked Sendable {
     private let configPath: String
+    private let streamLock = NSLock()
+    private var streams: [String: ControllerStreamSession] = [:]
+    private let maximumStreams = 32
+    private let streamCleanupQueue = DispatchQueue(label: "dev.linsheng.mihomo.daemon.controller-streams")
+    private var streamCleanupTimer: DispatchSourceTimer?
 
     init(configPath: String) {
         self.configPath = configPath
+        let timer = DispatchSource.makeTimerSource(queue: streamCleanupQueue)
+        timer.schedule(deadline: .now() + .seconds(30), repeating: .seconds(30))
+        timer.setEventHandler { [weak self] in
+            self?.removeExpiredStreams()
+        }
+        timer.resume()
+        streamCleanupTimer = timer
+    }
+
+    deinit {
+        streamCleanupTimer?.cancel()
+        streamLock.lock()
+        let active = Array(streams.values)
+        streams.removeAll()
+        streamLock.unlock()
+        for stream in active {
+            stream.close()
+        }
     }
 
     func perform(_ request: ControlRequest) throws -> Data {
@@ -99,7 +122,25 @@ final class ControllerBroker: @unchecked Sendable {
             guard let target = request.arguments["target"] else {
                 throw brokerError("controller stream target is required")
             }
-            return try receiveStreamMessage(configuration, target: target)
+            let stream = try makeStream(configuration, target: target)
+            defer { stream.close() }
+            return try stream.receive()
+        case .controllerStreamOpen:
+            guard let target = request.arguments["target"] else {
+                throw brokerError("controller stream target is required")
+            }
+            return try openStream(configuration, target: target)
+        case .controllerStreamNext:
+            guard let identifier = request.arguments["session"] else {
+                throw brokerError("controller stream session is required")
+            }
+            return try nextStreamMessage(identifier: identifier)
+        case .controllerStreamClose:
+            guard let identifier = request.arguments["session"] else {
+                throw brokerError("controller stream session is required")
+            }
+            closeStream(identifier: identifier)
+            return Data()
         default:
             throw brokerError("operation is not a controller operation")
         }
@@ -162,10 +203,10 @@ final class ControllerBroker: @unchecked Sendable {
         return try result?.get() ?? { throw brokerError("controller request failed") }()
     }
 
-    private func receiveStreamMessage(
+    private func makeStream(
         _ configuration: ProxyConfiguration,
         target: String
-    ) throws -> Data {
+    ) throws -> ControllerStreamSession {
         guard target.utf8.count <= 4_096,
               var incoming = URLComponents(string: target),
               incoming.scheme == nil, incoming.host == nil, incoming.fragment == nil,
@@ -194,32 +235,80 @@ final class ControllerBroker: @unchecked Sendable {
         if let secret = configuration.controllerSecret, !secret.isEmpty {
             urlRequest.setValue("Bearer \(secret)", forHTTPHeaderField: "Authorization")
         }
-        let session = URLSession(configuration: .ephemeral)
-        let task = session.webSocketTask(with: urlRequest)
-        let semaphore = DispatchSemaphore(value: 0)
-        var result: Result<Data, Error>?
-        task.resume()
-        task.receive { message in
-            defer { semaphore.signal() }
-            switch message {
-            case let .success(.string(value)):
-                result = .success(Data(value.utf8))
-            case let .success(.data(value)):
-                result = .success(value)
-            case let .failure(error):
-                result = .failure(error)
-            @unknown default:
-                result = .failure(self.brokerError("unsupported controller stream message"))
-            }
+        return ControllerStreamSession(
+            request: urlRequest,
+            errorFactory: brokerError
+        )
+    }
+
+    private func openStream(
+        _ configuration: ProxyConfiguration,
+        target: String
+    ) throws -> Data {
+        let stream = try makeStream(configuration, target: target)
+        streamLock.lock()
+        removeExpiredStreamsLocked()
+        guard streams.count < maximumStreams else {
+            streamLock.unlock()
+            stream.close()
+            throw brokerError("controller stream limit reached")
         }
-        guard semaphore.wait(timeout: .now() + .seconds(36)) == .success else {
-            task.cancel(with: .goingAway, reason: nil)
-            session.invalidateAndCancel()
-            throw brokerError("controller stream timed out")
+        streams[stream.identifier] = stream
+        streamLock.unlock()
+        ServiceLog.info("event=controller_stream result=opened")
+        return try JSONSerialization.data(
+            withJSONObject: ["session": stream.identifier],
+            options: [.sortedKeys]
+        )
+    }
+
+    private func nextStreamMessage(identifier: String) throws -> Data {
+        guard UUID(uuidString: identifier) != nil else {
+            throw brokerError("invalid controller stream session")
         }
-        task.cancel(with: .normalClosure, reason: nil)
-        session.finishTasksAndInvalidate()
-        return try result?.get() ?? { throw brokerError("controller stream failed") }()
+        streamLock.lock()
+        removeExpiredStreamsLocked()
+        let stream = streams[identifier]
+        streamLock.unlock()
+        guard let stream else {
+            throw brokerError("controller stream session is unavailable")
+        }
+        do {
+            return try stream.receive()
+        } catch {
+            closeStream(identifier: identifier)
+            throw error
+        }
+    }
+
+    private func closeStream(identifier: String) {
+        streamLock.lock()
+        let stream = streams.removeValue(forKey: identifier)
+        streamLock.unlock()
+        if let stream {
+            stream.close()
+            ServiceLog.info("event=controller_stream result=closed")
+        }
+    }
+
+    private func removeExpiredStreamsLocked() {
+        let expired = streams.filter { $0.value.isExpired }.map(\.key)
+        for identifier in expired {
+            streams.removeValue(forKey: identifier)?.close()
+        }
+    }
+
+    private func removeExpiredStreams() {
+        streamLock.lock()
+        let expired = streams.filter { $0.value.isExpired }.map(\.key)
+        let removed = expired.compactMap { streams.removeValue(forKey: $0) }
+        streamLock.unlock()
+        for stream in removed {
+            stream.close()
+        }
+        if !removed.isEmpty {
+            ServiceLog.info("event=controller_stream result=expired count=\(removed.count)")
+        }
     }
 
     private func validateControllerRequest(method: String, target: String, body: Data?) throws {
@@ -331,5 +420,75 @@ final class ControllerBroker: @unchecked Sendable {
     private func validControllerName(_ value: String) -> Bool {
         !value.isEmpty && value.utf8.count <= 1_024 &&
             !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+    }
+}
+
+private final class ControllerStreamSession: @unchecked Sendable {
+    let identifier = UUID().uuidString
+    private let session: URLSession
+    private let task: URLSessionWebSocketTask
+    private let errorFactory: (String) -> Error
+    private let receiveLock = NSLock()
+    private let stateLock = NSLock()
+    private var lastAccessNanoseconds = DispatchTime.now().uptimeNanoseconds
+    private var closed = false
+
+    init(request: URLRequest, errorFactory: @escaping (String) -> Error) {
+        self.errorFactory = errorFactory
+        session = URLSession(configuration: .ephemeral)
+        task = session.webSocketTask(with: request)
+        task.resume()
+    }
+
+    var isExpired: Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return closed
+            || DispatchTime.now().uptimeNanoseconds &- lastAccessNanoseconds
+                > 60_000_000_000
+    }
+
+    func receive() throws -> Data {
+        receiveLock.lock()
+        defer { receiveLock.unlock() }
+        touch()
+        let semaphore = DispatchSemaphore(value: 0)
+        var result: Result<Data, Error>?
+        task.receive { [errorFactory] message in
+            defer { semaphore.signal() }
+            switch message {
+            case let .success(.string(value)):
+                result = .success(Data(value.utf8))
+            case let .success(.data(value)):
+                result = .success(value)
+            case let .failure(error):
+                result = .failure(error)
+            @unknown default:
+                result = .failure(errorFactory("unsupported controller stream message"))
+            }
+        }
+        guard semaphore.wait(timeout: .now() + .seconds(36)) == .success else {
+            throw errorFactory("controller stream timed out")
+        }
+        touch()
+        return try result?.get() ?? { throw errorFactory("controller stream failed") }()
+    }
+
+    func close() {
+        stateLock.lock()
+        guard !closed else {
+            stateLock.unlock()
+            return
+        }
+        closed = true
+        stateLock.unlock()
+        task.cancel(with: .normalClosure, reason: nil)
+        session.invalidateAndCancel()
+    }
+
+    private func touch() {
+        stateLock.lock()
+        lastAccessNanoseconds = DispatchTime.now().uptimeNanoseconds
+        stateLock.unlock()
     }
 }

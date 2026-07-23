@@ -1,4 +1,6 @@
 import Foundation
+@preconcurrency import NIOCore
+@preconcurrency import NIOPosix
 import SystemConfiguration
 import XCTest
 @testable import MihomoDNSCore
@@ -251,42 +253,214 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(restored?[kSCPropNetDNSSearchDomains as String] as? [String], ["corp.example"])
     }
 
-    func testFallbackForwarderUsesPrimaryWhenAvailable() throws {
-        let expected = Data(repeating: 1, count: 12)
-        let primary = StubForwarder(result: .success(expected))
-        let fallback = StubForwarder(result: .success(Data(repeating: 2, count: 12)))
-        let forwarder = FallbackDNSForwarder(primary: primary, fallback: fallback)
+    func testAsyncFallbackWaitsForEveryPrimaryRequestWithoutOverflowFallback() throws {
+        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        defer { try? group.syncShutdownGracefully() }
+        let eventLoop = group.next()
+        let firstPromise = eventLoop.makePromise(of: Data.self)
+        let secondPromise = eventLoop.makePromise(of: Data.self)
+        let primary = QueuedAsyncForwarder(
+            futures: [firstPromise.futureResult, secondPromise.futureResult]
+        )
+        let fallback = StubAsyncForwarder(
+            result: .success(Data(repeating: 2, count: 12))
+        )
+        let forwarder = FallbackAsyncDNSForwarder(primary: primary, fallback: fallback)
 
-        XCTAssertEqual(try forwarder.forward(Data(repeating: 0, count: 12)), expected)
-        XCTAssertEqual(primary.callCount, 1)
+        let first = forwarder.forward(Data(repeating: 0, count: 12), on: eventLoop)
+        let second = forwarder.forward(Data(repeating: 0, count: 12), on: eventLoop)
+        XCTAssertEqual(primary.callCount, 2)
+        XCTAssertEqual(fallback.callCount, 0)
+
+        let firstResponse = Data(repeating: 3, count: 12)
+        let secondResponse = Data(repeating: 4, count: 12)
+        firstPromise.succeed(firstResponse)
+        secondPromise.succeed(secondResponse)
+        XCTAssertEqual(try first.wait(), firstResponse)
+        XCTAssertEqual(try second.wait(), secondResponse)
         XCTAssertEqual(fallback.callCount, 0)
     }
 
-    func testFallbackForwarderUsesOriginalDNSWhenPrimaryFails() throws {
-        let expected = Data(repeating: 2, count: 12)
-        let primary = StubForwarder(result: .failure(TestError.unreachable))
-        let fallback = StubForwarder(result: .success(expected))
-        let forwarder = FallbackDNSForwarder(primary: primary, fallback: fallback)
+    func testAsyncFallbackRunsOnlyAfterPrimaryFailure() throws {
+        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        defer { try? group.syncShutdownGracefully() }
+        let eventLoop = group.next()
+        let fallbackResponse = Data(repeating: 2, count: 12)
+        let primary = StubAsyncForwarder(result: .failure(TestError.unreachable))
+        let fallback = StubAsyncForwarder(result: .success(fallbackResponse))
+        let forwarder = FallbackAsyncDNSForwarder(primary: primary, fallback: fallback)
 
-        XCTAssertEqual(try forwarder.forward(Data(repeating: 0, count: 12)), expected)
+        XCTAssertEqual(
+            try forwarder.forward(Data(repeating: 0, count: 12), on: eventLoop).wait(),
+            fallbackResponse
+        )
         XCTAssertEqual(primary.callCount, 1)
         XCTAssertEqual(fallback.callCount, 1)
     }
 
-    func testFallbackForwarderSkipsFakeIPWhenRuntimeIsUnsafe() throws {
-        let expected = Data(repeating: 2, count: 12)
-        let primary = StubForwarder(result: .success(Data(repeating: 1, count: 12)))
-        let fallback = StubForwarder(result: .success(expected))
+    func testAsyncFallbackBypassesPrimaryOnlyWhenRuntimeIsUnsafe() throws {
+        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        defer { try? group.syncShutdownGracefully() }
+        let eventLoop = group.next()
+        let fallbackResponse = Data(repeating: 2, count: 12)
+        let primary = StubAsyncForwarder(result: .success(Data(repeating: 1, count: 12)))
+        let fallback = StubAsyncForwarder(result: .success(fallbackResponse))
         let safetyState = NetworkSafetyState()
-        let forwarder = FallbackDNSForwarder(
+        let forwarder = FallbackAsyncDNSForwarder(
             primary: primary,
             fallback: fallback,
             primaryAllowed: { safetyState.isRuntimeReady() }
         )
 
-        XCTAssertEqual(try forwarder.forward(Data(repeating: 0, count: 12)), expected)
+        XCTAssertEqual(
+            try forwarder.forward(Data(repeating: 0, count: 12), on: eventLoop).wait(),
+            fallbackResponse
+        )
         XCTAssertEqual(primary.callCount, 0)
         XCTAssertEqual(fallback.callCount, 1)
+    }
+
+    func testFakeIPManagedDomainNeverFallsBackToOriginalDNS() throws {
+        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        defer { try? group.syncShutdownGracefully() }
+        let eventLoop = group.next()
+        let primary = StubAsyncForwarder(result: .failure(TestError.unreachable))
+        let fallback = StubAsyncForwarder(result: .success(Data(repeating: 2, count: 12)))
+        let policy = FakeIPDNSPolicy(yaml: """
+        dns:
+          enhanced-mode: fake-ip
+          fake-ip-filter-mode: blacklist
+        """)
+        let forwarder = FallbackAsyncDNSForwarder(
+            primary: primary,
+            fallback: fallback,
+            fallbackAllowed: { policy.allowsOriginalDNSFallback(for: $0) }
+        )
+
+        XCTAssertThrowsError(
+            try forwarder.forward(query(for: "managed.example"), on: eventLoop).wait()
+        ) { error in
+            guard case DNSForwardingError.originalDNSForbidden = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+        }
+        XCTAssertEqual(primary.callCount, 1)
+        XCTAssertEqual(fallback.callCount, 0)
+    }
+
+    func testUnsafeRuntimeStillBlocksOriginalDNSForFakeIPManagedDomain() throws {
+        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        defer { try? group.syncShutdownGracefully() }
+        let eventLoop = group.next()
+        let primary = StubAsyncForwarder(result: .success(Data(repeating: 1, count: 12)))
+        let fallback = StubAsyncForwarder(result: .success(Data(repeating: 2, count: 12)))
+        let policy = FakeIPDNSPolicy(yaml: """
+        dns:
+          enhanced-mode: fake-ip
+        """)
+        let forwarder = FallbackAsyncDNSForwarder(
+            primary: primary,
+            fallback: fallback,
+            primaryAllowed: { false },
+            fallbackAllowed: { policy.allowsOriginalDNSFallback(for: $0) }
+        )
+
+        XCTAssertThrowsError(
+            try forwarder.forward(query(for: "managed.example"), on: eventLoop).wait()
+        )
+        XCTAssertEqual(primary.callCount, 0)
+        XCTAssertEqual(fallback.callCount, 0)
+    }
+
+    func testFakeIPBlacklistAllowsOriginalDNSOnlyForExplicitFilterMatches() {
+        let policy = FakeIPDNSPolicy(yaml: """
+        dns:
+          enhanced-mode: fake-ip
+          fake-ip-filter:
+            - localhost
+            - '*.lan'
+            - '+.real.example'
+            - '.children.example'
+            - 'xbox.*.microsoft.com'
+            - 'geosite:private'
+        """)
+
+        XCTAssertTrue(policy.allowsOriginalDNSFallback(forDomain: "localhost"))
+        XCTAssertTrue(policy.allowsOriginalDNSFallback(forDomain: "router.lan"))
+        XCTAssertFalse(policy.allowsOriginalDNSFallback(forDomain: "deep.router.lan"))
+        XCTAssertTrue(policy.allowsOriginalDNSFallback(forDomain: "real.example"))
+        XCTAssertTrue(policy.allowsOriginalDNSFallback(forDomain: "deep.real.example"))
+        XCTAssertFalse(policy.allowsOriginalDNSFallback(forDomain: "children.example"))
+        XCTAssertTrue(policy.allowsOriginalDNSFallback(forDomain: "a.children.example"))
+        XCTAssertTrue(policy.allowsOriginalDNSFallback(forDomain: "xbox.live.microsoft.com"))
+        XCTAssertFalse(policy.allowsOriginalDNSFallback(forDomain: "managed.example"))
+    }
+
+    func testFakeIPWhitelistAndRuleModesRemainFailClosedWhenAmbiguous() {
+        let whitelist = FakeIPDNSPolicy(yaml: """
+        dns:
+          enhanced-mode: fake-ip
+          fake-ip-filter-mode: whitelist
+          fake-ip-filter: ['+.managed.example']
+        """)
+        XCTAssertFalse(whitelist.allowsOriginalDNSFallback(forDomain: "managed.example"))
+        XCTAssertTrue(whitelist.allowsOriginalDNSFallback(forDomain: "real.example"))
+
+        let opaqueWhitelist = FakeIPDNSPolicy(yaml: """
+        dns:
+          enhanced-mode: fake-ip
+          fake-ip-filter-mode: whitelist
+          fake-ip-filter:
+            - 'rule-set:managed'
+        """)
+        XCTAssertFalse(opaqueWhitelist.allowsOriginalDNSFallback(forDomain: "unknown.example"))
+
+        let ruleMode = FakeIPDNSPolicy(yaml: """
+        dns:
+          enhanced-mode: fake-ip
+          fake-ip-filter-mode: rule
+          fake-ip-filter:
+            - DOMAIN-SUFFIX,internal.example,real-ip
+            - MATCH,fake-ip
+        """)
+        XCTAssertTrue(ruleMode.allowsOriginalDNSFallback(forDomain: "api.internal.example"))
+        XCTAssertFalse(ruleMode.allowsOriginalDNSFallback(forDomain: "managed.example"))
+    }
+
+    func testNonFakeIPModeAllowsOriginalDNSFallback() {
+        let policy = FakeIPDNSPolicy(yaml: """
+        dns:
+          enhanced-mode: redir-host
+        """)
+        XCTAssertTrue(policy.allowsOriginalDNSFallback(forDomain: "any.example"))
+    }
+
+    func testDNSBridgeFailureRestoresOriginalDNSWithoutRestartingMihomo() {
+        var policy = DNSBridgeFailurePolicy(requiredFailures: 3)
+        XCTAssertEqual(
+            policy.decide(bridgeReady: false, upstreamRuntimeReady: true, networkOwned: true),
+            .debounce
+        )
+        XCTAssertEqual(
+            policy.decide(bridgeReady: false, upstreamRuntimeReady: true, networkOwned: true),
+            .debounce
+        )
+        XCTAssertEqual(
+            policy.decide(bridgeReady: false, upstreamRuntimeReady: true, networkOwned: true),
+            .restoreOriginalDNS
+        )
+        XCTAssertEqual(
+            policy.decide(bridgeReady: true, upstreamRuntimeReady: true, networkOwned: false),
+            .none
+        )
+    }
+
+    func testDNSBridgeFailureDoesNotActWhenMihomoRuntimeIsUnavailable() {
+        var policy = DNSBridgeFailurePolicy(requiredFailures: 1)
+        XCTAssertEqual(
+            policy.decide(bridgeReady: false, upstreamRuntimeReady: false, networkOwned: true),
+            .none
+        )
     }
 
     func testRuntimeRecoveryPolicyStartsWaitsAndRecovers() {
@@ -408,7 +582,7 @@ private enum TestError: Error {
     case unreachable
 }
 
-private final class StubForwarder: DNSForwarding, @unchecked Sendable {
+private final class StubAsyncForwarder: AsyncDNSForwarding, @unchecked Sendable {
     private let lock = NSLock()
     private let result: Result<Data, Error>
     private var calls = 0
@@ -423,10 +597,33 @@ private final class StubForwarder: DNSForwarding, @unchecked Sendable {
         return calls
     }
 
-    func forward(_ query: Data) throws -> Data {
+    func forward(_ query: Data, on eventLoop: EventLoop) -> EventLoopFuture<Data> {
         lock.lock()
         calls += 1
         lock.unlock()
-        return try result.get()
+        return eventLoop.makeFutureWithTask { try self.result.get() }
+    }
+}
+
+private final class QueuedAsyncForwarder: AsyncDNSForwarding, @unchecked Sendable {
+    private let lock = NSLock()
+    private var futures: [EventLoopFuture<Data>]
+    private var calls = 0
+
+    init(futures: [EventLoopFuture<Data>]) {
+        self.futures = futures
+    }
+
+    var callCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return calls
+    }
+
+    func forward(_ query: Data, on eventLoop: EventLoop) -> EventLoopFuture<Data> {
+        lock.lock()
+        defer { lock.unlock() }
+        calls += 1
+        return futures.removeFirst()
     }
 }

@@ -33,6 +33,10 @@ public final class LoopbackAliasManager: @unchecked Sendable {
         return result == 1
     }
 
+    public func isManaged() -> Bool {
+        FileManager.default.fileExists(atPath: markerPath)
+    }
+
     public func ensure() throws {
         if try isPresent() {
             return

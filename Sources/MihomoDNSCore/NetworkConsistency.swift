@@ -293,6 +293,34 @@ public enum MihomoRuntimeInspector {
     }
 }
 
+enum DNSBridgeFailureDecision: Equatable {
+    case none
+    case debounce
+    case restoreOriginalDNS
+}
+
+struct DNSBridgeFailurePolicy {
+    private let requiredFailures: Int
+    private var consecutiveFailures = 0
+
+    init(requiredFailures: Int = 3) {
+        self.requiredFailures = max(1, requiredFailures)
+    }
+
+    mutating func decide(
+        bridgeReady: Bool,
+        upstreamRuntimeReady: Bool,
+        networkOwned: Bool
+    ) -> DNSBridgeFailureDecision {
+        guard upstreamRuntimeReady, !bridgeReady, networkOwned else {
+            consecutiveFailures = 0
+            return .none
+        }
+        consecutiveFailures += 1
+        return consecutiveFailures >= requiredFailures ? .restoreOriginalDNS : .debounce
+    }
+}
+
 public final class NetworkConsistencyController: @unchecked Sendable {
     private let configuration: ProxyConfiguration
     private let globalDNS: GlobalDNSPreferences
@@ -304,6 +332,7 @@ public final class NetworkConsistencyController: @unchecked Sendable {
     private var timer: DispatchSourceTimer?
     private var previous: NetworkConsistencyHealth?
     private var recoveryPolicy = RuntimeRecoveryPolicy()
+    private var bridgeFailurePolicy = DNSBridgeFailurePolicy()
 
     public init(
         configuration: ProxyConfiguration,
@@ -350,8 +379,8 @@ public final class NetworkConsistencyController: @unchecked Sendable {
     private func evaluate() {
         let before = MihomoRuntimeInspector.inspect(configuration: configuration, globalDNS: globalDNS)
         let kernelReady = before.controllerReachable && before.tunEnabled && before.tunInterface != nil
-        let dnsReady = before.dnsBridgeReady && before.mihomoDNSReady
-        let runtimeReady = kernelReady && dnsReady
+        let upstreamRuntimeReady = kernelReady && before.mihomoDNSReady
+        let runtimeReady = upstreamRuntimeReady && before.dnsBridgeReady
         let networkOwned = ((try? globalDNS.isApplied()) == true)
             || globalDNS.isEffective()
             || globalDNS.hasManagedBackup()
@@ -377,8 +406,30 @@ public final class NetworkConsistencyController: @unchecked Sendable {
             }
         }
 
+        let bridgeDecision = bridgeFailurePolicy.decide(
+            bridgeReady: before.dnsBridgeReady,
+            upstreamRuntimeReady: upstreamRuntimeReady,
+            networkOwned: networkOwned
+        )
+        switch bridgeDecision {
+        case .none:
+            break
+        case .debounce:
+            safetyState.setRuntimeReady(false)
+            action = "debounce_dns_bridge_failure"
+        case .restoreOriginalDNS:
+            safetyState.setRuntimeReady(false)
+            restoreSafeNetwork(source: "dns_bridge_unhealthy")
+            action = "restore_original_dns"
+            changed = true
+            ServiceLog.error(
+                "event=dns_bridge_unhealthy action=restore_original_dns " +
+                "mihomo_dns_ready=\(before.mihomoDNSReady)"
+            )
+        }
+
         let recoveryDecision = recoveryPolicy.decide(
-            runtimeReady: runtimeReady,
+            runtimeReady: upstreamRuntimeReady,
             networkOwned: networkOwned,
             nowNanoseconds: DispatchTime.now().uptimeNanoseconds
         )
@@ -447,15 +498,61 @@ public final class NetworkConsistencyController: @unchecked Sendable {
     }
 
     private func restoreSafeNetwork(source: String) {
-        do {
-            try globalDNS.restore()
-        } catch {
+        let dnsRestored = retryRestore(
+            source: source,
+            component: "system_dns",
+            operation: { try globalDNS.restore() },
+            verify: {
+                (try? globalDNS.isApplied()) != true
+                    && !globalDNS.isEffective()
+                    && !globalDNS.hasManagedBackup()
+            }
+        )
+        if !dnsRestored {
             ServiceLog.error("event=network_restore_failed source=\(source) component=system_dns")
         }
-        do {
-            try aliasManager.removeIfManaged()
-        } catch {
+        let aliasRestored = retryRestore(
+            source: source,
+            component: "loopback_alias",
+            operation: { try aliasManager.removeIfManaged() },
+            verify: { !aliasManager.isManaged() }
+        )
+        if !aliasRestored {
             ServiceLog.error("event=network_restore_failed source=\(source) component=loopback_alias")
         }
+    }
+
+    private func retryRestore(
+        source: String,
+        component: String,
+        attempts: Int = 3,
+        operation: () throws -> Void,
+        verify: () -> Bool
+    ) -> Bool {
+        let maximumAttempts = max(1, attempts)
+        for attempt in 1 ... maximumAttempts {
+            do {
+                try operation()
+                if verify() {
+                    if attempt > 1 {
+                        ServiceLog.info(
+                            "event=network_restore_recovered source=\(source) " +
+                            "component=\(component) attempts=\(attempt)"
+                        )
+                    }
+                    return true
+                }
+            } catch {
+                // Retry without persisting SystemConfiguration error details.
+            }
+            if attempt < maximumAttempts {
+                ServiceLog.info(
+                    "event=network_restore_retry source=\(source) " +
+                    "component=\(component) attempt=\(attempt)"
+                )
+                Thread.sleep(forTimeInterval: Double(attempt) * 0.1)
+            }
+        }
+        return false
     }
 }

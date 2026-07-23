@@ -65,9 +65,22 @@ dig @127.0.0.1 -p 15355 test.invalid A +tcp +time=1 +tries=1 \
   >"$TMP/tcp-response.txt" 2>&1
 grep -q 'status: NOERROR' "$TMP/tcp-response.txt"
 
-if grep -Eq 'test\.invalid' "$TMP/service.log"; then
+PIDS=()
+for index in {1..32}; do
+  dig @127.0.0.1 -p 15355 "parallel-${index}.invalid" A +time=2 +tries=1 \
+    >"$TMP/parallel-${index}.txt" 2>&1 &
+  PIDS+=("$!")
+done
+for pid in "${PIDS[@]}"; do
+  wait "$pid"
+done
+for index in {1..32}; do
+  grep -q 'status: NOERROR' "$TMP/parallel-${index}.txt"
+done
+
+if grep -Eq '(test|parallel-[0-9]+)\.invalid' "$TMP/service.log"; then
   echo "sensitive DNS content leaked to service log" >&2
   exit 1
 fi
 
-echo "mihomo-agent E2E passed (system UDP/TCP DNS -> Mihomo UDP/TCP fallback)"
+echo "mihomo-agent E2E passed (async parallel UDP/TCP DNS -> Mihomo UDP/TCP fallback)"

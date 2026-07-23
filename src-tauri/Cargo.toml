@@ -1,6 +1,6 @@
 [package]
 name = "mihomo-app"
-version = "0.4.1"
+version = "0.4.2"
 description = "A native macOS menu bar controller for Mihomo"
 authors = ["Sheng Lin"]
 license = "MIT"

@@ -1,10 +1,6 @@
 import Darwin
 import Foundation
 
-public protocol DNSForwarding: AnyObject, Sendable {
-    func forward(_ query: Data) throws -> Data
-}
-
 public enum DNSForwardingError: Error, CustomStringConvertible {
     case noUpstream
     case resolveFailed(String)
@@ -15,6 +11,7 @@ public enum DNSForwardingError: Error, CustomStringConvertible {
     case invalidTCPResponse
     case responseMismatch
     case allUpstreamsFailed
+    case originalDNSForbidden
 
     public var description: String {
         switch self {
@@ -27,87 +24,7 @@ public enum DNSForwardingError: Error, CustomStringConvertible {
         case .invalidTCPResponse: return "invalid TCP DNS response"
         case .responseMismatch: return "DNS response transaction ID does not match query"
         case .allUpstreamsFailed: return "all upstream DNS servers failed"
-        }
-    }
-}
-
-public final class FixedDNSForwarder: DNSForwarding, @unchecked Sendable {
-    private let endpoint: Endpoint
-    private let timeoutMilliseconds: Int
-
-    public init(endpoint: Endpoint, timeoutMilliseconds: Int) {
-        self.endpoint = endpoint
-        self.timeoutMilliseconds = timeoutMilliseconds
-    }
-
-    public func forward(_ query: Data) throws -> Data {
-        try DNSMessage.validate(query)
-        return try SocketDNSClient.query(
-            query,
-            endpoint: endpoint,
-            timeoutMilliseconds: timeoutMilliseconds,
-            interfaceName: nil
-        )
-    }
-}
-
-public final class DynamicDNSForwarder: DNSForwarding, @unchecked Sendable {
-    private let state: NetworkDNSState
-    private let timeoutMilliseconds: Int
-
-    public init(state: NetworkDNSState, timeoutMilliseconds: Int) {
-        self.state = state
-        self.timeoutMilliseconds = timeoutMilliseconds
-    }
-
-    public func forward(_ query: Data) throws -> Data {
-        try DNSMessage.validate(query)
-        let snapshot = state.snapshot()
-        let upstream = snapshot.upstream(for: try? DNSMessage.questionName(query))
-        guard !upstream.servers.isEmpty else {
-            throw DNSForwardingError.noUpstream
-        }
-        for server in upstream.servers {
-            let endpoint = Endpoint(host: server, port: 53)
-            do {
-                return try SocketDNSClient.query(
-                    query,
-                    endpoint: endpoint,
-                    timeoutMilliseconds: timeoutMilliseconds,
-                    interfaceName: upstream.interfaceName
-                )
-            } catch {
-                continue
-            }
-        }
-        throw DNSForwardingError.allUpstreamsFailed
-    }
-}
-
-public final class FallbackDNSForwarder: DNSForwarding, @unchecked Sendable {
-    private let primary: DNSForwarding
-    private let fallback: DNSForwarding
-    private let primaryAllowed: @Sendable () -> Bool
-
-    public init(
-        primary: DNSForwarding,
-        fallback: DNSForwarding,
-        primaryAllowed: @escaping @Sendable () -> Bool = { true }
-    ) {
-        self.primary = primary
-        self.fallback = fallback
-        self.primaryAllowed = primaryAllowed
-    }
-
-    public func forward(_ query: Data) throws -> Data {
-        guard primaryAllowed() else {
-            return try fallback.forward(query)
-        }
-        do {
-            return try primary.forward(query)
-        } catch {
-            ServiceLog.error("event=primary_dns_unavailable action=fallback_original_dns")
-            return try fallback.forward(query)
+        case .originalDNSForbidden: return "original DNS fallback is forbidden for this query"
         }
     }
 }

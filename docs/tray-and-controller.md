@@ -92,13 +92,17 @@ reinvoke the installer or request another administrator dialog.
 | Import/switch profile | `profile.import` / `profile.switch` |
 | Start/stop/restart proxy runtime | `agent.start` / `agent.stop` / `agent.restart` |
 | MetaCubeXD controller REST | validated `dashboard.controller-request` |
-| MetaCubeXD live streams | `dashboard.controller-stream-message` |
+| MetaCubeXD live streams | `dashboard.controller-stream-open/next/close` |
 
 The desktop bridge covers the fixed MetaCubeXD controller contract: config,
 proxy and group selection/latency, proxy and rule providers, rules, connection
 close, cache flush, GEO refresh, and the `connections`, `traffic`, `memory`, and
-`logs` WebSockets. The daemon validates method/path/body before forwarding and
-injects the root-owned controller credential. Controller identity fields and
+`logs` WebSockets. Each browser WebSocket owns one long-lived signed CLI/XPC
+session and one long-lived controller WebSocket. Length-framed messages reuse
+that path until close; they do not create a process, XPC peer, or upstream
+WebSocket per message. The daemon limits concurrent sessions, expires abandoned
+sessions, validates method/path/body before forwarding, and injects the
+root-owned controller credential. Controller identity fields and
 the DNS recursion-boundary keys remain non-editable. A config reload with an
 empty payload maps to `profile.reload`; MetaCubeXD's remote-config action may
 send a non-empty inline payload through XPC, but must use an empty `path` so the

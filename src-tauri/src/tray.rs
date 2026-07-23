@@ -401,22 +401,20 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
             return;
         };
         let state = state.inner().clone();
-        let app = app.clone();
+        if state.dashboard.is_none() {
+            show_dashboard_unavailable_prompt();
+            return;
+        }
+        if let Some(window) = app.get_webview_window("main") {
+            prepare_main_window(&window, state.dashboard.as_ref());
+            let _ = window.unminimize();
+            let _ = window.show();
+            let _ = window.set_focus();
+            app_log::info("event=main_window result=shown");
+        }
         tauri::async_runtime::spawn(async move {
             let available = controller_client().controller_available().await;
-            let main_app = app.clone();
-            let _ = app.run_on_main_thread(move || {
-                if !available {
-                    show_service_unavailable_prompt();
-                    return;
-                }
-                if let Some(window) = main_app.get_webview_window("main") {
-                    prepare_main_window(&window, state.dashboard.as_ref());
-                    let _ = window.unminimize();
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
-            });
+            app_log::info(&format!("event=main_window controller_ready={available}"));
         });
         return;
     }
@@ -1157,11 +1155,11 @@ fn show_profile_required_prompt() {
         .status();
 }
 
-fn show_service_unavailable_prompt() {
+fn show_dashboard_unavailable_prompt() {
     let _ = Command::new("/usr/bin/osascript")
         .args([
             "-e",
-            "display dialog \"The current Mihomo service is unavailable. Start the service or repair the daemon before opening the Main Window.\" buttons {\"OK\"} default button \"OK\" with title \"MihomoBox\" with icon caution",
+            "display dialog \"The local Dashboard bridge is unavailable. Reinstall MihomoBox before opening the Main Window.\" buttons {\"OK\"} default button \"OK\" with title \"MihomoBox\" with icon caution",
         ])
         .spawn();
 }

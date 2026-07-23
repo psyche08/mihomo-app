@@ -208,6 +208,8 @@ installer requires both checks to pass.
 
 `--health` reports controller, TUN, Fake-IP route, DNS bridge, Mihomo DNS, and
 system-DNS consistency. The first failed observation immediately disables
-Fake-IP answers and serves real IPs. Recovery starts after three consecutive
+Fake-IP answers. Domains still owned by Fake-IP fail closed instead of leaking
+to original DNS; only domains explicitly excluded by the active Fake-IP policy
+may receive real upstream answers. Recovery starts after three consecutive
 failures; only a failed recovery window rolls back real system DNS and stops
 the managed Mihomo child.

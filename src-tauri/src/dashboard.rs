@@ -227,18 +227,62 @@ fn proxy_websocket(stream: &mut TcpStream, cli: &Path, target: &str, key: &str) 
     }
     let _ = stream.set_read_timeout(Some(Duration::from_millis(1)));
 
-    loop {
-        if client_closed(stream) {
+    let mut child = match Command::new(cli)
+        .args(["rpc", "stream", target])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => {
+            let _ = send_websocket_frame(stream, 0x8, &1011_u16.to_be_bytes());
             return;
         }
-        match invoke(cli, &["rpc", "stream", target], None) {
-            Ok(message) if send_websocket_frame(stream, 0x1, &message).is_ok() => {}
-            _ => {
-                let _ = send_websocket_frame(stream, 0x8, &1011_u16.to_be_bytes());
-                return;
+    };
+    let Some(mut output) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = send_websocket_frame(stream, 0x8, &1011_u16.to_be_bytes());
+        return;
+    };
+
+    loop {
+        if client_closed(stream) {
+            break;
+        }
+        let message = match read_controller_stream_message(&mut output) {
+            Ok(message) => message,
+            Err(error) if error.kind() == ErrorKind::InvalidData => {
+                let _ = send_websocket_frame(stream, 0x8, &1009_u16.to_be_bytes());
+                break;
             }
+            Err(_) => {
+                let _ = send_websocket_frame(stream, 0x8, &1011_u16.to_be_bytes());
+                break;
+            }
+        };
+        if send_websocket_frame(stream, 0x1, &message).is_err() {
+            break;
         }
     }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn read_controller_stream_message(reader: &mut impl Read) -> std::io::Result<Vec<u8>> {
+    let mut length = [0_u8; 4];
+    reader.read_exact(&mut length)?;
+    let length = u32::from_be_bytes(length) as usize;
+    if length > 16 * 1024 * 1024 {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            "controller stream message exceeds 16 MiB",
+        ));
+    }
+    let mut message = vec![0_u8; length];
+    reader.read_exact(&mut message)?;
+    Ok(message)
 }
 
 fn client_closed(stream: &mut TcpStream) -> bool {
@@ -497,5 +541,28 @@ mod tests {
         drop(first);
         assert!(limiter.try_acquire().is_some());
         drop(second);
+    }
+
+    #[test]
+    fn controller_stream_messages_are_length_framed() {
+        let mut framed = Vec::new();
+        framed.extend_from_slice(&5_u32.to_be_bytes());
+        framed.extend_from_slice(b"hello");
+        assert_eq!(
+            read_controller_stream_message(&mut framed.as_slice()).expect("valid frame"),
+            b"hello"
+        );
+    }
+
+    #[test]
+    fn controller_stream_message_limit_is_enforced() {
+        let mut framed = (16_u32 * 1024 * 1024 + 1).to_be_bytes().to_vec();
+        assert_eq!(
+            read_controller_stream_message(&mut framed.as_slice())
+                .expect_err("oversized frame")
+                .kind(),
+            ErrorKind::InvalidData
+        );
+        framed.clear();
     }
 }

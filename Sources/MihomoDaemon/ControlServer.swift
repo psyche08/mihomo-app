@@ -19,7 +19,10 @@ final class ControlDispatcher: @unchecked Sendable {
 
     func dispatch(_ request: ControlRequest) -> ControlResponse {
         let operation = request.operation.rawValue
-        ServiceLog.info("event=control_request operation=\(operation) phase=started")
+        let auditEveryRequest = request.operation != .controllerStreamNext
+        if auditEveryRequest {
+            ServiceLog.info("event=control_request operation=\(operation) phase=started")
+        }
         guard request.version == mihomoControlProtocolVersion else {
             ServiceLog.error("event=control_request operation=\(operation) result=unsupported_version")
             return ControlResponse(success: false, error: "unsupported control protocol version")
@@ -85,13 +88,16 @@ final class ControlDispatcher: @unchecked Sendable {
             case .snapshot, .setTUN, .setOutboundMode, .selectProxy, .testDelay,
                  .controllerVersion, .listRules, .listProxyProviders, .listRuleProviders,
                  .listConnections, .closeAllConnections, .controllerRequest,
-                 .controllerStreamMessage:
+                 .controllerStreamMessage, .controllerStreamOpen, .controllerStreamNext,
+                 .controllerStreamClose:
                 guard agent.isRunning else {
                     throw serverError("Mihomo agent is not running")
                 }
                 payload = try controller.perform(request)
             }
-            ServiceLog.info("event=control_request operation=\(operation) result=success")
+            if auditEveryRequest {
+                ServiceLog.info("event=control_request operation=\(operation) result=success")
+            }
             return ControlResponse(success: true, payload: payload)
         } catch {
             ServiceLog.error("event=control_request operation=\(operation) result=failed")

@@ -683,6 +683,39 @@ private func writePayload(_ payload: Data?) throws {
     if payload.last != 0x0a { FileHandle.standardOutput.write(Data([0x0a])) }
 }
 
+private func streamController(_ target: String) throws -> Int32 {
+    let session = try MihomoControlSession()
+    let opened = try session.send(ControlRequest(
+        operation: .controllerStreamOpen,
+        arguments: ["target": target]
+    )).payload
+    guard let opened,
+          let object = try JSONSerialization.jsonObject(with: opened) as? [String: Any],
+          let identifier = object["session"] as? String,
+          UUID(uuidString: identifier) != nil else {
+        throw CLIError(message: "the daemon returned an invalid stream session")
+    }
+    defer {
+        _ = try? session.send(ControlRequest(
+            operation: .controllerStreamClose,
+            arguments: ["session": identifier]
+        ))
+    }
+
+    while true {
+        let payload = try session.send(ControlRequest(
+            operation: .controllerStreamNext,
+            arguments: ["session": identifier]
+        )).payload ?? Data()
+        guard payload.count <= 16 * 1_024 * 1_024 else {
+            throw CLIError(message: "controller stream message exceeds 16 MiB")
+        }
+        var length = UInt32(payload.count).bigEndian
+        FileHandle.standardOutput.write(Data(bytes: &length, count: MemoryLayout<UInt32>.size))
+        FileHandle.standardOutput.write(payload)
+    }
+}
+
 private func performRPC(_ arguments: [String]) throws -> Int32 {
     guard let operation = arguments.first else {
         throw CLIError(message: "missing rpc operation")
@@ -752,10 +785,7 @@ private func performRPC(_ arguments: [String]) throws -> Int32 {
         guard values.count == 1 else {
             throw CLIError(message: "usage: mihomoboxctl rpc stream TARGET")
         }
-        payload = try sendControl(
-            .controllerStreamMessage,
-            arguments: ["target": values[0]]
-        )
+        return try streamController(values[0])
     default:
         throw CLIError(message: "unknown rpc operation: \(operation)")
     }
