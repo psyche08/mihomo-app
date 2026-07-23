@@ -36,6 +36,62 @@ codesign_with_retry() {
   done
 }
 
+notarize_with_retry() {
+  local target="$1"
+  local attempt=1
+  local delay=5
+  local maximum_attempts=5
+  local submission_id=""
+  local uploaded=false
+  local output
+  local status
+  while true; do
+    output="$(/usr/bin/mktemp /private/tmp/mihomobox-notary.XXXXXX)"
+    set +e
+    if [[ "$uploaded" == true ]]; then
+      /usr/bin/xcrun notarytool wait "$submission_id" \
+        --apple-id "$NOTARY_APPLE_ID" \
+        --team-id "$NOTARY_TEAM_ID" \
+        --password "$NOTARY_PASSWORD" \
+        --timeout 30m 2>&1 | /usr/bin/tee "$output"
+    else
+      /usr/bin/xcrun notarytool submit "$target" \
+        --apple-id "$NOTARY_APPLE_ID" \
+        --team-id "$NOTARY_TEAM_ID" \
+        --password "$NOTARY_PASSWORD" \
+        --no-s3-acceleration \
+        --wait \
+        --timeout 30m 2>&1 | /usr/bin/tee "$output"
+    fi
+    status="${PIPESTATUS[0]}"
+    set -e
+    if (( status == 0 )); then
+      /bin/rm -f -- "$output"
+      return 0
+    fi
+    if /usr/bin/grep -Eq 'status: (Invalid|Rejected)' "$output"; then
+      /bin/rm -f -- "$output"
+      return "$status"
+    fi
+    if [[ -z "$submission_id" ]]; then
+      submission_id="$(/usr/bin/sed -n 's/^  id: \([0-9A-Fa-f-]*\)$/\1/p' "$output" | /usr/bin/head -1)"
+    fi
+    if [[ -n "$submission_id" ]] \
+      && /usr/bin/grep -q 'Successfully uploaded file' "$output"; then
+      uploaded=true
+    fi
+    /bin/rm -f -- "$output"
+    if (( attempt >= maximum_attempts )); then
+      echo "notarization failed after $attempt attempts: $target" >&2
+      return "$status"
+    fi
+    echo "notarization retry attempt=$attempt delay_seconds=$delay uploaded=$uploaded" >&2
+    /bin/sleep "$delay"
+    attempt=$((attempt + 1))
+    delay=$((delay * 2))
+  done
+}
+
 cd "$ROOT"
 VERSION="$(/usr/bin/env node -p "require('./src-tauri/tauri.conf.json').version")"
 if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
@@ -73,13 +129,7 @@ codesign_with_retry "$APP" --options runtime
 /bin/mkdir -p "$DIST"
 /bin/rm -f "$ARCHIVE"
 /usr/bin/ditto -c -k --keepParent "$APP" "$ARCHIVE"
-/usr/bin/xcrun notarytool submit "$ARCHIVE" \
-  --apple-id "$NOTARY_APPLE_ID" \
-  --team-id "$NOTARY_TEAM_ID" \
-  --password "$NOTARY_PASSWORD" \
-  --no-s3-acceleration \
-  --wait \
-  --timeout 30m
+notarize_with_retry "$ARCHIVE"
 /usr/bin/xcrun stapler staple "$APP"
 /usr/bin/xcrun stapler validate "$APP"
 /bin/rm -f "$ARCHIVE"
@@ -124,13 +174,7 @@ EOF
   "$DMG"
 codesign_with_retry "$DMG"
 /usr/bin/codesign --verify --verbose=2 "$DMG"
-/usr/bin/xcrun notarytool submit "$DMG" \
-  --apple-id "$NOTARY_APPLE_ID" \
-  --team-id "$NOTARY_TEAM_ID" \
-  --password "$NOTARY_PASSWORD" \
-  --no-s3-acceleration \
-  --wait \
-  --timeout 30m
+notarize_with_retry "$DMG"
 /usr/bin/xcrun stapler staple "$DMG"
 /usr/bin/xcrun stapler validate "$DMG"
 /usr/sbin/spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG"
