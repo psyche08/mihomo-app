@@ -690,6 +690,9 @@ private func performRPC(_ arguments: [String]) throws -> Int32 {
     let values = Array(arguments.dropFirst())
     let payload: Data?
     switch operation {
+    case "tray-state":
+        try requireNoExtraArguments(values)
+        payload = try sendControl(.trayState)
     case "snapshot":
         try requireNoExtraArguments(values)
         payload = try sendControl(.snapshot)

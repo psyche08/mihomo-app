@@ -14,7 +14,11 @@ bundle.
 
 The visible bundle is `MihomoBox.app`. Existing
 `/Library/Application Support/Mihomo App` and `/Library/Logs/Mihomo App` paths
-remain stable so upgrades preserve configuration, DNS backups, and logs.
+remain stable so upgrades preserve configuration, DNS backups, and structured
+diagnostic logs. Upgrade installation removes legacy raw `mihomo.log`
+generations because older Mihomo output may contain DNS names or endpoints.
+The upgraded supervisor performs the same one-time cleanup after component-only
+automatic updates, so this does not depend on rerunning the installer.
 
 The installer:
 
@@ -43,6 +47,11 @@ authenticated XPC channel, are independently validated against the same leaf
 certificate, atomically replaced with rollback, and restarted by the daemon or
 launchd. Plist, configuration-helper, path-layout, or signing-certificate
 migrations still require **Install / Repair Daemon**.
+
+The App checks for updates thirty seconds after launch and every six hours after
+a successful check. Network or feed failures retry with exponential delays from
+thirty seconds to thirty minutes. The updater logs only error categories and
+retry counters, never endpoint URLs.
 
 Inspect without changes:
 
@@ -159,9 +168,11 @@ importing or refreshing requires supplying them again.
 ```
 
 Every file is limited to 100 MiB and keeps three numbered generations (`.1`
-through `.3`). The crash logs are independent of normal rotation so a panic or
-fatal-signal record survives even when the main log rolls. The tray's
-`Tools > Open Diagnostic Logs…` command opens both user and daemon log folders.
+through `.3`). Normal logs are batch-written at most once per second or when
+64 KiB is ready. `mihomo.log` contains aggregate output counts rather than raw
+Mihomo lines. The crash logs are independent of normal rotation so a panic or
+fatal-signal record survives even when the main log rolls. The tray's `Tools >
+Open Diagnostic Logs…` command opens both user and daemon log folders.
 
 The user paths stage local tray imports before daemon installation. The signed
 installer validates the selected staged profile, copies it into the root-owned
@@ -196,6 +207,7 @@ available). `scutil --dns` verifies the effective dynamic resolver state; the
 installer requires both checks to pass.
 
 `--health` reports controller, TUN, Fake-IP route, DNS bridge, Mihomo DNS, and
-system-DNS consistency. A first DNS probe failure immediately disables Fake-IP
-answers and serves real IPs; a consecutive failure rolls back real system DNS
-and stops the managed Mihomo child.
+system-DNS consistency. The first failed observation immediately disables
+Fake-IP answers and serves real IPs. Recovery starts after three consecutive
+failures; only a failed recovery window rolls back real system DNS and stops
+the managed Mihomo child.

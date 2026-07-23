@@ -77,6 +77,11 @@ credentials remain root-owned and are never returned over XPC. Profile bytes
 are capped, validated, handled in memory or mode-`0600` root-owned staging, and
 never passed through command-line arguments.
 
+Mihomo stdout/stderr is reduced in memory to aggregate line, byte, and severity
+counts before it reaches disk. Upgrade installation removes legacy raw Mihomo
+log generations that could predate this boundary. Normal audit logs are
+batch-written; fatal-signal logs remain isolated and synchronous.
+
 HTTP subscription credentials live only in the importing user process and are
 not persisted. Downloads use an ephemeral URL session, reject non-HTTP(S) and
 HTTPS downgrade redirects, remove authentication headers on cross-origin
@@ -92,3 +97,5 @@ bytes to the daemon through XPC.
 - A stale PID is terminated only after executable-path verification.
 - Profile reload is serialized by the daemon and rolls back configuration and
   agent state together on failure.
+- Repeated child failures use bounded exponential backoff and open a circuit
+  after six short-lived failures instead of looping indefinitely.

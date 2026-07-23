@@ -65,6 +65,7 @@ public struct NetworkConsistencyHealth: Codable, Equatable {
 
 enum RuntimeRecoveryDecision: Equatable {
     case none
+    case debounce
     case start
     case wait
     case recovered
@@ -73,31 +74,42 @@ enum RuntimeRecoveryDecision: Equatable {
 
 struct RuntimeRecoveryPolicy {
     private(set) var deadlineNanoseconds: UInt64?
+    private(set) var consecutiveFailures = 0
     let graceNanoseconds: UInt64
+    let requiredFailures: Int
 
-    init(graceSeconds: UInt64 = 8) {
+    init(graceSeconds: UInt64 = 8, requiredFailures: Int = 3) {
         graceNanoseconds = graceSeconds * 1_000_000_000
+        self.requiredFailures = max(1, requiredFailures)
     }
 
     mutating func decide(runtimeReady: Bool, networkOwned: Bool, nowNanoseconds: UInt64) -> RuntimeRecoveryDecision {
         if runtimeReady {
             let recovered = deadlineNanoseconds != nil
             deadlineNanoseconds = nil
+            consecutiveFailures = 0
             return recovered ? .recovered : .none
         }
         guard networkOwned else {
             deadlineNanoseconds = nil
+            consecutiveFailures = 0
             return .none
         }
-        guard let deadlineNanoseconds else {
-            self.deadlineNanoseconds = nowNanoseconds &+ graceNanoseconds
-            return .start
+        if let deadlineNanoseconds {
+            if nowNanoseconds < deadlineNanoseconds {
+                return .wait
+            }
+            self.deadlineNanoseconds = nil
+            consecutiveFailures = 0
+            return .failed
         }
-        if nowNanoseconds < deadlineNanoseconds {
-            return .wait
+        consecutiveFailures += 1
+        guard consecutiveFailures >= requiredFailures else {
+            return .debounce
         }
-        self.deadlineNanoseconds = nil
-        return .failed
+        consecutiveFailures = 0
+        deadlineNanoseconds = nowNanoseconds &+ graceNanoseconds
+        return .start
     }
 }
 
@@ -373,6 +385,9 @@ public final class NetworkConsistencyController: @unchecked Sendable {
         switch recoveryDecision {
         case .none:
             break
+        case .debounce:
+            safetyState.setRuntimeReady(false)
+            action = "debounce_runtime_failure"
         case .start:
             safetyState.setRuntimeReady(false)
             runtimeRecoveryHandler()
@@ -381,7 +396,8 @@ public final class NetworkConsistencyController: @unchecked Sendable {
             ServiceLog.error(
                 "event=network_drift_detected action=recover_runtime " +
                 "controller_ready=\(before.controllerReachable) tun_enabled=\(before.tunEnabled) " +
-                "route_ready=\(before.fakeIPRouteReady) dns_ready=\(dnsReady)"
+                "route_ready=\(before.fakeIPRouteReady) " +
+                "dns_bridge_ready=\(before.dnsBridgeReady) mihomo_dns_ready=\(before.mihomoDNSReady)"
             )
         case .wait:
             safetyState.setRuntimeReady(false)

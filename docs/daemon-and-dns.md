@@ -89,11 +89,12 @@ keys. On change it:
 An independent two-second consistency observer also detects later drift. A DNS
 preference or effective-state change is reapplied while the managed runtime is
 healthy. If the TUN/Fake-IP route, controller, or Mihomo DNS disappears, the
-agent immediately disables Fake-IP answers, requests a restart from its sole
-owned Mihomo supervisor, and allows eight seconds for Mihomo to rebuild the
-complete auto-route state. During that window the loopback DNS bridge serves
-real upstream answers. Only a failed recovery rolls back system DNS and stops
-the child.
+agent immediately disables Fake-IP answers. It requests recovery only after
+three consecutive failed observations, filtering short startup and interface
+transition gaps. The sole owned Mihomo supervisor then allows eight seconds for
+Mihomo to rebuild the complete auto-route state. During that window the
+loopback DNS bridge serves real upstream answers. Only a failed recovery rolls
+back system DNS and stops the child.
 
 When the persistent service DNS value already matches but the PrimaryService's
 dynamic DNS value is absent, the agent reapplies preferences and republishes
@@ -111,6 +112,16 @@ audited.
 
 Lifecycle, configuration commands, child exits/restarts, network transitions,
 drift detection, repair attempts, and repair outcomes are structured audit
-events. Each log file is capped at 100 MiB and retains three numbered rotated
-generations. Fatal signals are also synchronously appended to a separate crash
-log before the operating system receives the signal.
+events. Mihomo stdout/stderr is never persisted verbatim: only line, byte, and
+severity counts are emitted. Normal logs are buffered for up to one second or
+64 KiB before writing. Each log file is capped at 100 MiB and retains three
+numbered rotated generations. Fatal signals are also synchronously appended to
+a separate crash log before the operating system receives the signal.
+The first sanitized supervisor start removes legacy raw Mihomo log generations
+and writes a mode-`0600` migration marker; later starts preserve aggregate logs.
+
+The daemon's agent supervisor and the agent's Mihomo supervisor restart failed
+children with exponential delays from one to thirty seconds. Six consecutive
+short-lived failures open a circuit instead of creating a restart storm; an
+agent circuit also restores safe system DNS. A process that remains healthy for
+sixty seconds resets the failure sequence.

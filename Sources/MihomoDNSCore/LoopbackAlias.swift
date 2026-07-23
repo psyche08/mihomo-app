@@ -35,7 +35,6 @@ public final class LoopbackAliasManager: @unchecked Sendable {
 
     public func ensure() throws {
         if try isPresent() {
-            ServiceLog.info("event=loopback_alias_ready address=\(address) existing=true")
             return
         }
         let result = mihomo_dns_add_ipv4_alias(interfaceName, address, netmask)
@@ -54,7 +53,7 @@ public final class LoopbackAliasManager: @unchecked Sendable {
             _ = mihomo_dns_remove_ipv4_alias(interfaceName, address)
             throw error
         }
-        ServiceLog.info("event=loopback_alias_ready address=\(address) existing=false")
+        ServiceLog.info("event=loopback_alias_ready existing=false")
     }
 
     public func removeIfManaged() throws {
@@ -64,6 +63,6 @@ public final class LoopbackAliasManager: @unchecked Sendable {
             throw LoopbackAliasError.operationFailed("remove", result)
         }
         try FileManager.default.removeItem(atPath: markerPath)
-        ServiceLog.info("event=loopback_alias_removed address=\(address)")
+        ServiceLog.info("event=loopback_alias_removed")
     }
 }

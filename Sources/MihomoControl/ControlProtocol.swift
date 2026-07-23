@@ -10,6 +10,7 @@ public let mihomoControlMaximumPayloadBytes = 256 * 1_024 * 1_024
 public enum ControlOperation: String, Codable, Sendable {
     case ping = "protocol.ping"
     case status = "service.status"
+    case trayState = "runtime.tray-state"
     case snapshot = "runtime.snapshot"
     case startAgent = "agent.start"
     case stopAgent = "agent.stop"

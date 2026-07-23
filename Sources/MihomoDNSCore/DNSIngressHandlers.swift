@@ -31,7 +31,7 @@ final class DNSUDPHandler: ChannelInboundHandler {
     }
 
     func errorCaught(context: ChannelHandlerContext, error: Error) {
-        ServiceLog.error("event=udp_listener_error error=\(String(describing: error))")
+        ServiceLog.error("event=udp_listener_error")
     }
 }
 
@@ -92,7 +92,7 @@ final class DNSTCPHandler: ChannelInboundHandler {
     }
 
     func errorCaught(context: ChannelHandlerContext, error: Error) {
-        ServiceLog.error("event=tcp_listener_error error=\(String(describing: error))")
+        ServiceLog.error("event=tcp_listener_error")
         context.close(promise: nil)
     }
 }

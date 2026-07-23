@@ -1,6 +1,6 @@
 [package]
 name = "mihomo-app"
-version = "0.4.0"
+version = "0.4.1"
 description = "A native macOS menu bar controller for Mihomo"
 authors = ["Sheng Lin"]
 license = "MIT"
@@ -21,7 +21,7 @@ serde_json = "1"
 tauri = { version = "2.11.5", features = ["tray-icon", "image-png"] }
 tauri-plugin-process = "2"
 tauri-plugin-updater = "2"
-tokio = { version = "1", features = ["rt", "time"] }
+tokio = { version = "1", features = ["process", "rt", "time"] }
 
 [profile.release]
 codegen-units = 1

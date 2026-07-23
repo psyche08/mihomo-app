@@ -201,6 +201,7 @@ def apply(
     lines = lines[: start + 1] + block + lines[end:]
     lines = replace_top_level_scalar(lines, "external-controller", f"{host}:{port}")
     lines = replace_top_level_scalar(lines, "secret", json.dumps(secret))
+    lines = replace_top_level_scalar(lines, "log-level", "warning")
     if direct_scalar(lines, "tun", "enable") != "true":
         raise ValueError("managed system DNS requires tun.enable: true")
     config.write_text("".join(lines), encoding="utf-8")

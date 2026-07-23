@@ -650,6 +650,11 @@ install_daemon() {
     wait_for_job_absent "$LABEL"
   fi
   wait_for_managed_process_absent
+  run /bin/rm -f \
+    "$LOG_DIR/mihomo.log" \
+    "$LOG_DIR/mihomo.log.1" \
+    "$LOG_DIR/mihomo.log.2" \
+    "$LOG_DIR/mihomo.log.3"
   run /usr/bin/install -o root -g wheel -m 0644 \
     "$RESOURCE_ROOT/dev.linsheng.mihomo.daemon.plist" "$PLIST"
   run /bin/rm -f "$RENAMED_PLIST"

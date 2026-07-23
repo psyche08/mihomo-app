@@ -5,8 +5,58 @@ use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+
+const MAXIMUM_CONNECTIONS: usize = 32;
+
+struct ConnectionLimiter {
+    active: AtomicUsize,
+    maximum: usize,
+}
+
+impl ConnectionLimiter {
+    fn new(maximum: usize) -> Arc<Self> {
+        Arc::new(Self {
+            active: AtomicUsize::new(0),
+            maximum: maximum.max(1),
+        })
+    }
+
+    fn try_acquire(self: &Arc<Self>) -> Option<ConnectionPermit> {
+        let mut active = self.active.load(Ordering::Acquire);
+        loop {
+            if active >= self.maximum {
+                return None;
+            }
+            match self.active.compare_exchange_weak(
+                active,
+                active + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    return Some(ConnectionPermit {
+                        limiter: self.clone(),
+                    });
+                }
+                Err(observed) => active = observed,
+            }
+        }
+    }
+}
+
+struct ConnectionPermit {
+    limiter: Arc<ConnectionLimiter>,
+}
+
+impl Drop for ConnectionPermit {
+    fn drop(&mut self) {
+        self.limiter.active.fetch_sub(1, Ordering::AcqRel);
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct DashboardBridge {
@@ -21,15 +71,27 @@ impl DashboardBridge {
         let secret = random_secret()?;
         let worker_secret = secret.clone();
         let cli = cli.to_path_buf();
+        let limiter = ConnectionLimiter::new(MAXIMUM_CONNECTIONS);
         thread::Builder::new()
             .name("mihomobox-dashboard-xpc-bridge".to_string())
             .spawn(move || {
-                for stream in listener.incoming().flatten() {
+                for incoming in listener.incoming() {
+                    let Ok(stream) = incoming else {
+                        thread::sleep(Duration::from_millis(100));
+                        continue;
+                    };
+                    let Some(permit) = limiter.try_acquire() else {
+                        app_log::error("event=dashboard_request result=connection_limit");
+                        continue;
+                    };
                     let cli = cli.clone();
                     let secret = worker_secret.clone();
                     let _ = thread::Builder::new()
                         .name("mihomobox-dashboard-request".to_string())
-                        .spawn(move || handle(stream, &cli, &secret));
+                        .spawn(move || {
+                            let _permit = permit;
+                            handle(stream, &cli, &secret);
+                        });
                 }
             })
             .ok()?;
@@ -424,5 +486,16 @@ mod tests {
         assert!(has_inline_config_payload(
             br#"{"path":"","payload":"mode: rule\n"}"#
         ));
+    }
+
+    #[test]
+    fn connection_limiter_releases_capacity() {
+        let limiter = ConnectionLimiter::new(2);
+        let first = limiter.try_acquire().expect("first permit");
+        let second = limiter.try_acquire().expect("second permit");
+        assert!(limiter.try_acquire().is_none());
+        drop(first);
+        assert!(limiter.try_acquire().is_some());
+        drop(second);
     }
 }

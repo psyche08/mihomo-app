@@ -36,6 +36,23 @@ final class ControlDispatcher: @unchecked Sendable {
                 var status = (try? JSONSerialization.jsonObject(with: agent.health())) as? [String: Any] ?? [:]
                 status["agent_running"] = agent.isRunning
                 payload = try JSONSerialization.data(withJSONObject: status, options: [.sortedKeys])
+            case .trayState:
+                let agentRunning = agent.isRunning
+                let snapshotData = agentRunning
+                    ? try? controller.perform(ControlRequest(operation: .snapshot))
+                    : nil
+                let snapshot = snapshotData.flatMap {
+                    try? JSONSerialization.jsonObject(with: $0)
+                }
+                let profileState = try JSONSerialization.jsonObject(with: profiles.list())
+                let health = (try? agent.health())
+                    .flatMap { try? JSONSerialization.jsonObject(with: $0) }
+                payload = try JSONSerialization.data(withJSONObject: [
+                    "agent_running": agentRunning,
+                    "snapshot": snapshot ?? NSNull(),
+                    "profiles": profileState,
+                    "health": health ?? NSNull(),
+                ], options: [.sortedKeys])
             case .startAgent:
                 try agent.start()
                 payload = nil

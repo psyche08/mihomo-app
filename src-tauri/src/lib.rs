@@ -38,4 +38,5 @@ pub fn run() {
         Ok(()) => app_log::info("event=app_stopped reason=normal"),
         Err(_) => app_log::error("event=app_stopped reason=tauri_error"),
     }
+    app_log::flush();
 }

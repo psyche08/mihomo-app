@@ -291,14 +291,16 @@ final class CoreTests: XCTestCase {
 
     func testRuntimeRecoveryPolicyStartsWaitsAndRecovers() {
         var policy = RuntimeRecoveryPolicy(graceSeconds: 8)
-        XCTAssertEqual(policy.decide(runtimeReady: false, networkOwned: true, nowNanoseconds: 10), .start)
-        XCTAssertEqual(policy.decide(runtimeReady: false, networkOwned: true, nowNanoseconds: 11), .wait)
-        XCTAssertEqual(policy.decide(runtimeReady: true, networkOwned: true, nowNanoseconds: 12), .recovered)
-        XCTAssertEqual(policy.decide(runtimeReady: true, networkOwned: true, nowNanoseconds: 13), .none)
+        XCTAssertEqual(policy.decide(runtimeReady: false, networkOwned: true, nowNanoseconds: 10), .debounce)
+        XCTAssertEqual(policy.decide(runtimeReady: false, networkOwned: true, nowNanoseconds: 11), .debounce)
+        XCTAssertEqual(policy.decide(runtimeReady: false, networkOwned: true, nowNanoseconds: 12), .start)
+        XCTAssertEqual(policy.decide(runtimeReady: false, networkOwned: true, nowNanoseconds: 13), .wait)
+        XCTAssertEqual(policy.decide(runtimeReady: true, networkOwned: true, nowNanoseconds: 14), .recovered)
+        XCTAssertEqual(policy.decide(runtimeReady: true, networkOwned: true, nowNanoseconds: 15), .none)
     }
 
     func testRuntimeRecoveryPolicyFailsAfterGraceWindow() {
-        var policy = RuntimeRecoveryPolicy(graceSeconds: 1)
+        var policy = RuntimeRecoveryPolicy(graceSeconds: 1, requiredFailures: 1)
         XCTAssertEqual(policy.decide(runtimeReady: false, networkOwned: true, nowNanoseconds: 20), .start)
         XCTAssertEqual(
             policy.decide(runtimeReady: false, networkOwned: true, nowNanoseconds: 1_000_000_019),
@@ -325,11 +327,67 @@ final class CoreTests: XCTestCase {
 
         XCTAssertTrue(writer.append(Data(repeating: 1, count: 7)))
         XCTAssertTrue(writer.append(Data(repeating: 2, count: 7)))
+        XCTAssertTrue(writer.flush())
 
         let current = try FileManager.default.attributesOfItem(atPath: path)[.size] as? NSNumber
         let rotated = try FileManager.default.attributesOfItem(atPath: "\(path).1")[.size] as? NSNumber
         XCTAssertEqual(current?.intValue, 4)
         XCTAssertEqual(rotated?.intValue, 10)
+    }
+
+    func testRestartBackoffIsExponentialAndOpensCircuit() {
+        var policy = RestartBackoffPolicy(
+            baseDelayMilliseconds: 100,
+            maximumDelayMilliseconds: 250,
+            maximumFailures: 4,
+            stableRuntimeMilliseconds: 1_000
+        )
+
+        XCTAssertEqual(policy.recordFailure(runtimeMilliseconds: 0), .retry(delayMilliseconds: 100, failures: 1))
+        XCTAssertEqual(policy.recordFailure(runtimeMilliseconds: 0), .retry(delayMilliseconds: 200, failures: 2))
+        XCTAssertEqual(policy.recordFailure(runtimeMilliseconds: 0), .retry(delayMilliseconds: 250, failures: 3))
+        XCTAssertEqual(policy.recordFailure(runtimeMilliseconds: 0), .open(failures: 4))
+        XCTAssertEqual(policy.recordFailure(runtimeMilliseconds: 1_000), .retry(delayMilliseconds: 100, failures: 1))
+    }
+
+    func testSanitizedProcessLogNeverPersistsRawContent() throws {
+        let accumulator = SanitizedProcessLogAccumulator(maximumLines: 2)
+        let message =
+            "level=warning url=https://secret.example/sub?token=credential\n" +
+            "level=error domain=private.example\n"
+        let raw = Data(message.utf8)
+
+        let summary = try XCTUnwrap(accumulator.ingest(raw))
+        let text = try XCTUnwrap(String(data: summary, encoding: .utf8))
+        XCTAssertTrue(text.contains("event=mihomo_output_summary"))
+        XCTAssertTrue(text.contains("lines=2"))
+        XCTAssertTrue(text.contains("warning=1"))
+        XCTAssertTrue(text.contains("error=1"))
+        XCTAssertFalse(text.contains("secret.example"))
+        XCTAssertFalse(text.contains("credential"))
+        XCTAssertFalse(text.contains("private.example"))
+    }
+
+    func testSanitizedProcessLogMigrationRemovesLegacyGenerationsOnlyOnce() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appendingPathComponent("mihomo.log").path
+        for candidate in [path, "\(path).1", "\(path).2", "\(path).3"] {
+            try Data("domain=legacy.example\n".utf8).write(to: URL(fileURLWithPath: candidate))
+        }
+
+        try SanitizedProcessLogMigration.prepare(logPath: path)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: "\(path).sanitized-v1"))
+
+        try Data("event=mihomo_output_summary\n".utf8).write(to: URL(fileURLWithPath: path))
+        try SanitizedProcessLogMigration.prepare(logPath: path)
+        XCTAssertEqual(
+            try String(contentsOfFile: path, encoding: .utf8),
+            "event=mihomo_output_summary\n"
+        )
     }
 }
 

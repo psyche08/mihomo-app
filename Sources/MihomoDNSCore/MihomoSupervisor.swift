@@ -23,10 +23,15 @@ public final class MihomoSupervisor: @unchecked Sendable {
     private var restartWorkItem: DispatchWorkItem?
     private var startedAt: Date?
     private var stopping = false
+    private var circuitOpen = false
+    private var restartBackoff: RestartBackoffPolicy
 
     public init(configuration: MihomoProcessConfiguration) {
         self.configuration = configuration
         logWriter = RotatingFileWriter(path: configuration.logPath)
+        restartBackoff = RestartBackoffPolicy(
+            baseDelayMilliseconds: configuration.restartDelayMilliseconds
+        )
     }
 
     public func start() throws {
@@ -37,8 +42,11 @@ public final class MihomoSupervisor: @unchecked Sendable {
             throw MihomoSupervisorError.configMissing(configuration.configPath)
         }
         try stopStaleOwnedProcess()
+        try SanitizedProcessLogMigration.prepare(logPath: configuration.logPath)
         lock.lock()
         stopping = false
+        circuitOpen = false
+        restartBackoff.reset()
         lock.unlock()
         try launch()
     }
@@ -62,16 +70,18 @@ public final class MihomoSupervisor: @unchecked Sendable {
             }
         }
         try? FileManager.default.removeItem(atPath: configuration.pidPath)
+        _ = logWriter.flush()
     }
 
     public func requestRecovery() {
         lock.lock()
-        guard !stopping else {
+        guard !stopping, !circuitOpen else {
             lock.unlock()
             return
         }
         let active = process
         let restartPending = restartWorkItem != nil
+        let failures = restartBackoff.consecutiveFailures
         lock.unlock()
 
         if let active, active.isRunning {
@@ -79,7 +89,10 @@ public final class MihomoSupervisor: @unchecked Sendable {
             active.terminate()
         } else if !restartPending {
             ServiceLog.info("event=mihomo_recovery_requested action=start")
-            scheduleRestart()
+            scheduleRestart(
+                delayMilliseconds: configuration.restartDelayMilliseconds,
+                failures: failures
+            )
         }
     }
 
@@ -108,16 +121,21 @@ public final class MihomoSupervisor: @unchecked Sendable {
         }
         try? pipe.fileHandleForWriting.close()
         DispatchQueue.global(qos: .utility).async {
-            var writeFailed = false
+            let accumulator = SanitizedProcessLogAccumulator()
             while true {
                 guard let data = try? pipe.fileHandleForReading.read(upToCount: 64 * 1_024),
                       !data.isEmpty else {
                     break
                 }
-                if !logWriter.append(data) { writeFailed = true }
+                if let summary = accumulator.ingest(data) {
+                    _ = logWriter.append(summary)
+                }
             }
             try? pipe.fileHandleForReading.close()
-            if writeFailed {
+            if let summary = accumulator.finish() {
+                _ = logWriter.append(summary)
+            }
+            if !logWriter.flush() {
                 ServiceLog.error("event=mihomo_log_write_failed")
             }
         }
@@ -147,6 +165,12 @@ public final class MihomoSupervisor: @unchecked Sendable {
         let runtimeMilliseconds = startedAt.map { max(0, Int(Date().timeIntervalSince($0) * 1_000)) }
         startedAt = nil
         let shouldRestart = !stopping
+        let decision = shouldRestart
+            ? restartBackoff.recordFailure(runtimeMilliseconds: runtimeMilliseconds ?? 0)
+            : nil
+        if case .some(.open) = decision {
+            circuitOpen = true
+        }
         lock.unlock()
         try? FileManager.default.removeItem(atPath: configuration.pidPath)
         let reasonName = reason == .uncaughtSignal ? "signal" : "exit"
@@ -155,10 +179,17 @@ public final class MihomoSupervisor: @unchecked Sendable {
             "event=mihomo_exited pid=\(pid) reason=\(reasonName) status=\(status) " +
             "runtime_ms=\(runtime) restart=\(shouldRestart)"
         )
-        if shouldRestart { scheduleRestart() }
+        switch decision {
+        case let .retry(delayMilliseconds, failures):
+            scheduleRestart(delayMilliseconds: delayMilliseconds, failures: failures)
+        case let .open(failures):
+            ServiceLog.error("event=mihomo_circuit_open failures=\(failures)")
+        case nil:
+            break
+        }
     }
 
-    private func scheduleRestart() {
+    private func scheduleRestart(delayMilliseconds: Int, failures: Int) {
         let item = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.lock.lock()
@@ -169,24 +200,39 @@ public final class MihomoSupervisor: @unchecked Sendable {
             do {
                 try self.launch()
             } catch {
-                ServiceLog.error("event=mihomo_restart_failed error=\(String(describing: error))")
-                self.scheduleRestart()
+                ServiceLog.error("event=mihomo_restart_failed reason=launch_failed")
+                self.handleLaunchFailure()
             }
         }
         lock.lock()
-        guard !stopping, process == nil, restartWorkItem == nil else {
+        guard !stopping, !circuitOpen, process == nil, restartWorkItem == nil else {
             lock.unlock()
             return
         }
         restartWorkItem = item
         lock.unlock()
         ServiceLog.info(
-            "event=mihomo_restart_scheduled delay_ms=\(configuration.restartDelayMilliseconds)"
+            "event=mihomo_restart_scheduled delay_ms=\(delayMilliseconds) failures=\(failures)"
         )
         restartQueue.asyncAfter(
-            deadline: .now() + .milliseconds(configuration.restartDelayMilliseconds),
+            deadline: .now() + .milliseconds(delayMilliseconds),
             execute: item
         )
+    }
+
+    private func handleLaunchFailure() {
+        lock.lock()
+        let decision = restartBackoff.recordFailure(runtimeMilliseconds: 0)
+        if case .open = decision {
+            circuitOpen = true
+        }
+        lock.unlock()
+        switch decision {
+        case let .retry(delayMilliseconds, failures):
+            scheduleRestart(delayMilliseconds: delayMilliseconds, failures: failures)
+        case let .open(failures):
+            ServiceLog.error("event=mihomo_circuit_open failures=\(failures)")
+        }
     }
 
     private func stopStaleOwnedProcess() throws {

@@ -97,10 +97,7 @@ public final class ProxyService {
 
         let snapshot = networkState.snapshot()
         ServiceLog.info(
-            "event=service_started system_dns=\(configuration.systemDNSListen.host):\(configuration.systemDNSListen.port) " +
-            "mihomo=\(configuration.mihomoDNS.host):\(configuration.mihomoDNS.port) " +
-            "upstream_listener=\(configuration.upstreamListen.host):\(configuration.upstreamListen.port) " +
-            "original_dns_count=\(snapshot.servers.count)"
+            "event=service_started original_dns_count=\(snapshot.servers.count)"
         )
     }
 

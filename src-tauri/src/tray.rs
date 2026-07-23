@@ -7,6 +7,7 @@ use std::io::{self, Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
@@ -17,16 +18,6 @@ const TRAY_ID: &str = "mihomo-app-tray";
 const USER_PROFILE_ROOT: &str = "Library/Application Support/MihomoBox";
 const DAEMON_PATH: &str = "/Library/Application Support/Mihomo App/mihomo-daemon";
 const DAEMON_PLIST_PATH: &str = "/Library/LaunchDaemons/dev.linsheng.mihomo.daemon.plist";
-
-#[derive(Default, serde::Deserialize)]
-struct NetworkHealth {
-    network_consistent: bool,
-}
-
-#[derive(Default, serde::Deserialize)]
-struct ServiceStatus {
-    health: Option<NetworkHealth>,
-}
 
 #[derive(Clone)]
 enum DynamicAction {
@@ -50,6 +41,15 @@ struct TrayState {
     profile_busy: Mutex<bool>,
     last_menu_signature: Mutex<Option<MenuSignature>>,
     last_action_error: Mutex<Option<String>>,
+    refresh_in_flight: AtomicBool,
+}
+
+struct RefreshGuard(Arc<TrayState>);
+
+impl Drop for RefreshGuard {
+    fn drop(&mut self) {
+        self.0.refresh_in_flight.store(false, Ordering::Release);
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -118,12 +118,13 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         profile_busy: Mutex::new(false),
         last_menu_signature: Mutex::new(None),
         last_action_error: Mutex::new(None),
+        refresh_in_flight: AtomicBool::new(false),
     });
     app.manage(state.clone());
 
     let snapshot = Snapshot::default();
     let profiles = profile_state();
-    let network_healthy = local_network_health().map(|health| health.network_consistent);
+    let network_healthy = None;
     let menu = build_menu(
         app,
         &state,
@@ -545,12 +546,31 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
 }
 
 fn refresh(app: AppHandle, state: Arc<TrayState>) {
+    if state
+        .refresh_in_flight
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+    let guard = RefreshGuard(state.clone());
     tauri::async_runtime::spawn(async move {
-        let snapshot = controller_client().snapshot().await;
+        let _guard = guard;
+        let poll = controller_client().tray_state().await.ok();
+        let snapshot = poll
+            .as_ref()
+            .map(|value| value.snapshot.clone())
+            .unwrap_or_default();
         *state.snapshot.lock().expect("snapshot lock") = snapshot.clone();
-        let profiles = profile_state();
+        let profiles = poll
+            .as_ref()
+            .map(|value| ProfileState {
+                names: value.profiles.clone(),
+                active: value.active_profile.clone(),
+            })
+            .unwrap_or_else(profile_state);
         let profile_busy = *state.profile_busy.lock().expect("profile busy lock");
-        let network_healthy = local_network_health().map(|health| health.network_consistent);
+        let network_healthy = poll.and_then(|value| value.network_consistent);
         let action_error = state
             .last_action_error
             .lock()
@@ -736,19 +756,6 @@ fn title_case(value: &str) -> String {
         Some(first) => first.to_uppercase().collect::<String>() + characters.as_str(),
         None => String::new(),
     }
-}
-
-fn local_network_health() -> Option<NetworkHealth> {
-    let output = Command::new(cli_path()?)
-        .args(["status", "--json"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    serde_json::from_slice::<ServiceStatus>(&output.stdout)
-        .ok()?
-        .health
 }
 
 fn cli_path() -> Option<PathBuf> {

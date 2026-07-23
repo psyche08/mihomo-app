@@ -85,6 +85,6 @@ do {
     service.stop()
     _ = sources
 } catch {
-    ServiceLog.error("event=agent_fatal error=\(String(describing: error))")
+    ServiceLog.error("event=agent_fatal reason=startup_failed")
     exit(1)
 }

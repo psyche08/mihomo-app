@@ -65,7 +65,6 @@ dig @127.0.0.1 -p 15355 test.invalid A +tcp +time=1 +tries=1 \
   >"$TMP/tcp-response.txt" 2>&1
 grep -q 'status: NOERROR' "$TMP/tcp-response.txt"
 
-grep -q 'event=service_started' "$TMP/service.log"
 if grep -Eq 'test\.invalid' "$TMP/service.log"; then
   echo "sensitive DNS content leaked to service log" >&2
   exit 1

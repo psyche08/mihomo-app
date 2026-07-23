@@ -5,18 +5,24 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Mutex, OnceLock};
+use std::thread;
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_FILE_BYTES: u64 = 100 * 1024 * 1024;
 const RETAINED_FILES: usize = 3;
 const APP_LOG_NAME: &str = "mihomobox.log";
 const CRASH_LOG_NAME: &str = "mihomobox-crash.log";
+const FLUSH_THRESHOLD_BYTES: usize = 64 * 1024;
 
 static WRITE_LOCK: Mutex<()> = Mutex::new(());
+static PENDING: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 static LOG_DIRECTORY: OnceLock<Option<PathBuf>> = OnceLock::new();
+static FLUSHER_STARTED: OnceLock<()> = OnceLock::new();
 static CRASH_FD: AtomicI32 = AtomicI32::new(-1);
 
 pub fn install_crash_logging() {
+    start_batch_flusher();
     let Some(directory) = log_directory() else {
         return;
     };
@@ -88,16 +94,63 @@ fn write(level: &str, message: &str) {
     let Some(directory) = log_directory() else {
         return;
     };
-    let path = directory.join(APP_LOG_NAME);
     let data = format!("{} level={} {}\n", timestamp_milliseconds(), level, message);
     let _guard = WRITE_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if prepare_directory(&directory).is_err()
-        || append_rotating(&path, data.as_bytes(), MAX_FILE_BYTES).is_err()
-    {
+    let should_flush = {
+        let mut pending = PENDING
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        pending.extend_from_slice(data.as_bytes());
+        pending.len() >= FLUSH_THRESHOLD_BYTES
+    };
+    if should_flush && flush_locked(&directory).is_err() {
         let _ = std::io::stderr().write_all(data.as_bytes());
     }
+}
+
+pub fn flush() {
+    let Some(directory) = log_directory() else {
+        return;
+    };
+    let _guard = WRITE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _ = flush_locked(&directory);
+}
+
+fn start_batch_flusher() {
+    FLUSHER_STARTED.get_or_init(|| {
+        let _ = thread::Builder::new()
+            .name("mihomobox-log-flusher".to_string())
+            .spawn(|| loop {
+                thread::sleep(Duration::from_secs(1));
+                flush();
+            });
+    });
+}
+
+fn flush_locked(directory: &Path) -> std::io::Result<()> {
+    prepare_directory(directory)?;
+    let data = {
+        let mut pending = PENDING
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if pending.is_empty() {
+            return Ok(());
+        }
+        std::mem::take(&mut *pending)
+    };
+    let path = directory.join(APP_LOG_NAME);
+    if let Err(error) = append_rotating(&path, &data, MAX_FILE_BYTES) {
+        PENDING
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .splice(0..0, data);
+        return Err(error);
+    }
+    Ok(())
 }
 
 fn append_rotating(path: &Path, mut data: &[u8], maximum_file_bytes: u64) -> std::io::Result<()> {

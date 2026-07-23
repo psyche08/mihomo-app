@@ -1,11 +1,15 @@
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::process::Command;
+use std::time::Duration;
+use tokio::process::Command;
+
+const HELPER_TIMEOUT: Duration = Duration::from_secs(4);
 
 #[derive(Clone)]
 pub struct MihomoClient {
     helper: PathBuf,
+    helper_timeout: Duration,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -114,6 +118,34 @@ struct SnapshotEnvelope {
 }
 
 #[derive(Deserialize)]
+struct TrayStateEnvelope {
+    snapshot: Option<SnapshotEnvelope>,
+    #[serde(default)]
+    profiles: TrayProfiles,
+    health: Option<TrayHealth>,
+}
+
+#[derive(Default, Deserialize)]
+struct TrayProfiles {
+    #[serde(default)]
+    profiles: Vec<String>,
+    active_profile: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct TrayHealth {
+    network_consistent: bool,
+}
+
+#[derive(Default)]
+pub struct TrayPoll {
+    pub snapshot: Snapshot,
+    pub profiles: Vec<String>,
+    pub active_profile: Option<String>,
+    pub network_consistent: Option<bool>,
+}
+
+#[derive(Deserialize)]
 struct ConfigResponse {
     #[serde(default)]
     mode: String,
@@ -156,32 +188,38 @@ struct DelayResult {
 
 impl MihomoClient {
     pub fn new(helper: PathBuf) -> Self {
-        Self { helper }
+        Self {
+            helper,
+            helper_timeout: HELPER_TIMEOUT,
+        }
     }
 
     async fn invoke(&self, arguments: &[&str]) -> Result<Vec<u8>, ControlError> {
-        let helper = self.helper.clone();
-        let arguments = arguments
-            .iter()
-            .map(|argument| argument.to_string())
-            .collect::<Vec<_>>();
-        let output = tokio::task::spawn_blocking(move || {
-            Command::new(helper).arg("rpc").args(arguments).output()
-        })
-        .await
-        .map_err(|_| ControlError)?
-        .map_err(|_| ControlError)?;
+        let mut command = Command::new(&self.helper);
+        command.arg("rpc").args(arguments).kill_on_drop(true);
+        let output = tokio::time::timeout(self.helper_timeout, command.output())
+            .await
+            .map_err(|_| ControlError)?
+            .map_err(|_| ControlError)?;
         if !output.status.success() {
             return Err(ControlError);
         }
         Ok(output.stdout)
     }
 
-    pub async fn snapshot(&self) -> Snapshot {
-        let Ok(bytes) = self.invoke(&["snapshot"]).await else {
-            return Snapshot::default();
-        };
-        parse_snapshot(&bytes).unwrap_or_default()
+    pub async fn tray_state(&self) -> Result<TrayPoll, ControlError> {
+        let bytes = self.invoke(&["tray-state"]).await?;
+        let envelope =
+            serde_json::from_slice::<TrayStateEnvelope>(&bytes).map_err(|_| ControlError)?;
+        Ok(TrayPoll {
+            snapshot: envelope
+                .snapshot
+                .map(snapshot_from_envelope)
+                .unwrap_or_default(),
+            profiles: envelope.profiles.profiles,
+            active_profile: envelope.profiles.active_profile,
+            network_consistent: envelope.health.map(|health| health.network_consistent),
+        })
     }
 
     pub async fn controller_available(&self) -> bool {
@@ -257,6 +295,10 @@ impl MihomoClient {
 
 fn parse_snapshot(bytes: &[u8]) -> Option<Snapshot> {
     let response = serde_json::from_slice::<SnapshotEnvelope>(bytes).ok()?;
+    Some(snapshot_from_envelope(response))
+}
+
+fn snapshot_from_envelope(response: SnapshotEnvelope) -> Snapshot {
     let proxies = response.proxies.proxies;
     let mut groups = proxies
         .iter()
@@ -288,12 +330,12 @@ fn parse_snapshot(bytes: &[u8]) -> Option<Snapshot> {
             .cmp(&left_selector)
             .then_with(|| left.name.cmp(&right.name))
     });
-    Some(Snapshot {
+    Snapshot {
         reachable: true,
         enhanced_tun: response.configs.tun.enable,
         mode: response.configs.mode.to_lowercase(),
         groups,
-    })
+    }
 }
 
 #[cfg(test)]
@@ -371,6 +413,26 @@ mod tests {
             .build()
             .expect("runtime");
         assert!(runtime.block_on(MihomoClient::new(helper).controller_available()));
+        fs::remove_dir_all(root).expect("remove fixture");
+    }
+
+    #[test]
+    fn helper_invocation_is_bounded_by_timeout() {
+        let root =
+            std::env::temp_dir().join(format!("mihomobox-helper-timeout-{}", std::process::id()));
+        fs::create_dir_all(&root).expect("create fixture");
+        let helper = root.join("mihomoboxctl");
+        fs::write(&helper, "#!/bin/sh\nsleep 2\n").expect("write helper");
+        fs::set_permissions(&helper, fs::Permissions::from_mode(0o700)).expect("secure helper");
+        let client = MihomoClient {
+            helper,
+            helper_timeout: Duration::from_millis(25),
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        assert!(runtime.block_on(client.invoke(&["tray-state"])).is_err());
         fs::remove_dir_all(root).expect("remove fixture");
     }
 }

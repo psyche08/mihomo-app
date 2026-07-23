@@ -106,9 +106,7 @@ public final class FallbackDNSForwarder: DNSForwarding, @unchecked Sendable {
         do {
             return try primary.forward(query)
         } catch {
-            ServiceLog.error(
-                "event=primary_dns_unavailable action=fallback_original_dns error=\(String(describing: error))"
-            )
+            ServiceLog.error("event=primary_dns_unavailable action=fallback_original_dns")
             return try fallback.forward(query)
         }
     }
