@@ -77,7 +77,9 @@ codesign_with_retry "$APP" --options runtime
   --apple-id "$NOTARY_APPLE_ID" \
   --team-id "$NOTARY_TEAM_ID" \
   --password "$NOTARY_PASSWORD" \
-  --wait
+  --no-s3-acceleration \
+  --wait \
+  --timeout 30m
 /usr/bin/xcrun stapler staple "$APP"
 /usr/bin/xcrun stapler validate "$APP"
 /bin/rm -f "$ARCHIVE"
@@ -126,7 +128,9 @@ codesign_with_retry "$DMG"
   --apple-id "$NOTARY_APPLE_ID" \
   --team-id "$NOTARY_TEAM_ID" \
   --password "$NOTARY_PASSWORD" \
-  --wait
+  --no-s3-acceleration \
+  --wait \
+  --timeout 30m
 /usr/bin/xcrun stapler staple "$DMG"
 /usr/bin/xcrun stapler validate "$DMG"
 /usr/sbin/spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG"
