@@ -84,14 +84,14 @@ final class DynamicAsyncDNSForwarder: AsyncDNSForwarding, @unchecked Sendable {
 final class FallbackAsyncDNSForwarder: AsyncDNSForwarding, @unchecked Sendable {
     private let primary: AsyncDNSForwarding
     private let fallback: AsyncDNSForwarding
-    private let primaryAllowed: @Sendable () -> Bool
+    private let primaryAllowed: @Sendable (Data) -> Bool
     private let fallbackAllowed: @Sendable (Data) -> Bool
     private let metrics = AsyncDNSMetrics()
 
     init(
         primary: AsyncDNSForwarding,
         fallback: AsyncDNSForwarding,
-        primaryAllowed: @escaping @Sendable () -> Bool = { true },
+        primaryAllowed: @escaping @Sendable (Data) -> Bool = { _ in true },
         fallbackAllowed: @escaping @Sendable (Data) -> Bool = { _ in true }
     ) {
         self.primary = primary
@@ -102,7 +102,7 @@ final class FallbackAsyncDNSForwarder: AsyncDNSForwarding, @unchecked Sendable {
 
     func forward(_ query: Data, on eventLoop: EventLoop) -> EventLoopFuture<Data> {
         metrics.requestStarted()
-        guard primaryAllowed() else {
+        guard primaryAllowed(query) else {
             metrics.primaryBypassed()
             return runFallback(query, on: eventLoop)
         }

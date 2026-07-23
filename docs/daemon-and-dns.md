@@ -48,6 +48,11 @@ also supported. Imported domain sets or rule forms that the bridge cannot
 evaluate locally remain blocked rather than risking a DNS leak. Neither the
 domain nor the matching filter is logged.
 
+The internal DNS-bridge health probe is an exact wire message that is always
+sent to Mihomo DNS, including during startup before system DNS is claimed. It
+never uses original DNS. This breaks the startup dependency cycle without
+opening a fallback path for user queries while runtime safety is false.
+
 Managed fake-IP responses use a one-second TTL. This limits stale mappings
 after a profile, TUN, or resolver transition; rollback and shutdown also flush
 Mihomo's fake-IP and DNS caches.

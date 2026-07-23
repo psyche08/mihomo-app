@@ -63,7 +63,9 @@ public final class ProxyService {
         let systemDNSForwarder = FallbackAsyncDNSForwarder(
             primary: mihomoForwarder,
             fallback: originalDNSForwarder,
-            primaryAllowed: { [safetyState] in safetyState.isRuntimeReady() },
+            primaryAllowed: { [safetyState] query in
+                safetyState.isRuntimeReady() || query == DNSMessage.runtimeHealthQuery
+            },
             fallbackAllowed: { [fakeIPPolicy] query in
                 fakeIPPolicy.allowsOriginalDNSFallback(for: query)
             }

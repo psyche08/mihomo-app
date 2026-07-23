@@ -309,7 +309,7 @@ final class CoreTests: XCTestCase {
         let forwarder = FallbackAsyncDNSForwarder(
             primary: primary,
             fallback: fallback,
-            primaryAllowed: { safetyState.isRuntimeReady() }
+            primaryAllowed: { _ in safetyState.isRuntimeReady() }
         )
 
         XCTAssertEqual(
@@ -361,7 +361,7 @@ final class CoreTests: XCTestCase {
         let forwarder = FallbackAsyncDNSForwarder(
             primary: primary,
             fallback: fallback,
-            primaryAllowed: { false },
+            primaryAllowed: { _ in false },
             fallbackAllowed: { policy.allowsOriginalDNSFallback(for: $0) }
         )
 
@@ -369,6 +369,28 @@ final class CoreTests: XCTestCase {
             try forwarder.forward(query(for: "managed.example"), on: eventLoop).wait()
         )
         XCTAssertEqual(primary.callCount, 0)
+        XCTAssertEqual(fallback.callCount, 0)
+    }
+
+    func testUnsafeRuntimeHealthProbeUsesOnlyPrimaryDNS() throws {
+        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        defer { try? group.syncShutdownGracefully() }
+        let eventLoop = group.next()
+        let primaryResponse = Data(repeating: 1, count: 12)
+        let primary = StubAsyncForwarder(result: .success(primaryResponse))
+        let fallback = StubAsyncForwarder(result: .success(Data(repeating: 2, count: 12)))
+        let forwarder = FallbackAsyncDNSForwarder(
+            primary: primary,
+            fallback: fallback,
+            primaryAllowed: { query in query == DNSMessage.runtimeHealthQuery },
+            fallbackAllowed: { _ in false }
+        )
+
+        XCTAssertEqual(
+            try forwarder.forward(DNSMessage.runtimeHealthQuery, on: eventLoop).wait(),
+            primaryResponse
+        )
+        XCTAssertEqual(primary.callCount, 1)
         XCTAssertEqual(fallback.callCount, 0)
     }
 
