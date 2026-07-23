@@ -101,7 +101,9 @@ latest.json
 `latest.json` points `darwin-aarch64` at the versioned updater archive. The
 archive is generated from the notarized and stapled App, then signed with the
 Tauri updater key. GitHub's `releases/latest/download/latest.json` endpoint is
-the stable update feed.
+the stable update feed. Archive generation disables macOS AppleDouble metadata;
+otherwise a leading `._MihomoBox.app` entry prevents Tauri's Rust extractor
+from installing the update.
 
 ## License Outputs
 

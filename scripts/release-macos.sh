@@ -66,7 +66,7 @@ done
 /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP"
 
 /bin/rm -f "$UPDATE_ARCHIVE" "$UPDATE_ARCHIVE.sig" "$LATEST_JSON"
-/usr/bin/tar -czf "$UPDATE_ARCHIVE" -C "$(/usr/bin/dirname "$APP")" \
+COPYFILE_DISABLE=1 /usr/bin/tar -czf "$UPDATE_ARCHIVE" -C "$(/usr/bin/dirname "$APP")" \
   "$(/usr/bin/basename "$APP")"
 /usr/bin/tar -xzf "$UPDATE_ARCHIVE" -C "$UPDATE_AUDIT"
 /usr/bin/codesign --verify --deep --strict --verbose=2 \
