@@ -51,6 +51,38 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(snapshot.upstream(for: "example.net").interfaceName, "en0")
     }
 
+    func testDNSDiscoveryFallsBackFromDHCPToServiceThenGlobal() {
+        let state = NetworkDNSState(
+            excludedServers: ["127.0.0.53", "127.0.0.1"],
+            fallbackServers: []
+        )
+
+        XCTAssertEqual(
+            state.selectDiscoveredServers(
+                dhcpServers: ["192.0.2.53"],
+                serviceServers: ["198.51.100.53"],
+                globalServers: ["203.0.113.53"]
+            ),
+            ["192.0.2.53"]
+        )
+        XCTAssertEqual(
+            state.selectDiscoveredServers(
+                dhcpServers: [],
+                serviceServers: ["198.51.100.53"],
+                globalServers: ["203.0.113.53"]
+            ),
+            ["198.51.100.53"]
+        )
+        XCTAssertEqual(
+            state.selectDiscoveredServers(
+                dhcpServers: ["127.0.0.53"],
+                serviceServers: [],
+                globalServers: ["203.0.113.53", "203.0.113.53"]
+            ),
+            ["203.0.113.53"]
+        )
+    }
+
     func testConfigurationRejectsRecursiveEndpoint() {
         let shared = Endpoint(host: "127.0.0.1", port: 1054)
         let config = ProxyConfiguration(mihomoDNS: shared, upstreamListen: shared)
@@ -255,6 +287,49 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(try forwarder.forward(Data(repeating: 0, count: 12)), expected)
         XCTAssertEqual(primary.callCount, 0)
         XCTAssertEqual(fallback.callCount, 1)
+    }
+
+    func testRuntimeRecoveryPolicyStartsWaitsAndRecovers() {
+        var policy = RuntimeRecoveryPolicy(graceSeconds: 8)
+        XCTAssertEqual(policy.decide(runtimeReady: false, networkOwned: true, nowNanoseconds: 10), .start)
+        XCTAssertEqual(policy.decide(runtimeReady: false, networkOwned: true, nowNanoseconds: 11), .wait)
+        XCTAssertEqual(policy.decide(runtimeReady: true, networkOwned: true, nowNanoseconds: 12), .recovered)
+        XCTAssertEqual(policy.decide(runtimeReady: true, networkOwned: true, nowNanoseconds: 13), .none)
+    }
+
+    func testRuntimeRecoveryPolicyFailsAfterGraceWindow() {
+        var policy = RuntimeRecoveryPolicy(graceSeconds: 1)
+        XCTAssertEqual(policy.decide(runtimeReady: false, networkOwned: true, nowNanoseconds: 20), .start)
+        XCTAssertEqual(
+            policy.decide(runtimeReady: false, networkOwned: true, nowNanoseconds: 1_000_000_019),
+            .wait
+        )
+        XCTAssertEqual(
+            policy.decide(runtimeReady: false, networkOwned: true, nowNanoseconds: 1_000_000_020),
+            .failed
+        )
+    }
+
+    func testRuntimeRecoveryPolicyDoesNotActWithoutManagedNetwork() {
+        var policy = RuntimeRecoveryPolicy(graceSeconds: 1)
+        XCTAssertEqual(policy.decide(runtimeReady: false, networkOwned: false, nowNanoseconds: 1), .none)
+    }
+
+    func testRotatingFileWriterCapsEachGeneration() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appendingPathComponent("service.log").path
+        let writer = RotatingFileWriter(path: path, maximumFileBytes: 10, retainedFiles: 2)
+
+        XCTAssertTrue(writer.append(Data(repeating: 1, count: 7)))
+        XCTAssertTrue(writer.append(Data(repeating: 2, count: 7)))
+
+        let current = try FileManager.default.attributesOfItem(atPath: path)[.size] as? NSNumber
+        let rotated = try FileManager.default.attributesOfItem(atPath: "\(path).1")[.size] as? NSNumber
+        XCTAssertEqual(current?.intValue, 4)
+        XCTAssertEqual(rotated?.intValue, 10)
     }
 }
 

@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import MihomoControl
+import MihomoDNSCore
 import XPC
 
 final class ControlDispatcher: @unchecked Sendable {
@@ -17,7 +18,10 @@ final class ControlDispatcher: @unchecked Sendable {
     }
 
     func dispatch(_ request: ControlRequest) -> ControlResponse {
+        let operation = request.operation.rawValue
+        ServiceLog.info("event=control_request operation=\(operation) phase=started")
         guard request.version == mihomoControlProtocolVersion else {
+            ServiceLog.error("event=control_request operation=\(operation) result=unsupported_version")
             return ControlResponse(success: false, error: "unsupported control protocol version")
         }
         do {
@@ -70,8 +74,10 @@ final class ControlDispatcher: @unchecked Sendable {
                 }
                 payload = try controller.perform(request)
             }
+            ServiceLog.info("event=control_request operation=\(operation) result=success")
             return ControlResponse(success: true, payload: payload)
         } catch {
+            ServiceLog.error("event=control_request operation=\(operation) result=failed")
             return ControlResponse(
                 success: false,
                 error: (error as? LocalizedError)?.errorDescription ?? String(describing: error)
@@ -110,18 +116,22 @@ final class ControlServer: @unchecked Sendable {
         }
         self.listener = listener
         xpc_connection_resume(listener)
+        ServiceLog.info("event=control_server_started")
     }
 
     func stop() {
         if let listener { xpc_connection_cancel(listener) }
         listener = nil
+        ServiceLog.info("event=control_server_stopped")
     }
 
     private func accept(_ peer: xpc_connection_t) {
         guard xpc_connection_set_peer_code_signing_requirement(peer, requirement) == 0 else {
+            ServiceLog.error("event=control_peer_rejected reason=signing_requirement")
             xpc_connection_cancel(peer)
             return
         }
+        ServiceLog.info("event=control_peer_accepted")
         xpc_connection_set_event_handler(peer) { [weak self, weak peer] event in
             guard let self, let peer else { return }
             if xpc_get_type(event) == XPC_TYPE_DICTIONARY {

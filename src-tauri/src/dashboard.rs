@@ -1,3 +1,4 @@
+use crate::app_log;
 use serde_json::json;
 use std::fs::File;
 use std::io::{ErrorKind, Read, Write};
@@ -32,6 +33,7 @@ impl DashboardBridge {
                 }
             })
             .ok()?;
+        app_log::info("event=dashboard_bridge result=started");
         Some(Self {
             url: format!("http://127.0.0.1:{}", address.port()),
             secret,
@@ -55,28 +57,38 @@ fn handle(mut stream: TcpStream, cli: &Path, secret: &str) {
         return;
     };
     if request.method == "OPTIONS" {
+        app_log::info("event=dashboard_request kind=preflight result=success");
         write_response(&mut stream, 204, &[]);
         return;
     }
     let authorized = request.authorization.as_deref() == Some(&format!("Bearer {secret}"))
         || query_value(&request.target, "token").as_deref() == Some(secret);
     if !authorized {
+        app_log::error("event=dashboard_request result=unauthorized");
         write_json_error(&mut stream, 401, "unauthorized");
         return;
     }
 
     if request.websocket_upgrade {
         let Some(key) = request.websocket_key else {
+            app_log::error("event=dashboard_request kind=websocket result=invalid_key");
             write_json_error(&mut stream, 400, "missing WebSocket key");
             return;
         };
+        app_log::info("event=dashboard_request kind=websocket phase=started");
         proxy_websocket(&mut stream, cli, &request.target, &key);
         return;
     }
 
     match route_http(cli, &request) {
-        Ok(body) => write_response(&mut stream, 200, &body),
-        Err((status, message)) => write_json_error(&mut stream, status, message),
+        Ok(body) => {
+            app_log::info("event=dashboard_request kind=http result=success");
+            write_response(&mut stream, 200, &body)
+        }
+        Err((status, message)) => {
+            app_log::error("event=dashboard_request kind=http result=failed");
+            write_json_error(&mut stream, status, message)
+        }
     }
 }
 

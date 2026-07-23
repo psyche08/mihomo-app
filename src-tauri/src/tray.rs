@@ -1,3 +1,4 @@
+use crate::app_log;
 use crate::dashboard::DashboardBridge;
 use crate::mihomo::{MihomoClient, Snapshot};
 use std::collections::{HashMap, HashSet};
@@ -351,7 +352,14 @@ fn build_menu(
         app_bundle_path().is_some(),
         None::<&str>,
     )?;
-    let tools_menu = Submenu::with_items(app, "Tools", true, &[&install])?;
+    let open_logs = MenuItem::with_id(
+        app,
+        "open-logs",
+        "Open Diagnostic Logs…",
+        true,
+        None::<&str>,
+    )?;
+    let tools_menu = Submenu::with_items(app, "Tools", true, &[&install, &open_logs])?;
     let exit = MenuItem::with_id(app, "exit", "Exit", true, None::<&str>)?;
     let tools_separator = PredefinedMenuItem::separator(app)?;
     let final_separator = PredefinedMenuItem::separator(app)?;
@@ -377,6 +385,16 @@ fn build_menu(
 
 fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
     let id = event.id().as_ref().to_string();
+    let action = if id.starts_with("mode:") {
+        "set_mode"
+    } else if id.starts_with("proxy:") {
+        "select_proxy"
+    } else if id.starts_with("profile:") {
+        "switch_profile"
+    } else {
+        id.as_str()
+    };
+    app_log::info(&format!("event=tray_action action={action}"));
     if id == "show" {
         let Some(state) = app.try_state::<Arc<TrayState>>() else {
             return;
@@ -402,7 +420,12 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
         return;
     }
     if id == "exit" {
+        app_log::info("event=app_exit_requested");
         app.exit(0);
+        return;
+    }
+    if id == "open-logs" {
+        app_log::open_log_folders();
         return;
     }
     if id == "install" {
@@ -448,12 +471,17 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
             "tun" => {
                 let snapshot = state.snapshot.lock().expect("snapshot lock").clone();
                 let profiles = profile_state();
-                match tun_action(daemon_installed(), profiles.active.is_some(), &snapshot) {
+                let action = tun_action(daemon_installed(), profiles.active.is_some(), &snapshot);
+                app_log::info(&format!("event=tun_action_resolved action={action:?}"));
+                match action {
                     TunAction::RequireProfile => show_profile_required_prompt(),
                     TunAction::InstallDaemon => install_daemon(selected_local_profile().as_deref()),
                     TunAction::StartDaemon => start_daemon(),
                     TunAction::EnableTun => {
-                        let _ = controller_client().set_tun(true).await;
+                        let succeeded = controller_client().set_tun(true).await.is_ok();
+                        app_log::info(&format!(
+                            "event=controller_action action=enable_tun success={succeeded}"
+                        ));
                     }
                     TunAction::StopAndRestore => restore_network(),
                 }
@@ -464,6 +492,9 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
                     .apply_outbound_mode(requested)
                     .await
                     .is_ok();
+                app_log::info(&format!(
+                    "event=controller_action action=set_mode success={applied}"
+                ));
                 set_action_error(
                     &state,
                     (!applied)
@@ -476,6 +507,10 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
                     .map(|node| node.name)
                     .collect::<Vec<_>>();
                 let succeeded = controller_client().test_delays(&nodes).await;
+                app_log::info(&format!(
+                    "event=controller_action action=test_delays attempted={} succeeded={succeeded}",
+                    nodes.len()
+                ));
                 set_action_error(
                     &state,
                     (!nodes.is_empty() && succeeded == 0).then(|| {
@@ -495,7 +530,13 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
                     .get(&id)
                     .cloned();
                 if let Some(DynamicAction::Proxy { group, proxy }) = action {
-                    let _ = controller_client().select_proxy(&group, &proxy).await;
+                    let succeeded = controller_client()
+                        .select_proxy(&group, &proxy)
+                        .await
+                        .is_ok();
+                    app_log::info(&format!(
+                        "event=controller_action action=select_proxy success={succeeded}"
+                    ));
                 }
             }
         }
@@ -532,6 +573,17 @@ fn refresh(app: AppHandle, state: Arc<TrayState>) {
                     .as_ref()
                     != Some(&signature);
                 if should_rebuild {
+                    let network_health = network_healthy
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    app_log::info(&format!(
+                        "event=tray_state_changed controller_reachable={} tun_enabled={} network_healthy={} profile_count={} proxy_group_count={}",
+                        snapshot.reachable,
+                        snapshot.enhanced_tun,
+                        network_health,
+                        profiles.names.len(),
+                        snapshot.groups.len()
+                    ));
                     if let Ok(menu) = build_menu(
                         &menu_app,
                         &state,
@@ -564,6 +616,10 @@ fn refresh(app: AppHandle, state: Arc<TrayState>) {
 }
 
 fn set_action_error(state: &TrayState, error: Option<String>) {
+    app_log::info(&format!(
+        "event=tray_action_result success={}",
+        error.is_none()
+    ));
     *state.last_action_error.lock().expect("action error lock") = error;
 }
 
@@ -882,16 +938,29 @@ fn spawn_profile_operation<F>(app: AppHandle, state: Arc<TrayState>, name: &str,
 where
     F: FnOnce() -> Result<(), String> + Send + 'static,
 {
+    app_log::info(&format!(
+        "event=profile_operation action={name} phase=started"
+    ));
+    let operation_name = name.to_string();
     let worker_app = app.clone();
     let worker_state = state.clone();
     let result = std::thread::Builder::new()
         .name(format!("mihomobox-{name}"))
         .spawn(move || {
-            set_action_error(&worker_state, operation().err());
+            let error = operation().err();
+            app_log::info(&format!(
+                "event=profile_operation action={} phase=completed success={}",
+                operation_name,
+                error.is_none()
+            ));
+            set_action_error(&worker_state, error);
             end_profile_operation(&worker_state);
             refresh(worker_app, worker_state);
         });
     if result.is_err() {
+        app_log::error(&format!(
+            "event=profile_operation action={name} phase=spawn_failed"
+        ));
         set_action_error(
             &state,
             Some("Action failed: unable to start profile operation".to_string()),
@@ -1019,12 +1088,17 @@ fn choose_yaml_file() -> Option<PathBuf> {
 
 fn run_cli(arguments: &[&str]) -> bool {
     let Some(cli) = cli_path() else {
+        app_log::error("event=cli_action result=missing_cli");
         return false;
     };
-    Command::new(cli)
+    let succeeded = Command::new(cli)
         .args(arguments)
         .status()
-        .is_ok_and(|status| status.success())
+        .is_ok_and(|status| status.success());
+    app_log::info(&format!(
+        "event=cli_action result=completed success={succeeded}"
+    ));
+    succeeded
 }
 
 fn install_daemon(initial_profile: Option<&Path>) {
@@ -1048,9 +1122,23 @@ fn install_daemon(initial_profile: Option<&Path>) {
         "do shell script {} with administrator privileges",
         apple_script_quote(&command)
     );
-    let _ = Command::new("/usr/bin/osascript")
+    match Command::new("/usr/bin/osascript")
         .args(["-e", &apple_script])
-        .spawn();
+        .spawn()
+    {
+        Ok(mut child) => {
+            app_log::info("event=privileged_installer action=install phase=spawned success=true");
+            std::thread::spawn(move || {
+                let succeeded = child.wait().is_ok_and(|status| status.success());
+                app_log::info(&format!(
+                    "event=privileged_installer action=install phase=completed success={succeeded}"
+                ));
+            });
+        }
+        Err(_) => {
+            app_log::error("event=privileged_installer action=install phase=spawned success=false")
+        }
+    }
 }
 
 fn show_profile_required_prompt() {
@@ -1085,8 +1173,10 @@ fn restore_network() {
         ])
         .status();
     if !confirmation.is_ok_and(|status| status.success()) {
+        app_log::info("event=restore_network phase=cancelled");
         return;
     }
+    app_log::info("event=restore_network phase=confirmed");
     std::thread::spawn(|| {
         let _ = run_cli(&["stop"]);
     });

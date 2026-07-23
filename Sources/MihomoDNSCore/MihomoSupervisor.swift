@@ -16,15 +16,17 @@ public enum MihomoSupervisorError: Error, CustomStringConvertible {
 
 public final class MihomoSupervisor: @unchecked Sendable {
     private let configuration: MihomoProcessConfiguration
+    private let logWriter: RotatingFileWriter
     private let lock = NSLock()
     private let restartQueue = DispatchQueue(label: "dev.linsheng.mihomo-app.restart")
     private var process: Process?
-    private var logHandle: FileHandle?
     private var restartWorkItem: DispatchWorkItem?
+    private var startedAt: Date?
     private var stopping = false
 
     public init(configuration: MihomoProcessConfiguration) {
         self.configuration = configuration
+        logWriter = RotatingFileWriter(path: configuration.logPath)
     }
 
     public func start() throws {
@@ -62,53 +64,97 @@ public final class MihomoSupervisor: @unchecked Sendable {
         try? FileManager.default.removeItem(atPath: configuration.pidPath)
     }
 
-    private func launch() throws {
-        let logURL = URL(fileURLWithPath: configuration.logPath)
-        try FileManager.default.createDirectory(
-            at: logURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        if !FileManager.default.fileExists(atPath: configuration.logPath) {
-            FileManager.default.createFile(atPath: configuration.logPath, contents: nil)
+    public func requestRecovery() {
+        lock.lock()
+        guard !stopping else {
+            lock.unlock()
+            return
         }
-        let handle = try FileHandle(forWritingTo: logURL)
-        try handle.seekToEnd()
+        let active = process
+        let restartPending = restartWorkItem != nil
+        lock.unlock()
+
+        if let active, active.isRunning {
+            ServiceLog.info("event=mihomo_recovery_requested action=restart pid=\(active.processIdentifier)")
+            active.terminate()
+        } else if !restartPending {
+            ServiceLog.info("event=mihomo_recovery_requested action=start")
+            scheduleRestart()
+        }
+    }
+
+    private func launch() throws {
+        let pipe = Pipe()
+        let logWriter = self.logWriter
 
         let child = Process()
         child.executableURL = URL(fileURLWithPath: configuration.binaryPath)
         child.arguments = ["-d", configuration.configDirectory, "-f", configuration.configPath]
-        child.standardOutput = handle
-        child.standardError = handle
+        child.standardOutput = pipe.fileHandleForWriting
+        child.standardError = pipe.fileHandleForWriting
         child.terminationHandler = { [weak self] terminated in
-            self?.processTerminated(pid: terminated.processIdentifier, status: terminated.terminationStatus)
+            self?.processTerminated(
+                pid: terminated.processIdentifier,
+                status: terminated.terminationStatus,
+                reason: terminated.terminationReason
+            )
         }
-        try child.run()
+        do {
+            try child.run()
+        } catch {
+            try? pipe.fileHandleForWriting.close()
+            try? pipe.fileHandleForReading.close()
+            throw error
+        }
+        try? pipe.fileHandleForWriting.close()
+        DispatchQueue.global(qos: .utility).async {
+            var writeFailed = false
+            while true {
+                guard let data = try? pipe.fileHandleForReading.read(upToCount: 64 * 1_024),
+                      !data.isEmpty else {
+                    break
+                }
+                if !logWriter.append(data) { writeFailed = true }
+            }
+            try? pipe.fileHandleForReading.close()
+            if writeFailed {
+                ServiceLog.error("event=mihomo_log_write_failed")
+            }
+        }
 
         lock.lock()
         process = child
-        logHandle = handle
+        startedAt = Date()
         lock.unlock()
         try writePID(child.processIdentifier)
         ServiceLog.info("event=mihomo_started pid=\(child.processIdentifier)")
         if !child.isRunning {
-            processTerminated(pid: child.processIdentifier, status: child.terminationStatus)
+            processTerminated(
+                pid: child.processIdentifier,
+                status: child.terminationStatus,
+                reason: child.terminationReason
+            )
         }
     }
 
-    private func processTerminated(pid: Int32, status: Int32) {
+    private func processTerminated(pid: Int32, status: Int32, reason: Process.TerminationReason) {
         lock.lock()
         guard process?.processIdentifier == pid else {
             lock.unlock()
             return
         }
         process = nil
-        let handle = logHandle
-        logHandle = nil
+        let runtimeMilliseconds = startedAt.map { max(0, Int(Date().timeIntervalSince($0) * 1_000)) }
+        startedAt = nil
         let shouldRestart = !stopping
         lock.unlock()
-        try? handle?.close()
         try? FileManager.default.removeItem(atPath: configuration.pidPath)
-        ServiceLog.error("event=mihomo_exited pid=\(pid) status=\(status) restart=\(shouldRestart)")
+        let reasonName = reason == .uncaughtSignal ? "signal" : "exit"
+        let runtime = runtimeMilliseconds.map(String.init) ?? "unknown"
+        ServiceLog.error(
+            "event=mihomo_exited pid=\(pid) reason=\(reasonName) status=\(status) " +
+            "runtime_ms=\(runtime) restart=\(shouldRestart)"
+        )
         if shouldRestart { scheduleRestart() }
     }
 
@@ -116,6 +162,7 @@ public final class MihomoSupervisor: @unchecked Sendable {
         let item = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.lock.lock()
+            self.restartWorkItem = nil
             let mayRestart = !self.stopping && self.process == nil
             self.lock.unlock()
             guard mayRestart else { return }
@@ -127,8 +174,15 @@ public final class MihomoSupervisor: @unchecked Sendable {
             }
         }
         lock.lock()
+        guard !stopping, process == nil, restartWorkItem == nil else {
+            lock.unlock()
+            return
+        }
         restartWorkItem = item
         lock.unlock()
+        ServiceLog.info(
+            "event=mihomo_restart_scheduled delay_ms=\(configuration.restartDelayMilliseconds)"
+        )
         restartQueue.asyncAfter(
             deadline: .now() + .milliseconds(configuration.restartDelayMilliseconds),
             execute: item

@@ -70,23 +70,14 @@ public final class DynamicDNSForwarder: DNSForwarding, @unchecked Sendable {
         for server in upstream.servers {
             let endpoint = Endpoint(host: server, port: 53)
             do {
-                return try SocketDNSClient.queryTCP(
+                return try SocketDNSClient.query(
                     query,
                     endpoint: endpoint,
                     timeoutMilliseconds: timeoutMilliseconds,
                     interfaceName: upstream.interfaceName
                 )
             } catch {
-                do {
-                    return try SocketDNSClient.query(
-                        query,
-                        endpoint: endpoint,
-                        timeoutMilliseconds: timeoutMilliseconds,
-                        interfaceName: upstream.interfaceName
-                    )
-                } catch {
-                    continue
-                }
+                continue
             }
         }
         throw DNSForwardingError.allUpstreamsFailed

@@ -63,6 +63,44 @@ public struct NetworkConsistencyHealth: Codable, Equatable {
     }
 }
 
+enum RuntimeRecoveryDecision: Equatable {
+    case none
+    case start
+    case wait
+    case recovered
+    case failed
+}
+
+struct RuntimeRecoveryPolicy {
+    private(set) var deadlineNanoseconds: UInt64?
+    let graceNanoseconds: UInt64
+
+    init(graceSeconds: UInt64 = 8) {
+        graceNanoseconds = graceSeconds * 1_000_000_000
+    }
+
+    mutating func decide(runtimeReady: Bool, networkOwned: Bool, nowNanoseconds: UInt64) -> RuntimeRecoveryDecision {
+        if runtimeReady {
+            let recovered = deadlineNanoseconds != nil
+            deadlineNanoseconds = nil
+            return recovered ? .recovered : .none
+        }
+        guard networkOwned else {
+            deadlineNanoseconds = nil
+            return .none
+        }
+        guard let deadlineNanoseconds else {
+            self.deadlineNanoseconds = nowNanoseconds &+ graceNanoseconds
+            return .start
+        }
+        if nowNanoseconds < deadlineNanoseconds {
+            return .wait
+        }
+        self.deadlineNanoseconds = nil
+        return .failed
+    }
+}
+
 public enum MihomoRuntimeInspector {
     private static let defaultController = Endpoint(host: "127.0.0.1", port: 9090)
     private static let fakeIPProbe = "198.18.0.1"
@@ -248,23 +286,26 @@ public final class NetworkConsistencyController: @unchecked Sendable {
     private let globalDNS: GlobalDNSPreferences
     private let aliasManager: LoopbackAliasManager
     private let safetyState: NetworkSafetyState
+    private let runtimeRecoveryHandler: @Sendable () -> Void
     private let unsafeRuntimeHandler: @Sendable () -> Void
     private let queue = DispatchQueue(label: "dev.linsheng.mihomo-app.consistency")
     private var timer: DispatchSourceTimer?
     private var previous: NetworkConsistencyHealth?
-    private var managedDNSFailureCount = 0
+    private var recoveryPolicy = RuntimeRecoveryPolicy()
 
     public init(
         configuration: ProxyConfiguration,
         globalDNS: GlobalDNSPreferences,
         aliasManager: LoopbackAliasManager,
         safetyState: NetworkSafetyState,
+        runtimeRecoveryHandler: @escaping @Sendable () -> Void,
         unsafeRuntimeHandler: @escaping @Sendable () -> Void
     ) {
         self.configuration = configuration
         self.globalDNS = globalDNS
         self.aliasManager = aliasManager
         self.safetyState = safetyState
+        self.runtimeRecoveryHandler = runtimeRecoveryHandler
         self.unsafeRuntimeHandler = unsafeRuntimeHandler
     }
 
@@ -299,11 +340,12 @@ public final class NetworkConsistencyController: @unchecked Sendable {
         let kernelReady = before.controllerReachable && before.tunEnabled && before.tunInterface != nil
         let dnsReady = before.dnsBridgeReady && before.mihomoDNSReady
         let runtimeReady = kernelReady && dnsReady
-        let anyManagedDNS = ((try? globalDNS.isApplied()) == true) || globalDNS.isEffective()
+        let networkOwned = ((try? globalDNS.isApplied()) == true)
+            || globalDNS.isEffective()
+            || globalDNS.hasManagedBackup()
         var changed = false
         var action = "observe"
         if runtimeReady && !before.systemDNSManaged {
-            managedDNSFailureCount = 0
             do {
                 try aliasManager.ensure()
                 try globalDNS.apply()
@@ -316,22 +358,48 @@ public final class NetworkConsistencyController: @unchecked Sendable {
                 changed = true
             }
         } else if runtimeReady {
-            managedDNSFailureCount = 0
-        } else if anyManagedDNS {
+            do {
+                try aliasManager.ensure()
+            } catch {
+                ServiceLog.error("event=network_transition_failed action=repair_loopback_alias")
+            }
+        }
+
+        let recoveryDecision = recoveryPolicy.decide(
+            runtimeReady: runtimeReady,
+            networkOwned: networkOwned,
+            nowNanoseconds: DispatchTime.now().uptimeNanoseconds
+        )
+        switch recoveryDecision {
+        case .none:
+            break
+        case .start:
             safetyState.setRuntimeReady(false)
-            managedDNSFailureCount += 1
-            if !kernelReady || managedDNSFailureCount >= 2 {
+            runtimeRecoveryHandler()
+            action = "recover_runtime"
+            changed = true
+            ServiceLog.error(
+                "event=network_drift_detected action=recover_runtime " +
+                "controller_ready=\(before.controllerReachable) tun_enabled=\(before.tunEnabled) " +
+                "route_ready=\(before.fakeIPRouteReady) dns_ready=\(dnsReady)"
+            )
+        case .wait:
+            safetyState.setRuntimeReady(false)
+            action = "await_runtime_recovery"
+        case .recovered:
+            action = "runtime_recovered"
+            changed = true
+            ServiceLog.info("event=network_drift_recovered")
+        case .failed:
+            safetyState.setRuntimeReady(false)
+            if networkOwned {
                 restoreSafeNetwork(source: "runtime_unhealthy")
                 MihomoRuntimeInspector.flushMihomoDNSCaches(configuration: configuration)
                 DNSCacheMaintenance.flushSystemCaches()
                 unsafeRuntimeHandler()
                 action = "rollback_safe"
                 changed = true
-            } else {
-                action = "dns_degraded_real_ip_fallback"
             }
-        } else {
-            managedDNSFailureCount = 0
         }
 
         let after = changed

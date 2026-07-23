@@ -149,7 +149,19 @@ importing or refreshing requires supplying them again.
 /Library/Application Support/Mihomo App/active-profile
 /Library/Logs/Mihomo App/mihomo.log
 /Library/Logs/Mihomo App/mihomo-daemon.log
+/Library/Logs/Mihomo App/mihomo-daemon-crash.log
+/Library/Logs/Mihomo App/mihomo-agent.log
+/Library/Logs/Mihomo App/mihomo-agent-crash.log
+/Library/Logs/Mihomo App/mihomo-agent-command.log
+/Library/Logs/Mihomo App/mihomo-agent-command-crash.log
+~/Library/Logs/MihomoBox/mihomobox.log
+~/Library/Logs/MihomoBox/mihomobox-crash.log
 ```
+
+Every file is limited to 100 MiB and keeps three numbered generations (`.1`
+through `.3`). The crash logs are independent of normal rotation so a panic or
+fatal-signal record survives even when the main log rolls. The tray's
+`Tools > Open Diagnostic Logs…` command opens both user and daemon log folders.
 
 The user paths stage local tray imports before daemon installation. The signed
 installer validates the selected staged profile, copies it into the root-owned
@@ -167,7 +179,12 @@ sudo '/Library/Application Support/Mihomo App/mihomo-agent' \
   --config '/Library/Application Support/Mihomo App/daemon.json' \
   --health
 tail -f '/Library/Logs/Mihomo App/mihomo-daemon.log'
+tail -f '/Library/Logs/Mihomo App/mihomo-agent.log'
 tail -f '/Library/Logs/Mihomo App/mihomo.log'
+tail -f '/Library/Logs/Mihomo App/mihomo-daemon-crash.log'
+tail -f '/Library/Logs/Mihomo App/mihomo-agent-crash.log'
+tail -f "$HOME/Library/Logs/MihomoBox/mihomobox.log"
+tail -f "$HOME/Library/Logs/MihomoBox/mihomobox-crash.log"
 dig @127.0.0.53 -p 53 example.com
 dig @127.0.0.1 -p 1054 example.com
 scutil --dns

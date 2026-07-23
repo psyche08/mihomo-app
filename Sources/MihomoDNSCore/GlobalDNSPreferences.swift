@@ -131,6 +131,10 @@ public final class GlobalDNSPreferences: @unchecked Sendable {
         effectiveServers() == servers
     }
 
+    public func hasManagedBackup() -> Bool {
+        FileManager.default.fileExists(atPath: backupPath)
+    }
+
     public func restore() throws {
         lock.lock()
         defer { lock.unlock() }

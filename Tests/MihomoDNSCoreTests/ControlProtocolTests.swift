@@ -5,7 +5,7 @@ import XCTest
 final class ControlProtocolTests: XCTestCase {
     func testComponentUpdatePackageBinaryRoundTrip() throws {
         let package = ComponentUpdatePackage(
-            appVersion: "0.3.0",
+            appVersion: "0.4.0",
             components: [
                 ManagedComponent.daemon.rawValue: Data([0, 1, 2]),
                 ManagedComponent.agent.rawValue: Data([3, 4]),
@@ -15,7 +15,7 @@ final class ControlProtocolTests: XCTestCase {
 
         let decoded = try ComponentUpdatePackage.decode(package.encoded())
         XCTAssertEqual(decoded.formatVersion, ComponentUpdatePackage.currentFormatVersion)
-        XCTAssertEqual(decoded.appVersion, "0.3.0")
+        XCTAssertEqual(decoded.appVersion, "0.4.0")
         XCTAssertEqual(decoded.components, package.components)
     }
 

@@ -2,15 +2,20 @@
 
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <ifaddrs.h>
 #include <net/if.h>
 #include <netinet/in.h>
 #include <libproc.h>
+#include <signal.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <unistd.h>
+
+static int crash_log_descriptor = -1;
 
 int mihomo_dns_interface_has_ipv4(const char *interface_name, const char *address) {
     struct in_addr expected;
@@ -132,4 +137,70 @@ int mihomo_dns_pid_executable_matches(int pid, const char *path) {
         return 0;
     }
     return strcmp(actual, path) == 0 ? 1 : 0;
+}
+
+static void crash_signal_handler(int signal_number) {
+    int saved_errno = errno;
+    const char *message = "level=error event=daemon_crashed signal=unknown\n";
+    size_t length = strlen(message);
+    switch (signal_number) {
+        case SIGABRT:
+            message = "level=error event=daemon_crashed signal=SIGABRT\n";
+            length = sizeof("level=error event=daemon_crashed signal=SIGABRT\n") - 1;
+            break;
+        case SIGBUS:
+            message = "level=error event=daemon_crashed signal=SIGBUS\n";
+            length = sizeof("level=error event=daemon_crashed signal=SIGBUS\n") - 1;
+            break;
+        case SIGFPE:
+            message = "level=error event=daemon_crashed signal=SIGFPE\n";
+            length = sizeof("level=error event=daemon_crashed signal=SIGFPE\n") - 1;
+            break;
+        case SIGILL:
+            message = "level=error event=daemon_crashed signal=SIGILL\n";
+            length = sizeof("level=error event=daemon_crashed signal=SIGILL\n") - 1;
+            break;
+        case SIGSEGV:
+            message = "level=error event=daemon_crashed signal=SIGSEGV\n";
+            length = sizeof("level=error event=daemon_crashed signal=SIGSEGV\n") - 1;
+            break;
+    }
+    if (crash_log_descriptor >= 0) {
+        (void)write(crash_log_descriptor, message, length);
+        (void)fsync(crash_log_descriptor);
+    } else {
+        (void)write(STDERR_FILENO, message, length);
+    }
+
+    struct sigaction action;
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = SIG_DFL;
+    sigemptyset(&action.sa_mask);
+    (void)sigaction(signal_number, &action, NULL);
+    errno = saved_errno;
+    (void)kill(getpid(), signal_number);
+    _exit(128 + signal_number);
+}
+
+void mihomo_dns_install_crash_signal_handlers(const char *crash_log_path) {
+    if (crash_log_descriptor >= 0) {
+        (void)close(crash_log_descriptor);
+        crash_log_descriptor = -1;
+    }
+    if (crash_log_path != NULL) {
+        crash_log_descriptor = open(
+            crash_log_path,
+            O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC,
+            S_IRUSR | S_IWUSR
+        );
+    }
+    const int signals[] = {SIGABRT, SIGBUS, SIGFPE, SIGILL, SIGSEGV};
+    struct sigaction action;
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = crash_signal_handler;
+    sigemptyset(&action.sa_mask);
+    action.sa_flags = SA_RESETHAND;
+    for (size_t index = 0; index < sizeof(signals) / sizeof(signals[0]); index++) {
+        (void)sigaction(signals[index], &action, NULL);
+    }
 }

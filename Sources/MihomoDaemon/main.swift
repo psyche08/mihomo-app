@@ -6,6 +6,13 @@ private let root = URL(fileURLWithPath: "/Library/Application Support/Mihomo App
 private let defaultConfigPath = root.appendingPathComponent("daemon.json").path
 private let arguments = CommandLine.arguments
 
+ServiceLog.configure(
+    logPath: "/Library/Logs/Mihomo App/mihomo-daemon.log",
+    crashLogPath: "/Library/Logs/Mihomo App/mihomo-daemon-crash.log"
+)
+ServiceLog.installCrashSignalHandlers()
+ServiceLog.info("event=daemon_started pid=\(getpid())")
+
 if arguments.contains("--help") || arguments.contains("-h") {
     print("usage: mihomo-daemon [--config PATH]")
     exit(0)
@@ -29,7 +36,10 @@ do {
     for value in [SIGTERM, SIGINT] {
         signal(value, SIG_IGN)
         let source = DispatchSource.makeSignalSource(signal: value, queue: signalQueue)
-        source.setEventHandler { stopped.signal() }
+        source.setEventHandler {
+            ServiceLog.info("event=daemon_shutdown_requested signal=\(value)")
+            stopped.signal()
+        }
         source.resume()
         sources.append(source)
     }

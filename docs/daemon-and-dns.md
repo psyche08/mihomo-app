@@ -86,6 +86,15 @@ keys. On change it:
 5. binds original-DNS sockets using `IP_BOUND_IF`/`IPV6_BOUND_IF`;
 6. restores an old PrimaryService before managing the new service.
 
+An independent two-second consistency observer also detects later drift. A DNS
+preference or effective-state change is reapplied while the managed runtime is
+healthy. If the TUN/Fake-IP route, controller, or Mihomo DNS disappears, the
+agent immediately disables Fake-IP answers, requests a restart from its sole
+owned Mihomo supervisor, and allows eight seconds for Mihomo to rebuild the
+complete auto-route state. During that window the loopback DNS bridge serves
+real upstream answers. Only a failed recovery rolls back system DNS and stops
+the child.
+
 When the persistent service DNS value already matches but the PrimaryService's
 dynamic DNS value is absent, the agent reapplies preferences and republishes
 the service value. Persistent and dynamic dictionaries for the previous service
@@ -99,3 +108,9 @@ clients, serializes lifecycle/profile transactions, and supervises the agent.
 No query name, matched domain, resolver address, service identifier, or wire
 message is logged. Only interface names and aggregate resolver/route counts are
 audited.
+
+Lifecycle, configuration commands, child exits/restarts, network transitions,
+drift detection, repair attempts, and repair outcomes are structured audit
+events. Each log file is capped at 100 MiB and retains three numbered rotated
+generations. Fatal signals are also synchronously appended to a separate crash
+log before the operating system receives the signal.

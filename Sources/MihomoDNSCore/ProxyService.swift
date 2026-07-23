@@ -43,6 +43,7 @@ public final class ProxyService {
     }
 
     public func start() throws {
+        ServiceLog.info("event=service_starting")
         try configuration.validate()
         safetyState.setRuntimeReady(!configuration.manageSystemDNS)
         if configuration.manageSystemDNS {
@@ -79,6 +80,9 @@ public final class ProxyService {
                     globalDNS: globalDNS,
                     aliasManager: aliasManager,
                     safetyState: safetyState,
+                    runtimeRecoveryHandler: { [mihomoSupervisor] in
+                        mihomoSupervisor?.requestRecovery()
+                    },
                     unsafeRuntimeHandler: { [mihomoSupervisor] in
                         mihomoSupervisor?.stop()
                     }
@@ -142,6 +146,7 @@ public final class ProxyService {
         }
         stopped = true
         stopLock.unlock()
+        ServiceLog.info("event=service_stop_started")
 
         safetyState.setRuntimeReady(false)
         MihomoRuntimeInspector.flushMihomoDNSCaches(configuration: configuration)
@@ -161,6 +166,7 @@ public final class ProxyService {
         mihomoSupervisor?.stop()
         try? threadPool.syncShutdownGracefully()
         try? group.syncShutdownGracefully()
+        ServiceLog.info("event=service_stopped")
     }
 
     private func startUDP(endpoint: Endpoint, forwarder: DNSForwarding) throws -> Channel {

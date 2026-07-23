@@ -182,15 +182,23 @@ public final class NetworkDNSState: @unchecked Sendable {
         let interfaceName = (globalIPv4?["PrimaryInterface"] as? String)
             ?? (globalIPv6?["PrimaryInterface"] as? String)
 
-        var servers = serviceID.map { dhcpServers(store: store, serviceID: $0) } ?? []
+        let dhcpCandidates = serviceID.map { dhcpServers(store: store, serviceID: $0) } ?? []
+        var serviceServers: [String] = []
 
-        if servers.isEmpty, let serviceID {
+        if let serviceID {
             let key = "State:/Network/Service/\(serviceID)/DNS" as CFString
             let dns = SCDynamicStoreCopyValue(store, key) as? [String: Any]
-            servers = dns?["ServerAddresses"] as? [String] ?? []
+            serviceServers = dns?["ServerAddresses"] as? [String] ?? []
         }
 
-        servers = unique(servers.filter(isUsableServer))
+        let globalDNS = SCDynamicStoreCopyValue(store, "State:/Network/Global/DNS" as CFString)
+            as? [String: Any]
+        let globalServers = globalDNS?["ServerAddresses"] as? [String] ?? []
+        var servers = selectDiscoveredServers(
+            dhcpServers: dhcpCandidates,
+            serviceServers: serviceServers,
+            globalServers: globalServers
+        )
         if servers.isEmpty,
            serviceID == previous.serviceID,
            interfaceName == previous.interfaceName,
@@ -238,6 +246,20 @@ public final class NetworkDNSState: @unchecked Sendable {
             )
         }
         handler?()
+    }
+
+    func selectDiscoveredServers(
+        dhcpServers: [String],
+        serviceServers: [String],
+        globalServers: [String]
+    ) -> [String] {
+        for candidates in [dhcpServers, serviceServers, globalServers] {
+            let usable = unique(candidates.filter(isUsableServer))
+            if !usable.isEmpty {
+                return usable
+            }
+        }
+        return []
     }
 
     private func readSplitRoutes(
