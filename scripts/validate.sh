@@ -20,6 +20,7 @@ env \
   /usr/bin/swift test --disable-sandbox
 Tests/e2e.sh
 /usr/bin/python3 -m unittest discover -s Tests -p 'test_*.py'
+/bin/bash Tests/test_release_common.sh
 /bin/bash -n scripts/*.sh
 /usr/bin/plutil -lint deploy/dev.linsheng.mihomo.daemon.plist
 scripts/install-daemon.sh --dry-run

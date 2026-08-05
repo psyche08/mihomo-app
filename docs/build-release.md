@@ -69,6 +69,57 @@ signs the Tauri bundle, submits the App archive with `notarytool`, staples the
 App, creates and signs the DMG, submits and staples the DMG, and verifies both
 artifacts with Gatekeeper. Never print credential values.
 
+The script does not gate the upload behind a network precheck. One was tried and
+removed: it probed the release endpoints over TLS and scanned the Surge log for
+recent network errors, and in practice it only ever produced false negatives —
+an unrelated OCSP timeout and a CDN host that answers `HEAD /` near the probe
+timeout each blocked a release whose network was healthy. Transient failures are
+handled where they actually occur instead, by the `notarytool` retry loop and
+the resume state below.
+
+The release host's outbound policy is a separate, manual concern; a profile
+proposal is documented in
+[`surge-release-profile-plan.md`](surge-release-profile-plan.md). No script
+launches, reloads, configures, or sends a command to Surge.
+
+Notarization progress is stored under `dist/.release-state/`, keyed by artifact
+SHA-256. The state contains no credentials and records the submission ID,
+whether upload completion was explicitly confirmed, and the last notarization
+phase. A restarted release resumes `wait` only for a confirmed upload; an
+`Accepted` artifact proceeds directly to stapling. A changed artifact receives a
+new state file and is never confused with an older submission.
+
+If a release process exits after creating the signed artifacts, resume the exact
+existing App/archive/DMG without rebuilding or re-signing:
+
+```bash
+scripts/release-macos.sh --resume
+```
+
+Resume mode verifies the existing App version and signatures, reuses the exact
+artifact whose SHA-256 keys the saved state, and skips phases whose stapled
+ticket already validates. It refuses to resume when the App/archive needed by
+the current phase is missing or the source and bundle versions differ.
+
+When the build is current but notarization never happened — the upload failed
+before a submission was created, for example — skip the compile and go straight
+to signing and notarization:
+
+```bash
+scripts/release-macos.sh --skip-build
+```
+
+`--skip-build` reuses the existing bundle but still re-signs it with the
+Developer ID identity and the hardened runtime, then builds the pre-staple
+archive from scratch. Re-signing is what makes the flag safe: `validate.sh`
+leaves a bundle at the same path signed ad-hoc (`codesign --sign -`), which
+notarization rejects. The App itself is the same either way — the release config
+only adds `createUpdaterArtifacts` — so re-signing is the whole difference.
+
+Use `--resume` instead whenever a notarization submission was already uploaded:
+it must not rebuild the pre-staple archive, because that archive's SHA-256 keys
+the saved submission state. The two flags are mutually exclusive.
+
 ## Automatic Updates
 
 The signed App first synchronizes any changed root-owned `mihomo-daemon`,
