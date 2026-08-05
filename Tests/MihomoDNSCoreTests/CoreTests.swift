@@ -513,6 +513,341 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(policy.decide(runtimeReady: false, networkOwned: false, nowNanoseconds: 1), .none)
     }
 
+    func testDNSAcquisitionManagesOnceBridgeAnswers() {
+        let policy = DNSAcquisitionPolicy()
+        XCTAssertEqual(
+            policy.decide(upstreamRuntimeReady: true, dnsBridgeReady: true, systemDNSManaged: false),
+            .manage
+        )
+    }
+
+    func testDNSAcquisitionReacquiresBridgeAfterRollbackLatch() {
+        // Kernel + Mihomo DNS are healthy, but an earlier rollback removed the
+        // loopback alias so the bridge no longer answers and ownership was
+        // released. The observer must re-ensure the alias instead of latching
+        // into passive observation (the ~76h stuck state seen in the logs).
+        let policy = DNSAcquisitionPolicy()
+        XCTAssertEqual(
+            policy.decide(upstreamRuntimeReady: true, dnsBridgeReady: false, systemDNSManaged: false),
+            .reacquireBridge
+        )
+    }
+
+    func testDNSAcquisitionMaintainsAliasWhileManaged() {
+        let policy = DNSAcquisitionPolicy()
+        XCTAssertEqual(
+            policy.decide(upstreamRuntimeReady: true, dnsBridgeReady: true, systemDNSManaged: true),
+            .maintain
+        )
+    }
+
+    func testDNSAcquisitionYieldsToBridgeFailurePolicyWhenManagedBridgeDrops() {
+        // Managed but the bridge dropped: acquisition stays idle so the
+        // dedicated bridge-failure policy owns the restore decision.
+        let policy = DNSAcquisitionPolicy()
+        XCTAssertEqual(
+            policy.decide(upstreamRuntimeReady: true, dnsBridgeReady: false, systemDNSManaged: true),
+            .none
+        )
+    }
+
+    func testEgressProbeIntervalGatesProbingAndWakeForcesIt() {
+        var policy = EgressProbePolicy(intervalSeconds: 60)
+        let second: UInt64 = 1_000_000_000
+        XCTAssertTrue(policy.isProbeDue(nowNanoseconds: 10 * second, forced: false))
+        policy.noteProbeStarted(nowNanoseconds: 10 * second)
+        // Inside the interval a second probe must not be spent.
+        XCTAssertFalse(policy.isProbeDue(nowNanoseconds: 40 * second, forced: false))
+        // A wake forces one regardless of how recently we probed.
+        XCTAssertTrue(policy.isProbeDue(nowNanoseconds: 41 * second, forced: true))
+        policy.noteProbeStarted(nowNanoseconds: 41 * second)
+        XCTAssertFalse(policy.isProbeDue(nowNanoseconds: 60 * second, forced: false))
+        XCTAssertTrue(policy.isProbeDue(nowNanoseconds: 101 * second, forced: false))
+    }
+
+    func testCountingPoliciesAreCallCountersSoOffTickEvaluationsMustNotChargeThem() {
+        // Pins the invariant behind evaluate(chargeFailures:). Both policies
+        // count *calls*, not elapsed time: their ~6-second debounce exists only
+        // because the 2-second timer used to be the sole caller. Now that wakes
+        // and SystemConfiguration changes also drive evaluations, charging them
+        // would satisfy the threshold instantly and restart the kernel.
+        var runtime = RuntimeRecoveryPolicy(graceSeconds: 8, requiredFailures: 3)
+        // Three calls at the *same* instant still reach .start — there is no
+        // time gate to save us.
+        XCTAssertEqual(runtime.decide(runtimeReady: false, networkOwned: true, nowNanoseconds: 1), .debounce)
+        XCTAssertEqual(runtime.decide(runtimeReady: false, networkOwned: true, nowNanoseconds: 1), .debounce)
+        XCTAssertEqual(runtime.decide(runtimeReady: false, networkOwned: true, nowNanoseconds: 1), .start)
+
+        var bridge = DNSBridgeFailurePolicy(requiredFailures: 3)
+        for _ in 0 ..< 2 {
+            XCTAssertEqual(
+                bridge.decide(bridgeReady: false, upstreamRuntimeReady: true, networkOwned: true),
+                .debounce
+            )
+        }
+        XCTAssertEqual(
+            bridge.decide(bridgeReady: false, upstreamRuntimeReady: true, networkOwned: true),
+            .restoreOriginalDNS
+        )
+    }
+
+    func testEgressProbeDueStaysSetUntilAProbeActuallyStarts() {
+        // A probe that was dropped (one already in flight) must not consume the
+        // interval, otherwise the post-wake revalidation is silently skipped.
+        var policy = EgressProbePolicy(intervalSeconds: 60)
+        let second: UInt64 = 1_000_000_000
+        XCTAssertTrue(policy.isProbeDue(nowNanoseconds: 10 * second, forced: false))
+        // Caller did not call noteProbeStarted because schedule() returned false.
+        XCTAssertTrue(policy.isProbeDue(nowNanoseconds: 11 * second, forced: false))
+    }
+
+    func testEgressReadingSequenceAdvancesOnlyOnNewResults() {
+        // Regression guard for the defect where the 2s consistency tick folded
+        // the same cached probe result repeatedly, reaching the failure
+        // threshold off a single probe within seconds.
+        let coordinator = EgressProbeCoordinator(
+            configuration: ProxyConfiguration(),
+            probe: { _ in .unreachable }
+        )
+        let initial = coordinator.latest()
+        XCTAssertEqual(initial.outcome, .unknown)
+
+        let published = expectation(description: "probe published")
+        XCTAssertTrue(coordinator.schedule { _ in published.fulfill() })
+        wait(for: [published], timeout: 2)
+
+        let first = coordinator.latest()
+        XCTAssertEqual(first.outcome, .unreachable)
+        XCTAssertNotEqual(first.sequence, initial.sequence)
+        // Reading again without a new probe must report the same sequence, so a
+        // caller can tell it has already acted on this result.
+        XCTAssertEqual(coordinator.latest(), first)
+        XCTAssertEqual(coordinator.latest(), first)
+
+        // Invalidation is itself a new observation (the old one is gone).
+        coordinator.invalidate()
+        let cleared = coordinator.latest()
+        XCTAssertEqual(cleared.outcome, .unknown)
+        XCTAssertNotEqual(cleared.sequence, first.sequence)
+    }
+
+    func testEgressSingleFailedProbeCannotReachRecoveryThreshold() {
+        // Drive the policy the way the consistency tick does: many ticks per
+        // probe. With one failed probe folded once, recovery must not trigger.
+        var policy = EgressProbePolicy(intervalSeconds: 60, requiredFailures: 3)
+        let second: UInt64 = 1_000_000_000
+        XCTAssertEqual(
+            policy.decide(outcome: .reachable, runtimeReady: true, nowNanoseconds: second),
+            .none
+        )
+        // One failed probe, folded exactly once.
+        XCTAssertEqual(
+            policy.decide(outcome: .unreachable, runtimeReady: true, nowNanoseconds: 61 * second),
+            .debounce
+        )
+        // 29 further ticks occur before the next probe; none of them may fold a
+        // result, so the policy state must be untouched.
+        XCTAssertEqual(policy.consecutiveFailures, 1)
+    }
+
+    func testEgressProbeCoordinatorDropsConcurrentScheduleRequest() {
+        let started = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        let coordinator = EgressProbeCoordinator(
+            configuration: ProxyConfiguration(),
+            probe: { _ in
+                started.signal()
+                release.wait()
+                return .reachable
+            }
+        )
+        XCTAssertTrue(coordinator.schedule())
+        XCTAssertEqual(started.wait(timeout: .now() + 2), .success)
+        // A second request while one is in flight is refused, and the caller
+        // learns about it so it can retry rather than lose the request.
+        XCTAssertFalse(coordinator.schedule())
+        release.signal()
+    }
+
+    func testEgressProbeRecoversOnlyAfterSustainedFailure() {
+        var policy = EgressProbePolicy(requiredFailures: 3)
+        // Egress must have worked at least once for a failure to count as a
+        // regression.
+        XCTAssertEqual(
+            policy.decide(outcome: .reachable, runtimeReady: true, nowNanoseconds: 1),
+            .none
+        )
+        for _ in 0 ..< 2 {
+            XCTAssertEqual(
+                policy.decide(outcome: .unreachable, runtimeReady: true, nowNanoseconds: 2),
+                .debounce
+            )
+        }
+        XCTAssertEqual(
+            policy.decide(outcome: .unreachable, runtimeReady: true, nowNanoseconds: 3),
+            .sustainedFailure
+        )
+    }
+
+    func testEgressProbeNeverRecoversWhenPathNeverWorked() {
+        // Offline machine or a genuinely dead proxy: every local signal reads
+        // healthy, but restarting the runtime cannot help, so we must stay put
+        // no matter how long it keeps failing.
+        var policy = EgressProbePolicy(requiredFailures: 1)
+        for tick in 1 ... 50 {
+            XCTAssertEqual(
+                policy.decide(
+                    outcome: .unreachable,
+                    runtimeReady: true,
+                    nowNanoseconds: UInt64(tick) * 1_000_000_000
+                ),
+                .none
+            )
+        }
+        XCTAssertFalse(policy.observedReachable)
+    }
+
+    func testEgressProbeRequiresFreshSuccessBeforeRecoveringAgain() {
+        // After one recovery the new runtime must prove egress works before
+        // another restart can be triggered — this is what forecloses a restart
+        // loop, independently of the cooldown.
+        var policy = EgressProbePolicy(cooldownSeconds: 600, requiredFailures: 1)
+        let second: UInt64 = 1_000_000_000
+        XCTAssertEqual(
+            policy.decide(outcome: .reachable, runtimeReady: true, nowNanoseconds: second),
+            .none
+        )
+        XCTAssertEqual(
+            policy.decide(outcome: .unreachable, runtimeReady: true, nowNanoseconds: 2 * second),
+            .sustainedFailure
+        )
+        // Still broken after the restart, and well past the cooldown: no second
+        // restart, because egress never came back.
+        XCTAssertEqual(
+            policy.decide(outcome: .unreachable, runtimeReady: true, nowNanoseconds: 900 * second),
+            .none
+        )
+        // It works again, then regresses: now a restart is justified once more.
+        XCTAssertEqual(
+            policy.decide(outcome: .reachable, runtimeReady: true, nowNanoseconds: 910 * second),
+            .none
+        )
+        XCTAssertEqual(
+            policy.decide(outcome: .unreachable, runtimeReady: true, nowNanoseconds: 1_000 * second),
+            .sustainedFailure
+        )
+    }
+
+    func testEgressProbeCooldownHoldsAfterRecovery() {
+        var policy = EgressProbePolicy(cooldownSeconds: 600, requiredFailures: 1)
+        let second: UInt64 = 1_000_000_000
+        XCTAssertEqual(
+            policy.decide(outcome: .reachable, runtimeReady: true, nowNanoseconds: second),
+            .none
+        )
+        XCTAssertEqual(
+            policy.decide(outcome: .unreachable, runtimeReady: true, nowNanoseconds: second),
+            .sustainedFailure
+        )
+        // Egress recovers and regresses again inside the cooldown window.
+        XCTAssertEqual(
+            policy.decide(outcome: .reachable, runtimeReady: true, nowNanoseconds: 100 * second),
+            .none
+        )
+        XCTAssertEqual(
+            policy.decide(outcome: .unreachable, runtimeReady: true, nowNanoseconds: 300 * second),
+            .debounce
+        )
+        XCTAssertEqual(
+            policy.decide(outcome: .unreachable, runtimeReady: true, nowNanoseconds: 602 * second),
+            .sustainedFailure
+        )
+    }
+
+    func testEgressProbeIgnoresUnknownAndUnhealthyRuntime() {
+        var policy = EgressProbePolicy(requiredFailures: 1)
+        // No probe result yet, or no real outbound proxy selected.
+        XCTAssertEqual(
+            policy.decide(outcome: .unknown, runtimeReady: true, nowNanoseconds: 1),
+            .none
+        )
+        // The rest of the runtime is already broken; other policies own that.
+        XCTAssertEqual(
+            policy.decide(outcome: .unreachable, runtimeReady: false, nowNanoseconds: 2),
+            .none
+        )
+        // A success clears accumulated failures.
+        var recovering = EgressProbePolicy(requiredFailures: 2)
+        XCTAssertEqual(
+            recovering.decide(outcome: .reachable, runtimeReady: true, nowNanoseconds: 0),
+            .none
+        )
+        XCTAssertEqual(
+            recovering.decide(outcome: .unreachable, runtimeReady: true, nowNanoseconds: 1),
+            .debounce
+        )
+        XCTAssertEqual(
+            recovering.decide(outcome: .reachable, runtimeReady: true, nowNanoseconds: 2),
+            .none
+        )
+        XCTAssertEqual(recovering.consecutiveFailures, 0)
+    }
+
+    func testEgressProbeCoordinatorPublishesResultAndInvalidateDropsIt() {
+        let configuration = ProxyConfiguration()
+        let coordinator = EgressProbeCoordinator(
+            configuration: configuration,
+            probe: { _ in .unreachable }
+        )
+        XCTAssertEqual(coordinator.latest().outcome, .unknown)
+
+        let published = expectation(description: "probe published")
+        coordinator.schedule { _ in published.fulfill() }
+        wait(for: [published], timeout: 2)
+        XCTAssertEqual(coordinator.latest().outcome, .unreachable)
+
+        // Across a sleep boundary the old measurement no longer describes the
+        // current network.
+        coordinator.invalidate()
+        XCTAssertEqual(coordinator.latest().outcome, .unknown)
+    }
+
+    func testEgressProbeCoordinatorDiscardsResultRacingAnInvalidate() {
+        let started = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        let coordinator = EgressProbeCoordinator(
+            configuration: ProxyConfiguration(),
+            probe: { _ in
+                started.signal()
+                release.wait()
+                return .reachable
+            }
+        )
+        coordinator.schedule()
+        XCTAssertEqual(started.wait(timeout: .now() + 2), .success)
+        // Invalidate while the probe is still running: its result describes a
+        // network that no longer exists and must not be published.
+        coordinator.invalidate()
+        release.signal()
+        // Give the probe queue a chance to complete before asserting.
+        let settled = expectation(description: "probe settled")
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { settled.fulfill() }
+        wait(for: [settled], timeout: 2)
+        XCTAssertEqual(coordinator.latest().outcome, .unknown)
+    }
+
+    func testDNSAcquisitionIdleWhenKernelRuntimeUnavailable() {
+        let policy = DNSAcquisitionPolicy()
+        XCTAssertEqual(
+            policy.decide(upstreamRuntimeReady: false, dnsBridgeReady: false, systemDNSManaged: false),
+            .none
+        )
+        XCTAssertEqual(
+            policy.decide(upstreamRuntimeReady: false, dnsBridgeReady: true, systemDNSManaged: true),
+            .none
+        )
+    }
+
     func testRotatingFileWriterCapsEachGeneration() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

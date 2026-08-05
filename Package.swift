@@ -30,6 +30,7 @@ let package = Package(
                 .product(name: "NIOPosix", package: "swift-nio"),
             ],
             linkerSettings: [
+                .linkedFramework("IOKit"),
                 .linkedFramework("SystemConfiguration"),
             ]
         ),

@@ -14,6 +14,7 @@ public final class ProxyService {
     private let stopLock = NSLock()
     private var stopped = false
     private var consistencyController: NetworkConsistencyController?
+    private var powerObserver: SystemPowerObserver?
     private var channels: [Channel] = []
 
     public init(configuration: ProxyConfiguration) {
@@ -92,6 +93,25 @@ public final class ProxyService {
                 )
                 consistencyController = controller
                 controller.start()
+
+                // SystemConfiguration already tells us when the primary
+                // interface, service or DNS changes; until now nothing consumed
+                // it, so the app only noticed a network change on the next
+                // 2-second poll and never re-validated egress at all.
+                networkState.setRefreshHandler { [weak controller] in
+                    controller?.scheduleImmediateEvaluation(reason: "network_dns_changed")
+                }
+
+                // A root LaunchDaemon gets no NSWorkspace wake notification, so
+                // this is IOKit-based. Wake is when TUN, the default route and
+                // the outbound interface binding are most likely to have moved
+                // underneath a runtime that still looks healthy locally.
+                let observer = SystemPowerObserver(
+                    onSleep: { [weak controller] in controller?.handleSystemSleep() },
+                    onWake: { [weak controller] in controller?.handleSystemWake() }
+                )
+                observer.start()
+                powerObserver = observer
             }
         } catch {
             stop()
@@ -150,6 +170,11 @@ public final class ProxyService {
 
         safetyState.setRuntimeReady(false)
         MihomoRuntimeInspector.flushMihomoDNSCaches(configuration: configuration)
+        // Drop the notification sources before tearing the controller down so a
+        // late callback cannot resurrect evaluation during shutdown.
+        networkState.setRefreshHandler(nil)
+        powerObserver?.stop()
+        powerObserver = nil
         consistencyController?.stopAndRestore()
         consistencyController = nil
         if configuration.manageSystemDNS {
