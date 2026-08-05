@@ -311,10 +311,15 @@ fn snapshot_from_envelope(response: SnapshotEnvelope) -> Snapshot {
                 .iter()
                 .map(|node| ProxyNode {
                     name: node.clone(),
+                    // A failed or timed-out probe is recorded by the controller
+                    // as delay 0. Treat that as "no successful measurement"
+                    // (None) rather than a real latency so the menu neither
+                    // renders "0 ms" nor discards a prior good reading.
                     delay: proxies
                         .get(node)
                         .and_then(|entry| entry.history.last())
-                        .map(|entry| entry.delay),
+                        .map(|entry| entry.delay)
+                        .filter(|delay| *delay > 0),
                 })
                 .collect(),
         })

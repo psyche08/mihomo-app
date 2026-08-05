@@ -7,7 +7,7 @@ use std::io::{self, Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
@@ -42,7 +42,32 @@ struct TrayState {
     last_menu_signature: Mutex<Option<MenuSignature>>,
     last_action_error: Mutex<Option<String>>,
     refresh_in_flight: AtomicBool,
+    poll_failures: AtomicU32,
 }
+
+/// How a `refresh` should treat the freshly polled controller state.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RefreshMode {
+    /// Background poll: retain last-known-good latency and tolerate a single
+    /// dropped poll, so a transient controller hiccup never flashes the menu
+    /// to "--"/"unavailable".
+    Passive,
+    /// User-initiated refresh: reflect the fresh controller result as-is,
+    /// including genuinely failed latency probes.
+    Authoritative,
+}
+
+/// Consecutive failed polls tolerated before the tray reports the daemon as
+/// unavailable. One dropped poll keeps the last-known-good menu.
+const UNAVAILABLE_AFTER_FAILURES: u32 = 2;
+
+/// Fast startup/reconnect poll cadence, used until the controller is reachable.
+const WARMUP_POLL_INTERVAL: Duration = Duration::from_millis(500);
+/// Steady-state poll cadence once the controller is reachable.
+const STEADY_POLL_INTERVAL: Duration = Duration::from_secs(5);
+/// Upper bound on fast polls before falling back to the steady cadence, so a
+/// daemon that never comes up doesn't get polled twice a second forever.
+const WARMUP_POLL_BUDGET: u32 = 20;
 
 struct RefreshGuard(Arc<TrayState>);
 
@@ -119,6 +144,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         last_menu_signature: Mutex::new(None),
         last_action_error: Mutex::new(None),
         refresh_in_flight: AtomicBool::new(false),
+        poll_failures: AtomicU32::new(0),
     });
     app.manage(state.clone());
 
@@ -157,12 +183,31 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     #[cfg(target_os = "macos")]
     tray.set_icon_as_template(true)?;
 
-    refresh(app.clone(), state.clone());
+    refresh(app.clone(), state.clone(), RefreshMode::Passive);
     let polling_app = app.clone();
     tauri::async_runtime::spawn(async move {
+        // Poll quickly until the controller is reachable so the tray converges
+        // to real state within a fraction of a second of the daemon coming up
+        // instead of waiting out a full steady interval. The fast cadence is
+        // re-armed whenever reachability is lost (e.g. an agent restart).
+        let mut warmup = WARMUP_POLL_BUDGET;
         loop {
-            tokio::time::sleep(Duration::from_secs(5)).await;
-            refresh(polling_app.clone(), state.clone());
+            let reachable = state
+                .snapshot
+                .lock()
+                .map(|snapshot| snapshot.reachable)
+                .unwrap_or(false);
+            let interval = if reachable {
+                warmup = WARMUP_POLL_BUDGET;
+                STEADY_POLL_INTERVAL
+            } else if warmup > 0 {
+                warmup -= 1;
+                WARMUP_POLL_INTERVAL
+            } else {
+                STEADY_POLL_INTERVAL
+            };
+            tokio::time::sleep(interval).await;
+            refresh(polling_app.clone(), state.clone(), RefreshMode::Passive);
         }
     });
     Ok(())
@@ -433,7 +478,11 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
         tauri::async_runtime::spawn(async move {
             tokio::time::sleep(Duration::from_secs(2)).await;
             if let Some(state) = app.try_state::<Arc<TrayState>>() {
-                refresh(app.clone(), state.inner().clone());
+                refresh(
+                    app.clone(),
+                    state.inner().clone(),
+                    RefreshMode::Authoritative,
+                );
             }
         });
         return;
@@ -539,11 +588,11 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
                 }
             }
         }
-        refresh(app, state);
+        refresh(app, state, RefreshMode::Authoritative);
     });
 }
 
-fn refresh(app: AppHandle, state: Arc<TrayState>) {
+fn refresh(app: AppHandle, state: Arc<TrayState>, mode: RefreshMode) {
     if state
         .refresh_in_flight
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -555,20 +604,38 @@ fn refresh(app: AppHandle, state: Arc<TrayState>) {
     tauri::async_runtime::spawn(async move {
         let _guard = guard;
         let poll = controller_client().tray_state().await.ok();
-        let snapshot = poll
-            .as_ref()
-            .map(|value| value.snapshot.clone())
-            .unwrap_or_default();
+        let (snapshot, profiles, network_healthy) = match poll {
+            Some(value) => {
+                state.poll_failures.store(0, Ordering::Release);
+                let mut snapshot = value.snapshot;
+                // Background polls keep the last-known-good latency for any node
+                // whose fresh probe came back empty, so a single failed probe
+                // never flashes a good node to "--". An authoritative refresh
+                // (user asked to re-test) shows the fresh result verbatim.
+                if mode == RefreshMode::Passive {
+                    let previous = state.snapshot.lock().expect("snapshot lock").clone();
+                    retain_known_delays(&previous, &mut snapshot);
+                }
+                let profiles = ProfileState {
+                    names: value.profiles,
+                    active: value.active_profile,
+                };
+                (snapshot, profiles, value.network_consistent)
+            }
+            None => {
+                // Debounce controller unavailability: keep the last-known-good
+                // menu across a single dropped poll instead of blanking every
+                // node, and only report the daemon unavailable once failures
+                // persist.
+                let failures = state.poll_failures.fetch_add(1, Ordering::AcqRel) + 1;
+                if failures < UNAVAILABLE_AFTER_FAILURES {
+                    return;
+                }
+                (Snapshot::default(), profile_state(), None)
+            }
+        };
         *state.snapshot.lock().expect("snapshot lock") = snapshot.clone();
-        let profiles = poll
-            .as_ref()
-            .map(|value| ProfileState {
-                names: value.profiles.clone(),
-                active: value.active_profile.clone(),
-            })
-            .unwrap_or_else(profile_state);
         let profile_busy = *state.profile_busy.lock().expect("profile busy lock");
-        let network_healthy = poll.and_then(|value| value.network_consistent);
         let action_error = state
             .last_action_error
             .lock()
@@ -705,6 +772,32 @@ fn flat_proxy_nodes(snapshot: &Snapshot) -> Vec<FlatProxyNode> {
         }
     }
     nodes
+}
+
+/// Fill latency for nodes whose fresh probe came back empty (`None`) using the
+/// last known-good reading, matched by node name across groups. This keeps a
+/// single failed or timed-out probe from erasing a good value from the menu.
+fn retain_known_delays(previous: &Snapshot, fresh: &mut Snapshot) {
+    let mut known: HashMap<&str, u64> = HashMap::new();
+    for group in &previous.groups {
+        for node in &group.proxies {
+            if let Some(delay) = node.delay {
+                known.entry(node.name.as_str()).or_insert(delay);
+            }
+        }
+    }
+    if known.is_empty() {
+        return;
+    }
+    for group in &mut fresh.groups {
+        for node in &mut group.proxies {
+            if node.delay.is_none() {
+                if let Some(delay) = known.get(node.name.as_str()) {
+                    node.delay = Some(*delay);
+                }
+            }
+        }
+    }
 }
 
 fn delay_label(delay: Option<u64>) -> String {
@@ -960,7 +1053,7 @@ where
             ));
             set_action_error(&worker_state, error);
             end_profile_operation(&worker_state);
-            refresh(worker_app, worker_state);
+            refresh(worker_app, worker_state, RefreshMode::Authoritative);
         });
     if result.is_err() {
         app_log::error(&format!(
@@ -971,7 +1064,7 @@ where
             Some("Action failed: unable to start profile operation".to_string()),
         );
         end_profile_operation(&state);
-        refresh(app, state);
+        refresh(app, state, RefreshMode::Authoritative);
     }
 }
 
@@ -1246,6 +1339,67 @@ mod tests {
         snapshot.groups[0].current = "Node B".to_string();
         let third = MenuSignature::new(&snapshot, &profiles, false, Some(true), None);
         assert_ne!(second, third);
+    }
+
+    #[test]
+    fn retain_known_delays_keeps_last_good_reading_on_empty_probe() {
+        let previous = Snapshot {
+            groups: vec![crate::mihomo::ProxyGroup {
+                name: "PROXY".to_string(),
+                current: "Node A".to_string(),
+                proxies: vec![
+                    crate::mihomo::ProxyNode {
+                        name: "Node A".to_string(),
+                        delay: Some(42),
+                    },
+                    crate::mihomo::ProxyNode {
+                        name: "Node B".to_string(),
+                        delay: Some(88),
+                    },
+                ],
+            }],
+            ..Snapshot::default()
+        };
+        // Fresh poll: Node A's probe failed (None), Node B measured anew.
+        let mut fresh = Snapshot {
+            groups: vec![crate::mihomo::ProxyGroup {
+                name: "PROXY".to_string(),
+                current: "Node A".to_string(),
+                proxies: vec![
+                    crate::mihomo::ProxyNode {
+                        name: "Node A".to_string(),
+                        delay: None,
+                    },
+                    crate::mihomo::ProxyNode {
+                        name: "Node B".to_string(),
+                        delay: Some(120),
+                    },
+                ],
+            }],
+            ..Snapshot::default()
+        };
+        retain_known_delays(&previous, &mut fresh);
+        // Node A keeps its last good reading; Node B takes the fresh value.
+        assert_eq!(fresh.groups[0].proxies[0].delay, Some(42));
+        assert_eq!(fresh.groups[0].proxies[1].delay, Some(120));
+    }
+
+    #[test]
+    fn retain_known_delays_leaves_never_measured_nodes_unknown() {
+        let previous = Snapshot::default();
+        let mut fresh = Snapshot {
+            groups: vec![crate::mihomo::ProxyGroup {
+                name: "PROXY".to_string(),
+                current: "Node A".to_string(),
+                proxies: vec![crate::mihomo::ProxyNode {
+                    name: "Node A".to_string(),
+                    delay: None,
+                }],
+            }],
+            ..Snapshot::default()
+        };
+        retain_known_delays(&previous, &mut fresh);
+        assert_eq!(fresh.groups[0].proxies[0].delay, None);
     }
 
     #[test]
