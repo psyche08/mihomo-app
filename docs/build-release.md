@@ -70,17 +70,16 @@ App, creates and signs the DMG, submits and staples the DMG, and verifies both
 artifacts with Gatekeeper. Never print credential values.
 
 The script does not gate the upload behind a network precheck. One was tried and
-removed: it probed the release endpoints over TLS and scanned the Surge log for
-recent network errors, and in practice it only ever produced false negatives —
-an unrelated OCSP timeout and a CDN host that answers `HEAD /` near the probe
-timeout each blocked a release whose network was healthy. Transient failures are
-handled where they actually occur instead, by the `notarytool` retry loop and
-the resume state below.
+removed: it probed the release endpoints over TLS and scanned the host's proxy
+log for recent network errors, and in practice it only ever produced false
+negatives — an unrelated OCSP timeout and a CDN host that answers `HEAD /` near
+the probe timeout each blocked a release whose network was healthy. Transient
+failures are handled where they actually occur instead, by the `notarytool`
+retry loop and the resume state below.
 
-The release host's outbound policy is a separate, manual concern; a profile
-proposal is documented in
-[`surge-release-profile-plan.md`](surge-release-profile-plan.md). No script
-launches, reloads, configures, or sends a command to Surge.
+The release host's outbound policy is a separate, manual concern, and keeping it
+that way is deliberate: no script launches, reloads, configures, or sends a
+command to whatever proxy the host runs.
 
 Notarization progress is stored under `dist/.release-state/`, keyed by artifact
 SHA-256. The state contains no credentials and records the submission ID,
