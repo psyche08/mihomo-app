@@ -1,3 +1,4 @@
+import CMihomoDNSSystem
 import Darwin
 import Foundation
 
@@ -437,32 +438,21 @@ public enum MihomoRuntimeInspector {
         )
     }
 
-    private static func fakeIPRouteInterface() -> String? {
-        let process = Process()
-        let output = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/sbin/route")
-        process.arguments = ["-n", "get", fakeIPProbe]
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
+    /// The interface the kernel would route Fake-IP traffic through, or nil
+    /// when that is not a tunnel.
+    ///
+    /// This used to shell out to `/sbin/route -n get` and scrape its output.
+    /// The observer asks every two seconds and the daemon asks on every tray
+    /// poll, which made it the single largest source of process spawns in the
+    /// app — around 2,500 an hour, more than everything else combined. It now
+    /// asks the routing socket the same question directly.
+    static func fakeIPRouteInterface() -> String? {
+        var name = [CChar](repeating: 0, count: Int(IF_NAMESIZE) + 1)
+        guard mihomo_dns_route_interface(fakeIPProbe, &name, name.count) == 0 else {
             return nil
         }
-        guard process.terminationStatus == 0,
-              let text = String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) else {
-            return nil
-        }
-        for line in text.split(separator: "\n") {
-            let parts = line.split(separator: ":", maxSplits: 1).map(String.init)
-            guard parts.count == 2, parts[0].trimmingCharacters(in: .whitespaces) == "interface" else {
-                continue
-            }
-            let interface = parts[1].trimmingCharacters(in: .whitespaces)
-            return interface.hasPrefix("utun") ? interface : nil
-        }
-        return nil
+        let interface = String(cString: name)
+        return interface.hasPrefix("utun") ? interface : nil
     }
 }
 
