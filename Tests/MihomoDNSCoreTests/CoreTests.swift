@@ -513,6 +513,45 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(policy.decide(runtimeReady: false, networkOwned: false, nowNanoseconds: 1), .none)
     }
 
+    func testPublishedHealthIsServedOnlyWhileFresh() throws {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("health-\(UUID().uuidString).json")
+            .path
+        defer { HealthSnapshotStore.remove(at: path) }
+
+        let health = NetworkConsistencyHealth(
+            controllerReachable: true,
+            tunEnabled: true,
+            tunInterface: "utun4",
+            fakeIPMode: true,
+            fakeIPRouteReady: true,
+            dnsBridgeReady: true,
+            mihomoDNSReady: true,
+            systemDNSManaged: true,
+            networkConsistent: true
+        )
+        let captured = Date()
+        HealthSnapshotStore.publish(HealthSnapshot(health: health, capturedAt: captured), to: path)
+
+        XCTAssertEqual(HealthSnapshotStore.read(from: path, now: captured), health)
+        XCTAssertEqual(
+            HealthSnapshotStore.read(from: path, now: captured.addingTimeInterval(5)),
+            health
+        )
+        // Past the freshness window the observer is presumed gone, and its last
+        // reading describes a runtime that may no longer exist.
+        XCTAssertNil(HealthSnapshotStore.read(from: path, now: captured.addingTimeInterval(7)))
+        // A reading from the future is a clock change, not a fresh reading.
+        XCTAssertNil(HealthSnapshotStore.read(from: path, now: captured.addingTimeInterval(-30)))
+    }
+
+    func testPublishedHealthIsAbsentWhenNothingWasWritten() {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("missing-\(UUID().uuidString).json")
+            .path
+        XCTAssertNil(HealthSnapshotStore.read(from: path))
+    }
+
     func testDNSAcquisitionManagesOnceBridgeAnswers() {
         var policy = DNSAcquisitionPolicy()
         XCTAssertEqual(

@@ -40,7 +40,7 @@ public enum DNSCacheMaintenance {
     }
 }
 
-public struct NetworkConsistencyHealth: Codable, Equatable {
+public struct NetworkConsistencyHealth: Codable, Equatable, Sendable {
     public var controllerReachable: Bool
     public var tunEnabled: Bool
     public var tunInterface: String?
@@ -582,6 +582,7 @@ public final class NetworkConsistencyController: @unchecked Sendable {
     private var immediateEvaluationPending = false
     /// Last egress outcome written to the log, so only changes are recorded.
     private var lastLoggedEgressOutcome: EgressProbeOutcome = .unknown
+    private let healthSnapshotPath: String?
 
     public convenience init(
         configuration: ProxyConfiguration,
@@ -618,6 +619,7 @@ public final class NetworkConsistencyController: @unchecked Sendable {
         self.runtimeRecoveryHandler = runtimeRecoveryHandler
         self.unsafeRuntimeHandler = unsafeRuntimeHandler
         self.egressProbe = egressProbe
+        healthSnapshotPath = configuration.healthSnapshotPath
     }
 
     /// Runs an evaluation as soon as possible instead of waiting for the next
@@ -678,6 +680,9 @@ public final class NetworkConsistencyController: @unchecked Sendable {
             timer?.cancel()
             timer = nil
             safetyState.setRuntimeReady(false)
+            if let healthSnapshotPath {
+                HealthSnapshotStore.remove(at: healthSnapshotPath)
+            }
             restoreSafeNetwork(source: "shutdown")
         }
     }
@@ -840,6 +845,11 @@ public final class NetworkConsistencyController: @unchecked Sendable {
         let after = changed
             ? MihomoRuntimeInspector.inspect(configuration: configuration, globalDNS: globalDNS)
             : before
+        // Publish the reading so the daemon can answer tray polls without
+        // repeating this work; it is the most expensive part of a poll.
+        if let healthSnapshotPath {
+            HealthSnapshotStore.publish(HealthSnapshot(health: after), to: healthSnapshotPath)
+        }
         safetyState.setRuntimeReady(
             after.controllerReachable && after.tunEnabled && after.tunInterface != nil
                 && after.dnsBridgeReady && after.mihomoDNSReady && after.systemDNSManaged

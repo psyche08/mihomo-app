@@ -66,6 +66,14 @@ final class AgentSupervisor: @unchecked Sendable {
         let configuration = try ProxyConfiguration.load(path: configPath)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
+        // Prefer the reading the agent's observer just took. Inspecting here
+        // repeats its most expensive work — two DNS probes with two-second
+        // timeouts, a routing lookup and a full config parse — on every tray
+        // poll. A missing or stale file means the observer is not running, and
+        // then this must inspect rather than serve something out of date.
+        if let published = HealthSnapshotStore.read(from: configuration.healthSnapshotPath) {
+            return try encoder.encode(published)
+        }
         return try encoder.encode(ProxyService.networkHealth(configuration: configuration))
     }
 
