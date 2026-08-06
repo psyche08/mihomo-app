@@ -5,6 +5,9 @@ import MihomoDNSCore
 import XPC
 
 final class ControlDispatcher: @unchecked Sendable {
+    /// Lets the server release a dead peer's streams.
+    var controllerBroker: ControllerBroker { controller }
+
     private let agent: AgentSupervisor
     private let controller: ControllerBroker
     private let profiles: ProfileBroker
@@ -17,7 +20,7 @@ final class ControlDispatcher: @unchecked Sendable {
         components = try ComponentUpdater(agent: agent)
     }
 
-    func dispatch(_ request: ControlRequest) -> ControlResponse {
+    func dispatch(_ request: ControlRequest, owner: ObjectIdentifier? = nil) -> ControlResponse {
         let operation = request.operation.rawValue
         let auditEveryRequest = request.operation != .controllerStreamNext
         if auditEveryRequest {
@@ -85,15 +88,20 @@ final class ControlDispatcher: @unchecked Sendable {
                 payload = try profiles.list()
             case .importProfile, .switchProfile, .reloadProfile:
                 payload = try profiles.perform(request)
+            case .controllerStreamClose:
+                // Deliberately outside the agent check below. Closing only drops
+                // a table entry and cancels a socket — it needs no agent, and
+                // gating it meant the one deterministic cleanup path failed
+                // exactly when the agent stopped and every stream was dying.
+                payload = try controller.perform(request, owner: owner)
             case .snapshot, .setTUN, .setOutboundMode, .selectProxy, .testDelay,
                  .controllerVersion, .listRules, .listProxyProviders, .listRuleProviders,
                  .listConnections, .closeAllConnections, .controllerRequest,
-                 .controllerStreamMessage, .controllerStreamOpen, .controllerStreamNext,
-                 .controllerStreamClose:
+                 .controllerStreamMessage, .controllerStreamOpen, .controllerStreamNext:
                 guard agent.isRunning else {
                     throw serverError("Mihomo agent is not running")
                 }
-                payload = try controller.perform(request)
+                payload = try controller.perform(request, owner: owner)
             }
             if auditEveryRequest {
                 ServiceLog.info("event=control_request operation=\(operation) result=success")
@@ -155,10 +163,22 @@ final class ControlServer: @unchecked Sendable {
             return
         }
         ServiceLog.info("event=control_peer_accepted")
+        let owner = ObjectIdentifier(peer)
         xpc_connection_set_event_handler(peer) { [weak self, weak peer] event in
-            guard let self, let peer else { return }
-            if xpc_get_type(event) == XPC_TYPE_DICTIONARY {
+            guard let self else { return }
+            let type = xpc_get_type(event)
+            if type == XPC_TYPE_DICTIONARY {
+                guard let peer else { return }
                 self.handle(event, peer: peer)
+                return
+            }
+            // A websocket is normally torn down by SIGKILLing the CLI holding
+            // it, so no close request ever arrives and the peer simply vanishes.
+            // Without this the streams it opened sat in the table occupying the
+            // stream budget until their idle expiry.
+            if type == XPC_TYPE_ERROR {
+                ServiceLog.info("event=control_peer_disconnected")
+                self.dispatcher.controllerBroker.releaseStreams(owner: owner)
             }
         }
         xpc_connection_resume(peer)
@@ -185,7 +205,7 @@ final class ControlServer: @unchecked Sendable {
                 }
                 request.payload = Data(bytes: payload, count: payloadLength)
             }
-            response = dispatcher.dispatch(request)
+            response = dispatcher.dispatch(request, owner: ObjectIdentifier(peer))
         } else {
             response = ControlResponse(success: false, error: "invalid XPC request")
         }

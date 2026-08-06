@@ -6,6 +6,8 @@ final class ControllerBroker: @unchecked Sendable {
     private let configPath: String
     private let streamLock = NSLock()
     private var streams: [String: ControllerStreamSession] = [:]
+    /// Which control peer opened each stream, so peer death can release them.
+    private var owners: [String: ObjectIdentifier] = [:]
     private let maximumStreams = 32
     private let streamCleanupQueue = DispatchQueue(label: "dev.linsheng.mihomo.daemon.controller-streams")
     private var streamCleanupTimer: DispatchSourceTimer?
@@ -26,13 +28,33 @@ final class ControllerBroker: @unchecked Sendable {
         streamLock.lock()
         let active = Array(streams.values)
         streams.removeAll()
+        owners.removeAll()
         streamLock.unlock()
         for stream in active {
             stream.close()
         }
     }
 
-    func perform(_ request: ControlRequest) throws -> Data {
+    func perform(_ request: ControlRequest, owner: ObjectIdentifier? = nil) throws -> Data {
+        // Stream continuation and teardown never touch the controller endpoint,
+        // so they must not pay for reading and validating the daemon config.
+        // With a dashboard open `next` runs several times a second, and this
+        // was a disk read plus a JSON decode each time, inside the root daemon.
+        switch request.operation {
+        case .controllerStreamNext:
+            guard let identifier = request.arguments["session"] else {
+                throw brokerError("controller stream session is required")
+            }
+            return try nextStreamMessage(identifier: identifier)
+        case .controllerStreamClose:
+            guard let identifier = request.arguments["session"] else {
+                throw brokerError("controller stream session is required")
+            }
+            closeStream(identifier: identifier)
+            return Data()
+        default:
+            break
+        }
         let configuration = try ProxyConfiguration.load(path: configPath)
         switch request.operation {
         case .snapshot:
@@ -129,18 +151,7 @@ final class ControllerBroker: @unchecked Sendable {
             guard let target = request.arguments["target"] else {
                 throw brokerError("controller stream target is required")
             }
-            return try openStream(configuration, target: target)
-        case .controllerStreamNext:
-            guard let identifier = request.arguments["session"] else {
-                throw brokerError("controller stream session is required")
-            }
-            return try nextStreamMessage(identifier: identifier)
-        case .controllerStreamClose:
-            guard let identifier = request.arguments["session"] else {
-                throw brokerError("controller stream session is required")
-            }
-            closeStream(identifier: identifier)
-            return Data()
+            return try openStream(configuration, target: target, owner: owner)
         default:
             throw brokerError("operation is not a controller operation")
         }
@@ -243,7 +254,8 @@ final class ControllerBroker: @unchecked Sendable {
 
     private func openStream(
         _ configuration: ProxyConfiguration,
-        target: String
+        target: String,
+        owner: ObjectIdentifier?
     ) throws -> Data {
         let stream = try makeStream(configuration, target: target)
         streamLock.lock()
@@ -254,6 +266,9 @@ final class ControllerBroker: @unchecked Sendable {
             throw brokerError("controller stream limit reached")
         }
         streams[stream.identifier] = stream
+        if let owner {
+            owners[stream.identifier] = owner
+        }
         streamLock.unlock()
         ServiceLog.info("event=controller_stream result=opened")
         return try JSONSerialization.data(
@@ -284,6 +299,7 @@ final class ControllerBroker: @unchecked Sendable {
     private func closeStream(identifier: String) {
         streamLock.lock()
         let stream = streams.removeValue(forKey: identifier)
+        owners.removeValue(forKey: identifier)
         streamLock.unlock()
         if let stream {
             stream.close()
@@ -291,10 +307,43 @@ final class ControllerBroker: @unchecked Sendable {
         }
     }
 
+    /// Caller must hold `streamLock`.
+    ///
+    /// This reclaims far more streams than the timer does: with a dashboard
+    /// open it runs several times a second, so an idle stream is collected
+    /// almost the moment it expires and the timer never sees it. It used to do
+    /// that without logging, while its twin `removeExpiredStreams()` logged —
+    /// which is why the logs appeared to show streams opened and never closed.
     private func removeExpiredStreamsLocked() {
         let expired = streams.filter { $0.value.isExpired }.map(\.key)
+        guard !expired.isEmpty else { return }
         for identifier in expired {
             streams.removeValue(forKey: identifier)?.close()
+            owners.removeValue(forKey: identifier)
+        }
+        ServiceLog.info("event=controller_stream result=expired count=\(expired.count)")
+    }
+
+    /// Releases every stream opened by a control peer that has gone away.
+    ///
+    /// A websocket is normally torn down by SIGKILLing the CLI that owns it, so
+    /// no close request is ever sent and the stream would otherwise sit in the
+    /// table until its 60s idle expiry — holding a slot in `maximumStreams`.
+    /// Opening a dashboard costs four streams, so a user cycling the window a
+    /// few times could exhaust the budget and be told the limit was reached.
+    func releaseStreams(owner: ObjectIdentifier) {
+        streamLock.lock()
+        let identifiers = owners.filter { $0.value == owner }.map(\.key)
+        let released = identifiers.compactMap { identifier -> ControllerStreamSession? in
+            owners.removeValue(forKey: identifier)
+            return streams.removeValue(forKey: identifier)
+        }
+        streamLock.unlock()
+        for stream in released {
+            stream.close()
+        }
+        if !released.isEmpty {
+            ServiceLog.info("event=controller_stream result=peer_released count=\(released.count)")
         }
     }
 
