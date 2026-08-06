@@ -26,3 +26,19 @@ final class ControlProtocolTests: XCTestCase {
         )
     }
 }
+
+extension ControlProtocolTests {
+    /// A self-replacing daemon drops the connection instead of replying, and
+    /// that must read as "it went away", not "it refused" — otherwise a
+    /// successful component upgrade reports itself as a failure.
+    func testDisconnectionIsDistinguishedFromRefusal() {
+        XCTAssertTrue(ControlError.connectionFailed.isDisconnection)
+        XCTAssertTrue(ControlError.invalidReply.isDisconnection)
+
+        XCTAssertFalse(ControlError.rejected("Mihomo agent is not running").isDisconnection)
+        XCTAssertFalse(ControlError.unsignedProcess.isDisconnection)
+        XCTAssertFalse(ControlError.invalidSigningInformation.isDisconnection)
+        XCTAssertFalse(ControlError.invalidRequirement.isDisconnection)
+        XCTAssertFalse(ControlError.invalidComponentSignature.isDisconnection)
+    }
+}

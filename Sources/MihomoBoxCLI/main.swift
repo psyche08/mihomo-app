@@ -551,13 +551,37 @@ private func updateManagedComponents() throws -> Int32 {
         return 0
     }
 
+    // When the daemon binary itself changes, the daemon replaces its own
+    // executable and exits so launchd can start the new one. That severs this
+    // connection before a reply can arrive, so a lost connection here is the
+    // expected outcome of a successful upgrade — not a failure. Reporting it as
+    // one meant the more completely an upgrade worked, the louder it claimed to
+    // have failed, and a genuine failure looked identical.
+    let daemonDigest = components[ManagedComponent.daemon.rawValue]
+        .map(ComponentUpdatePackage.digest)
+    let daemonWillRestart = daemonDigest != status.components[ManagedComponent.daemon.rawValue]
+
     let package = try ComponentUpdatePackage(
         appVersion: appVersion,
         components: components
     ).encoded()
-    guard let response = try sendControl(.upgradeComponents, payload: package),
+    let response: Data?
+    do {
+        response = try sendControl(.upgradeComponents, payload: package)
+    } catch let error as ControlError {
+        guard daemonWillRestart, error.isDisconnection else { throw error }
+        print("replaced the daemon; launchd is restarting it")
+        return 0
+    }
+    guard let response,
           let result = try JSONSerialization.jsonObject(with: response) as? [String: Any],
           let updated = result["updated"] as? [String] else {
+        // Same reasoning: a self-replacing daemon can drop the connection
+        // without producing a decodable reply.
+        if daemonWillRestart {
+            print("replaced the daemon; launchd is restarting it")
+            return 0
+        }
         throw CLIError(message: "the daemon returned an invalid component update result", exitCode: 1)
     }
     print("updated managed components: \(updated.sorted().joined(separator: ", "))")

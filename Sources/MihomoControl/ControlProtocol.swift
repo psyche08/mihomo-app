@@ -121,6 +121,20 @@ public enum ControlError: Error, LocalizedError {
     case invalidReply
     case rejected(String)
 
+    /// Whether this reports the daemon going away rather than refusing.
+    ///
+    /// A caller that expects the daemon to exit — replacing its own executable,
+    /// for instance — needs to tell "it vanished as intended" apart from "it
+    /// said no".
+    public var isDisconnection: Bool {
+        switch self {
+        case .connectionFailed, .invalidReply:
+            return true
+        default:
+            return false
+        }
+    }
+
     public var errorDescription: String? {
         switch self {
         case .unsignedProcess:
