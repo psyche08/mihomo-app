@@ -43,6 +43,25 @@ struct TrayState {
     last_action_error: Mutex<Option<String>>,
     refresh_in_flight: AtomicBool,
     poll_failures: AtomicU32,
+    /// Live handle to the Enhanced TUN item, so its check mark can be written
+    /// back after macOS toggles it on click.
+    tun_item: Mutex<Option<CheckMenuItem<tauri::Wry>>>,
+    /// The `enhanced_tun` value the currently drawn menu was built from. The
+    /// check mark the user actually sees comes from this, so a click can tell
+    /// whether the mark it was given still matches runtime state.
+    menu_tun_checked: Mutex<bool>,
+    /// Set while an Enhanced TUN action is running, so the item cannot be
+    /// clicked again mid-flight.
+    tun_busy: AtomicBool,
+}
+
+/// Releases `tun_busy` however the Enhanced TUN arm exits.
+struct TunBusyGuard(Arc<TrayState>);
+
+impl Drop for TunBusyGuard {
+    fn drop(&mut self) {
+        self.0.tun_busy.store(false, Ordering::Release);
+    }
 }
 
 /// How a `refresh` should treat the freshly polled controller state.
@@ -94,6 +113,7 @@ struct MenuSignature {
     profiles: Vec<String>,
     active_profile: Option<String>,
     profile_busy: bool,
+    tun_busy: bool,
     network_healthy: Option<bool>,
     action_error: Option<String>,
 }
@@ -103,6 +123,7 @@ impl MenuSignature {
         snapshot: &Snapshot,
         profiles: &ProfileState,
         profile_busy: bool,
+        tun_busy: bool,
         network_healthy: Option<bool>,
         action_error: Option<String>,
     ) -> Self {
@@ -128,6 +149,7 @@ impl MenuSignature {
             profiles: profiles.names.clone(),
             active_profile: profiles.active.clone(),
             profile_busy,
+            tun_busy,
             network_healthy,
             action_error,
         }
@@ -145,6 +167,9 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         last_action_error: Mutex::new(None),
         refresh_in_flight: AtomicBool::new(false),
         poll_failures: AtomicU32::new(0),
+        tun_item: Mutex::new(None),
+        menu_tun_checked: Mutex::new(false),
+        tun_busy: AtomicBool::new(false),
     });
     app.manage(state.clone());
 
@@ -166,6 +191,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         .expect("menu signature lock") = Some(MenuSignature::new(
         &snapshot,
         &profiles,
+        false,
         false,
         network_healthy,
         None,
@@ -239,14 +265,23 @@ fn build_menu(
         false,
         None::<&str>,
     )?;
+    // Disabled while an action is in flight: an unclickable item is also one
+    // macOS cannot optimistically re-toggle mid-action. It stays enabled when
+    // the controller is unreachable — that is the documented lifecycle entry
+    // point for installing or starting the daemon.
     let tun = CheckMenuItem::with_id(
         app,
         "tun",
         "Enhanced TUN",
-        app_bundle_path().is_some(),
+        app_bundle_path().is_some() && !state.tun_busy.load(Ordering::Acquire),
         snapshot.enhanced_tun,
         None::<&str>,
     )?;
+    // Keep a handle to the item actually drawn, and remember the value it was
+    // drawn with, so a click can both undo the OS's toggle and tell whether the
+    // mark it was handed still reflects runtime state.
+    *state.tun_item.lock().expect("tun item lock") = Some(tun.clone());
+    *state.menu_tun_checked.lock().expect("menu tun lock") = snapshot.enhanced_tun;
     let network_separator = PredefinedMenuItem::separator(app)?;
 
     let modes = ["rule", "global", "direct"]
@@ -517,24 +552,69 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
     tauri::async_runtime::spawn(async move {
         match id.as_str() {
             "tun" => {
+                if state
+                    .tun_busy
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                    .is_err()
+                {
+                    return;
+                }
+                let _busy = TunBusyGuard(state.clone());
                 let snapshot = state.snapshot.lock().expect("snapshot lock").clone();
+                // macOS flips a check menu item's mark itself, before any of
+                // this runs. Put it back immediately: if the action below fails
+                // or is cancelled, an uncorrected mark would keep claiming the
+                // opposite of reality until something else happened to change
+                // the menu signature — which is how a failed first enable came
+                // to look like "it is on now", making the next click look like
+                // a cancel while it actually re-ran the installer.
+                if let Some(item) = state.tun_item.lock().expect("tun item lock").clone() {
+                    let _ = item.set_checked(snapshot.enhanced_tun);
+                }
+                let menu_checked = *state.menu_tun_checked.lock().expect("menu tun lock");
                 let profiles = profile_state();
                 let action = tun_action(daemon_installed(), profiles.active.is_some(), &snapshot);
-                app_log::info(&format!("event=tun_action_resolved action={action:?}"));
-                match action {
-                    TunAction::RequireProfile => show_profile_required_prompt(),
-                    TunAction::InstallDaemon => {
-                        install_daemon(&app, selected_local_profile().as_deref())
+                app_log::info(&format!(
+                    "event=tun_action_resolved action={action:?} menu_checked={menu_checked}"
+                ));
+                // The user clicked a mark that no longer describes the runtime.
+                // Escalating here is what produced a password prompt on what
+                // looked like "cancel"; redraw instead and let them re-decide.
+                if menu_checked && !snapshot.enhanced_tun {
+                    app_log::info("event=tun_action_skipped reason=stale_check_mark");
+                    set_action_error(
+                        &state,
+                        Some("Enhanced TUN is not on; the menu has been refreshed".to_string()),
+                    );
+                } else {
+                    match action {
+                        TunAction::RequireProfile => show_profile_required_prompt(),
+                        TunAction::InstallDaemon => {
+                            install_daemon(&app, selected_local_profile().as_deref())
+                        }
+                        TunAction::StartDaemon => start_daemon(),
+                        TunAction::EnableTun => {
+                            let succeeded = controller_client().set_tun(true).await.is_ok();
+                            app_log::info(&format!(
+                                "event=controller_action action=enable_tun success={succeeded}"
+                            ));
+                            set_action_error(
+                                &state,
+                                (!succeeded)
+                                    .then(|| "Action failed: Enhanced TUN was not enabled".into()),
+                            );
+                        }
+                        TunAction::StopAndRestore => restore_network(&state).await,
                     }
-                    TunAction::StartDaemon => start_daemon(),
-                    TunAction::EnableTun => {
-                        let succeeded = controller_client().set_tun(true).await.is_ok();
-                        app_log::info(&format!(
-                            "event=controller_action action=enable_tun success={succeeded}"
-                        ));
-                    }
-                    TunAction::StopAndRestore => restore_network(),
                 }
+                // Repaint unconditionally. The action may have left the runtime
+                // exactly as it was — a cancelled installer, a refused enable —
+                // and an unchanged signature would otherwise skip the rebuild
+                // that puts the mark right.
+                *state
+                    .last_menu_signature
+                    .lock()
+                    .expect("menu signature lock") = None;
             }
             value if value.starts_with("mode:") => {
                 let requested = &value[5..];
@@ -647,6 +727,7 @@ fn refresh(app: AppHandle, state: Arc<TrayState>, mode: RefreshMode) {
             &snapshot,
             &profiles,
             profile_busy,
+            state.tun_busy.load(Ordering::Acquire),
             network_healthy,
             action_error.clone(),
         );
@@ -1401,7 +1482,14 @@ fn start_daemon() {
     });
 }
 
-fn restore_network() {
+/// Time allowed for the agent to stop before the tray reports failure.
+///
+/// `run_cli` has no timeout of its own, and neither does the control round trip
+/// behind it, so without a bound a wedged agent would leave the click hanging
+/// and the menu unable to say whether anything happened.
+const STOP_TIMEOUT: Duration = Duration::from_secs(15);
+
+async fn restore_network(state: &Arc<TrayState>) {
     let confirmation = Command::new("/usr/bin/osascript")
         .args([
             "-e",
@@ -1413,9 +1501,22 @@ fn restore_network() {
         return;
     }
     app_log::info("event=restore_network phase=confirmed");
-    std::thread::spawn(|| {
-        let _ = run_cli(&["stop"]);
-    });
+    // Await the stop rather than firing and forgetting: a failed disable used
+    // to be indistinguishable from a slow one, which left the user clicking
+    // again and eventually landing on a path that does prompt.
+    let stopped = tokio::time::timeout(
+        STOP_TIMEOUT,
+        tauri::async_runtime::spawn_blocking(|| run_cli(&["stop"])),
+    )
+    .await;
+    let succeeded = matches!(stopped, Ok(Ok(true)));
+    app_log::info(&format!(
+        "event=restore_network phase=completed success={succeeded}"
+    ));
+    set_action_error(
+        state,
+        (!succeeded).then(|| "Action failed: Enhanced TUN was not disabled".to_string()),
+    );
 }
 
 fn shell_quote(value: &str) -> String {
@@ -1469,13 +1570,13 @@ mod tests {
             }],
         };
         let profiles = ProfileState::default();
-        let first = MenuSignature::new(&snapshot, &profiles, false, Some(true), None);
+        let first = MenuSignature::new(&snapshot, &profiles, false, false, Some(true), None);
         snapshot.groups[0].proxies[0].delay = Some(88);
-        let second = MenuSignature::new(&snapshot, &profiles, false, Some(true), None);
+        let second = MenuSignature::new(&snapshot, &profiles, false, false, Some(true), None);
 
         assert_eq!(first, second);
         snapshot.groups[0].current = "Node B".to_string();
-        let third = MenuSignature::new(&snapshot, &profiles, false, Some(true), None);
+        let third = MenuSignature::new(&snapshot, &profiles, false, false, Some(true), None);
         assert_ne!(second, third);
     }
 
@@ -1538,6 +1639,35 @@ mod tests {
         };
         retain_known_delays(&previous, &mut fresh);
         assert_eq!(fresh.groups[0].proxies[0].delay, None);
+    }
+
+    #[test]
+    fn menu_signature_tracks_tun_busy_so_the_item_greys_out() {
+        let snapshot = Snapshot::default();
+        let profiles = ProfileState::default();
+        let idle = MenuSignature::new(&snapshot, &profiles, false, false, Some(true), None);
+        let busy = MenuSignature::new(&snapshot, &profiles, false, true, Some(true), None);
+        assert_ne!(idle, busy);
+    }
+
+    #[test]
+    fn a_stale_check_mark_must_not_resolve_to_the_installer() {
+        // The reported failure: a first enable fails, macOS leaves the mark
+        // checked, and the next click — which the user reads as "cancel" —
+        // resolves to InstallDaemon and prompts for a password again.
+        let stopped = Snapshot::default();
+        assert_eq!(
+            tun_action(false, true, &stopped),
+            TunAction::InstallDaemon,
+            "precondition: this is the action a stale mark would have triggered"
+        );
+        // The guard in the click arm keys off exactly this disagreement:
+        // the menu says checked while the runtime says TUN is off.
+        let menu_checked = true;
+        assert!(
+            menu_checked && !stopped.enhanced_tun,
+            "a checked mark over a stopped runtime is the state that must be refused"
+        );
     }
 
     #[test]
