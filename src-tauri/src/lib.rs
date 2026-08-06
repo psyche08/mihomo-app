@@ -1,5 +1,6 @@
 mod app_log;
 mod component_sync;
+mod control;
 mod dashboard;
 mod mihomo;
 mod tray;

@@ -1,16 +1,9 @@
 use serde::Deserialize;
-use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
-use std::time::Duration;
-use tokio::process::Command;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
-const HELPER_TIMEOUT: Duration = Duration::from_secs(4);
-
-#[derive(Clone)]
-pub struct MihomoClient {
-    helper: PathBuf,
-    helper_timeout: Duration,
-}
+/// Talks to the daemon over the retained XPC connection in `crate::control`.
+#[derive(Clone, Default)]
+pub struct MihomoClient;
 
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
@@ -187,28 +180,49 @@ struct DelayResult {
 }
 
 impl MihomoClient {
-    pub fn new(helper: PathBuf) -> Self {
-        Self {
-            helper,
-            helper_timeout: HELPER_TIMEOUT,
-        }
+    pub fn new() -> Self {
+        Self
     }
 
-    async fn invoke(&self, arguments: &[&str]) -> Result<Vec<u8>, ControlError> {
-        let mut command = Command::new(&self.helper);
-        command.arg("rpc").args(arguments).kill_on_drop(true);
-        let output = tokio::time::timeout(self.helper_timeout, command.output())
-            .await
-            .map_err(|_| ControlError)?
-            .map_err(|_| ControlError)?;
-        if !output.status.success() {
-            return Err(ControlError);
-        }
-        Ok(output.stdout)
+    /// Sends a control operation over the retained XPC connection.
+    ///
+    /// This is the hot path: `runtime.tray-state` alone is ~97% of all control
+    /// requests the daemon serves. Going through `mihomoboxctl` cost a process
+    /// start plus a fresh code-signing handshake for each one.
+    async fn control(
+        &self,
+        operation: &'static str,
+        arguments: BTreeMap<String, String>,
+    ) -> Result<Vec<u8>, ControlError> {
+        self.control_with_payload(operation, arguments, None).await
+    }
+
+    async fn control_with_payload(
+        &self,
+        operation: &'static str,
+        arguments: BTreeMap<String, String>,
+        payload: Option<Vec<u8>>,
+    ) -> Result<Vec<u8>, ControlError> {
+        let result = tokio::task::spawn_blocking(move || {
+            crate::control::send(operation, &arguments, payload.as_deref())
+        })
+        .await
+        .map_err(|_| ControlError)?;
+        result.map_err(|error| {
+            // Keep the daemon's own reason. Losing it is how a refusal used to
+            // become an indistinguishable generic failure.
+            if let crate::control::ControlError::Rejected(reason) = &error {
+                crate::app_log::error(&format!(
+                    "event=control_request operation={operation} result=rejected reason={}",
+                    reason.chars().take(120).collect::<String>()
+                ));
+            }
+            ControlError
+        })
     }
 
     pub async fn tray_state(&self) -> Result<TrayPoll, ControlError> {
-        let bytes = self.invoke(&["tray-state"]).await?;
+        let bytes = self.control("runtime.tray-state", BTreeMap::new()).await?;
         let envelope =
             serde_json::from_slice::<TrayStateEnvelope>(&bytes).map_err(|_| ControlError)?;
         Ok(TrayPoll {
@@ -223,22 +237,34 @@ impl MihomoClient {
     }
 
     pub async fn controller_available(&self) -> bool {
-        self.invoke(&["version"]).await.is_ok()
+        self.control("dashboard.version", BTreeMap::new())
+            .await
+            .is_ok()
     }
 
     async fn fetch_snapshot(&self) -> Result<Snapshot, ControlError> {
-        let bytes = self.invoke(&["snapshot"]).await?;
+        let bytes = self.control("runtime.snapshot", BTreeMap::new()).await?;
         parse_snapshot(&bytes).ok_or(ControlError)
     }
 
     pub async fn set_tun(&self, enabled: bool) -> Result<(), ControlError> {
-        self.invoke(&["set-tun", if enabled { "true" } else { "false" }])
-            .await?;
+        self.control(
+            "runtime.set-tun",
+            BTreeMap::from([(
+                "enabled".to_string(),
+                if enabled { "true" } else { "false" }.to_string(),
+            )]),
+        )
+        .await?;
         Ok(())
     }
 
     pub async fn set_mode(&self, mode: &str) -> Result<(), ControlError> {
-        self.invoke(&["set-mode", mode]).await?;
+        self.control(
+            "runtime.set-outbound-mode",
+            BTreeMap::from([("mode".to_string(), mode.to_string())]),
+        )
+        .await?;
         Ok(())
     }
 
@@ -274,7 +300,14 @@ impl MihomoClient {
     }
 
     pub async fn select_proxy(&self, group: &str, proxy: &str) -> Result<(), ControlError> {
-        self.invoke(&["select-proxy", group, proxy]).await?;
+        self.control(
+            "runtime.select-proxy",
+            BTreeMap::from([
+                ("group".to_string(), group.to_string()),
+                ("proxy".to_string(), proxy.to_string()),
+            ]),
+        )
+        .await?;
         Ok(())
     }
 
@@ -282,9 +315,13 @@ impl MihomoClient {
         if proxies.is_empty() {
             return 0;
         }
-        let mut arguments = vec!["test-delay"];
-        arguments.extend(proxies.iter().map(String::as_str));
-        let Ok(bytes) = self.invoke(&arguments).await else {
+        let Ok(names) = serde_json::to_vec(proxies) else {
+            return 0;
+        };
+        let Ok(bytes) = self
+            .control_with_payload("proxy.test-delay", BTreeMap::new(), Some(names))
+            .await
+        else {
             return 0;
         };
         serde_json::from_slice::<DelayResult>(&bytes)
@@ -346,8 +383,6 @@ fn snapshot_from_envelope(response: SnapshotEnvelope) -> Snapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use std::os::unix::fs::PermissionsExt;
 
     fn node(name: &str) -> ProxyNode {
         ProxyNode {
@@ -394,50 +429,25 @@ mod tests {
     }
 
     #[test]
+    fn control_is_unavailable_without_a_daemon() {
+        // The control channel is XPC now, not a spawned helper: with no daemon
+        // listening this must fail rather than hang or pretend to succeed.
+        // Whether one is listening depends on the machine, so only the
+        // no-daemon direction is asserted.
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        if !std::path::Path::new("/Library/Application Support/Mihomo App/mihomo-daemon").exists() {
+            assert!(!runtime.block_on(MihomoClient::new().controller_available()));
+        }
+    }
+
+    #[test]
     fn default_snapshot_is_unreachable_and_safe() {
         let snapshot = Snapshot::default();
         assert!(!snapshot.reachable);
         assert!(!snapshot.enhanced_tun);
         assert!(snapshot.groups.is_empty());
-    }
-
-    #[test]
-    fn controller_availability_probes_version_through_the_helper() {
-        let root =
-            std::env::temp_dir().join(format!("mihomobox-controller-probe-{}", std::process::id()));
-        fs::create_dir_all(&root).expect("create fixture");
-        let helper = root.join("mihomoboxctl");
-        fs::write(
-            &helper,
-            "#!/bin/sh\n[ \"$1\" = rpc ] && [ \"$2\" = version ] && printf '{\"version\":\"test\"}\\n'\n",
-        )
-        .expect("write helper");
-        fs::set_permissions(&helper, fs::Permissions::from_mode(0o700)).expect("secure helper");
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
-        assert!(runtime.block_on(MihomoClient::new(helper).controller_available()));
-        fs::remove_dir_all(root).expect("remove fixture");
-    }
-
-    #[test]
-    fn helper_invocation_is_bounded_by_timeout() {
-        let root =
-            std::env::temp_dir().join(format!("mihomobox-helper-timeout-{}", std::process::id()));
-        fs::create_dir_all(&root).expect("create fixture");
-        let helper = root.join("mihomoboxctl");
-        fs::write(&helper, "#!/bin/sh\nsleep 2\n").expect("write helper");
-        fs::set_permissions(&helper, fs::Permissions::from_mode(0o700)).expect("secure helper");
-        let client = MihomoClient {
-            helper,
-            helper_timeout: Duration::from_millis(25),
-        };
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
-        assert!(runtime.block_on(client.invoke(&["tray-state"])).is_err());
-        fs::remove_dir_all(root).expect("remove fixture");
     }
 }

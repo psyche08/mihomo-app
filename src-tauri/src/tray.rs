@@ -921,7 +921,7 @@ fn delay_label(delay: Option<u64>) -> String {
 }
 
 fn controller_client() -> MihomoClient {
-    MihomoClient::new(cli_path().unwrap_or_else(|| PathBuf::from("/nonexistent/mihomoboxctl")))
+    MihomoClient::new()
 }
 
 fn prepare_main_window(
