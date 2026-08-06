@@ -473,7 +473,7 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
         return;
     }
     if id == "install" {
-        install_daemon(selected_local_profile().as_deref());
+        install_daemon(app, selected_local_profile().as_deref());
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
             tokio::time::sleep(Duration::from_secs(2)).await;
@@ -523,7 +523,9 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
                 app_log::info(&format!("event=tun_action_resolved action={action:?}"));
                 match action {
                     TunAction::RequireProfile => show_profile_required_prompt(),
-                    TunAction::InstallDaemon => install_daemon(selected_local_profile().as_deref()),
+                    TunAction::InstallDaemon => {
+                        install_daemon(&app, selected_local_profile().as_deref())
+                    }
                     TunAction::StartDaemon => start_daemon(),
                     TunAction::EnableTun => {
                         let succeeded = controller_client().set_tun(true).await.is_ok();
@@ -849,6 +851,77 @@ fn title_case(value: &str) -> String {
     }
 }
 
+fn mihomo_path() -> Option<PathBuf> {
+    Some(
+        app_bundle_path()?
+            .join("Contents")
+            .join("MacOS")
+            .join("mihomo"),
+    )
+    .filter(|path| path.is_file())
+}
+
+/// Rejects a profile the proxy kernel cannot load, before it is ever imported.
+///
+/// Import used to check only the filename, size and file type, so a profile
+/// that Mihomo refuses — a rule naming a proxy group that was never defined,
+/// say — was accepted and reported as a success. The failure only surfaced much
+/// later, when enabling Enhanced TUN ran the privileged installer, which
+/// validates the config and aborts. From the outside that looked like
+/// "Mihomo will not start" with nothing explaining why.
+///
+/// Returns the kernel's own first error line so the tray can show what is
+/// actually wrong. That text is shown in the menu only — never logged, because
+/// a rule's payload can carry a domain name.
+fn validate_profile(path: &Path) -> Result<(), String> {
+    let Some(mihomo) = mihomo_path() else {
+        // No bundled kernel to check against (a development build); importing
+        // without validation preserves the previous behaviour.
+        return Ok(());
+    };
+    // A throwaway data directory: `-t` only reads the config, but Mihomo still
+    // wants somewhere to look for geodata.
+    let work = std::env::temp_dir().join(format!("mihomobox-verify-{}", std::process::id()));
+    if fs::create_dir_all(&work).is_err() {
+        return Ok(());
+    }
+    let output = Command::new(&mihomo)
+        .arg("-t")
+        .arg("-d")
+        .arg(&work)
+        .arg("-f")
+        .arg(path)
+        .output();
+    let _ = fs::remove_dir_all(&work);
+    let Ok(output) = output else {
+        return Ok(());
+    };
+    if output.status.success() {
+        return Ok(());
+    }
+    let combined = String::from_utf8_lossy(&output.stderr).into_owned()
+        + &String::from_utf8_lossy(&output.stdout);
+    Err(match first_config_error(&combined) {
+        Some(reason) => format!("Action failed: profile rejected by Mihomo — {reason}"),
+        None => "Action failed: profile rejected by Mihomo".to_string(),
+    })
+}
+
+/// Extracts the first `level=error` message from Mihomo's validation output.
+fn first_config_error(output: &str) -> Option<String> {
+    let line = output.lines().find(|line| line.contains("level=error"))?;
+    let message = line
+        .split_once("msg=")
+        .map(|(_, rest)| rest)
+        .unwrap_or(line);
+    let message = message.trim().trim_matches('"');
+    let mut reason: String = message.chars().take(160).collect();
+    if message.chars().count() > 160 {
+        reason.push('…');
+    }
+    Some(reason)
+}
+
 fn cli_path() -> Option<PathBuf> {
     Some(
         app_bundle_path()?
@@ -957,6 +1030,9 @@ fn import_local_profile(app: AppHandle, state: Arc<TrayState>) {
             let (directory, active_path) = user_profile_paths().ok_or_else(|| {
                 "Action failed: user profile directory is unavailable".to_string()
             })?;
+            // Validate before staging so a rejected profile leaves nothing
+            // behind and never becomes the active selection.
+            validate_profile(&path)?;
             let name = stage_local_profile(&path, &directory)?;
             if daemon_installed() {
                 let staged = directory.join(&name);
@@ -1199,7 +1275,7 @@ fn run_cli(arguments: &[&str]) -> bool {
     succeeded
 }
 
-fn install_daemon(initial_profile: Option<&Path>) {
+fn install_daemon(app: &AppHandle, initial_profile: Option<&Path>) {
     let Some(bundle) = app_bundle_path() else {
         return;
     };
@@ -1220,23 +1296,85 @@ fn install_daemon(initial_profile: Option<&Path>) {
         "do shell script {} with administrator privileges",
         apple_script_quote(&command)
     );
-    match Command::new("/usr/bin/osascript")
-        .args(["-e", &apple_script])
-        .spawn()
-    {
-        Ok(mut child) => {
-            app_log::info("event=privileged_installer action=install phase=spawned success=true");
-            std::thread::spawn(move || {
-                let succeeded = child.wait().is_ok_and(|status| status.success());
-                app_log::info(&format!(
-                    "event=privileged_installer action=install phase=completed success={succeeded}"
-                ));
-            });
+    app_log::info("event=privileged_installer action=install phase=spawned success=true");
+    let app = app.clone();
+    std::thread::spawn(move || {
+        // Capture the installer's output rather than discarding it. The script
+        // aborts on a config Mihomo will not load, and that reason used to go
+        // nowhere: the only trace was `success=false`, so a failed install was
+        // indistinguishable from "Mihomo just did not start".
+        let output = Command::new("/usr/bin/osascript")
+            .args(["-e", &apple_script])
+            .output();
+        let Ok(output) = output else {
+            app_log::error(
+                "event=privileged_installer action=install phase=completed success=false \
+                 reason=spawn_failed",
+            );
+            report_install_failure(&app, "Action failed: the installer could not be started");
+            return;
+        };
+        if output.status.success() {
+            app_log::info("event=privileged_installer action=install phase=completed success=true");
+            return;
         }
-        Err(_) => {
-            app_log::error("event=privileged_installer action=install phase=spawned success=false")
+        let combined = String::from_utf8_lossy(&output.stderr).into_owned()
+            + &String::from_utf8_lossy(&output.stdout);
+        let failure = classify_install_failure(&combined);
+        // Only the classification is logged. The raw text can carry a rule
+        // payload, which may contain a domain name.
+        app_log::error(&format!(
+            "event=privileged_installer action=install phase=completed success=false \
+             reason={}",
+            failure.reason
+        ));
+        if let Some(message) = failure.message {
+            report_install_failure(&app, message);
         }
+    });
+}
+
+struct InstallFailure {
+    /// Coarse, log-safe classification.
+    reason: &'static str,
+    /// User-facing text, or None when the user simply cancelled.
+    message: Option<&'static str>,
+}
+
+fn classify_install_failure(output: &str) -> InstallFailure {
+    if output.contains("User canceled") || output.contains("(-128)") {
+        return InstallFailure {
+            reason: "cancelled",
+            message: None,
+        };
     }
+    if output.contains("test failed") || output.contains("configuration file") {
+        return InstallFailure {
+            reason: "profile_rejected",
+            message: Some(
+                "Action failed: Mihomo rejected the selected profile; re-import a valid one",
+            ),
+        };
+    }
+    if output.contains("timed out waiting for") {
+        return InstallFailure {
+            reason: "timeout",
+            message: Some("Action failed: the daemon did not become ready in time"),
+        };
+    }
+    InstallFailure {
+        reason: "other",
+        message: Some("Action failed: the privileged installer did not complete"),
+    }
+}
+
+fn report_install_failure(app: &AppHandle, message: &str) {
+    let Some(state) = app.try_state::<Arc<TrayState>>() else {
+        return;
+    };
+    let state = state.inner().clone();
+    set_action_error(&state, Some(message.to_string()));
+    refresh(app.clone(), state, RefreshMode::Authoritative);
 }
 
 fn show_profile_required_prompt() {
@@ -1400,6 +1538,76 @@ mod tests {
         };
         retain_known_delays(&previous, &mut fresh);
         assert_eq!(fresh.groups[0].proxies[0].delay, None);
+    }
+
+    #[test]
+    fn first_config_error_extracts_the_kernel_message() {
+        // Shape taken from a real Mihomo v1.19.28 validation failure: a rule
+        // naming a proxy group the profile never defines.
+        let output = concat!(
+            "time=\"2026-08-06T10:02:36+08:00\" level=info msg=\"Start initial configuration\"\n",
+            "time=\"2026-08-06T10:02:36+08:00\" level=error msg=\"rules[0] [PROCESS-PATH-REGEX,",
+            ".*/Foo\\\\.app/.*,Proxy] error: proxy [Proxy] not found\"\n",
+            "configuration file /tmp/x/config.yaml test failed\n",
+        );
+        let reason = first_config_error(output).expect("an error line");
+        assert!(reason.contains("proxy [Proxy] not found"), "got: {reason}");
+        // The info line must not win.
+        assert!(!reason.contains("Start initial configuration"));
+    }
+
+    #[test]
+    fn first_config_error_truncates_and_handles_absence() {
+        assert_eq!(first_config_error("level=info msg=\"all good\""), None);
+        let long = format!("level=error msg=\"{}\"", "x".repeat(400));
+        let reason = first_config_error(&long).expect("an error line");
+        assert!(
+            reason.chars().count() <= 161,
+            "len {}",
+            reason.chars().count()
+        );
+        assert!(reason.ends_with('…'));
+    }
+
+    #[test]
+    fn install_failure_classification_is_log_safe_and_distinguishes_cancel() {
+        // A cancelled password prompt is not a failure to report to the user.
+        let cancelled = classify_install_failure("execution error: User canceled. (-128)");
+        assert_eq!(cancelled.reason, "cancelled");
+        assert!(cancelled.message.is_none());
+
+        // The reason this whole change exists: the installer aborts when Mihomo
+        // rejects the profile, and that used to surface as nothing at all.
+        let rejected =
+            classify_install_failure("configuration file /Library/.../config.yaml test failed\n");
+        assert_eq!(rejected.reason, "profile_rejected");
+        assert!(rejected.message.is_some());
+
+        assert_eq!(
+            classify_install_failure("timed out waiting for authenticated Mihomo controller")
+                .reason,
+            "timeout"
+        );
+        assert_eq!(
+            classify_install_failure("something else entirely").reason,
+            "other"
+        );
+
+        // Every logged reason must be a fixed token — never text echoed from
+        // the installer, which can carry a rule payload with a domain name.
+        for probe in [
+            "execution error: User canceled. (-128)",
+            "configuration file x test failed",
+            "timed out waiting for x",
+            "rules[0] [DOMAIN-SUFFIX,secret.example.com,Proxy] error",
+        ] {
+            let reason = classify_install_failure(probe).reason;
+            assert!(
+                ["cancelled", "profile_rejected", "timeout", "other"].contains(&reason),
+                "unexpected reason {reason}"
+            );
+            assert!(!reason.contains("example.com"));
+        }
     }
 
     #[test]
