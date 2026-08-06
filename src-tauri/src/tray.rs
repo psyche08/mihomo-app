@@ -53,6 +53,15 @@ struct TrayState {
     /// Set while an Enhanced TUN action is running, so the item cannot be
     /// clicked again mid-flight.
     tun_busy: AtomicBool,
+    /// When the last latency test ran, so the automatic trigger can rate-limit
+    /// itself. Each run is real proxied traffic.
+    last_latency_test: Mutex<Option<std::time::Instant>>,
+    latency_test_in_flight: AtomicBool,
+    /// Handles to the proxy rows currently drawn, paired with the node name
+    /// each row shows. Latency updates are written straight into these rather
+    /// than rebuilt, because replacing the menu closes it (see
+    /// repaint_delays_in_place).
+    node_items: Mutex<Vec<(String, CheckMenuItem<tauri::Wry>)>>,
 }
 
 /// Releases `tun_busy` however the Enhanced TUN arm exits.
@@ -170,6 +179,9 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         tun_item: Mutex::new(None),
         menu_tun_checked: Mutex::new(false),
         tun_busy: AtomicBool::new(false),
+        last_latency_test: Mutex::new(None),
+        latency_test_in_flight: AtomicBool::new(false),
+        node_items: Mutex::new(Vec::new()),
     });
     app.manage(state.clone());
 
@@ -201,7 +213,34 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         .tooltip("MihomoBox")
         .menu(&menu)
         .show_menu_on_left_click(true)
-        .on_menu_event(handle_menu_event);
+        .on_menu_event(handle_menu_event)
+        // Measure latency as the menu is being opened, so the numbers beside
+        // each node are current without anyone having to pick "Test Now".
+        // tray-icon emits this from mouseDown: *before* it opens the menu
+        // (tray-icon-0.24.1 platform_impl/macos/mod.rs:339-347), so the request
+        // is already in flight while the menu is coming up. Rate-limited inside
+        // run_latency_test: every run is real proxied traffic.
+        .on_tray_icon_event(|tray, event| {
+            let tauri::tray::TrayIconEvent::Click {
+                button: tauri::tray::MouseButton::Left,
+                button_state: tauri::tray::MouseButtonState::Down,
+                ..
+            } = event
+            else {
+                return;
+            };
+            let app = tray.app_handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let Some(state) = app.try_state::<Arc<TrayState>>() else {
+                    return;
+                };
+                let state = state.inner().clone();
+                // No refresh() here: run_latency_test already pulled fresh
+                // state and repainted the rows in place. Rebuilding would close
+                // the menu that is opening right now.
+                run_latency_test(&state, LatencyTrigger::Automatic).await;
+            });
+        });
     if let Some(icon) = icon {
         tray = tray.icon(icon);
     }
@@ -335,6 +374,11 @@ fn build_menu(
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
+    *state.node_items.lock().expect("node items lock") = flat_nodes
+        .iter()
+        .map(|node| node.name.clone())
+        .zip(node_items.iter().cloned())
+        .collect();
     let empty = node_items.is_empty().then(|| {
         MenuItem::with_id(
             app,
@@ -632,25 +676,9 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
                 );
             }
             "proxy-test" => {
-                let nodes = flat_proxy_nodes(&state.snapshot.lock().expect("snapshot lock"))
-                    .into_iter()
-                    .map(|node| node.name)
-                    .collect::<Vec<_>>();
-                let succeeded = controller_client().test_delays(&nodes).await;
-                app_log::info(&format!(
-                    "event=controller_action action=test_delays attempted={} succeeded={succeeded}",
-                    nodes.len()
-                ));
-                set_action_error(
-                    &state,
-                    (!nodes.is_empty() && succeeded == 0).then(|| {
-                        "Action failed: latency test could not reach any node".to_string()
-                    }),
-                );
-                *state
-                    .last_menu_signature
-                    .lock()
-                    .expect("menu signature lock") = None;
+                // An explicit request always measures, however recently the
+                // automatic trigger last ran.
+                run_latency_test(&state, LatencyTrigger::Requested).await;
             }
             _ => {
                 let action = state
@@ -1480,6 +1508,114 @@ fn start_daemon() {
     std::thread::spawn(|| {
         let _ = run_cli(&["start"]);
     });
+}
+
+/// Why a latency test is running.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LatencyTrigger {
+    /// The user picked "Test Now" — always measure.
+    Requested,
+    /// The tray was approached or opened. Measuring here is what makes "Test
+    /// Now" unnecessary, but it must not fire on every stray pass of the
+    /// cursor: each run is real proxied traffic, one request per node.
+    Automatic,
+}
+
+/// How recently an automatic test must have run for the next one to be skipped.
+/// Long enough that opening the menu repeatedly costs one measurement, short
+/// enough that the numbers on screen are current.
+const AUTOMATIC_LATENCY_INTERVAL: Duration = Duration::from_secs(20);
+
+/// Measures every node's latency and repaints the menu.
+///
+/// Returns false when an automatic run was skipped by the interval.
+async fn run_latency_test(state: &Arc<TrayState>, trigger: LatencyTrigger) -> bool {
+    if trigger == LatencyTrigger::Automatic {
+        let mut last = state.last_latency_test.lock().expect("latency test lock");
+        if last.is_some_and(|at| at.elapsed() < AUTOMATIC_LATENCY_INTERVAL) {
+            return false;
+        }
+        *last = Some(std::time::Instant::now());
+    } else {
+        *state.last_latency_test.lock().expect("latency test lock") =
+            Some(std::time::Instant::now());
+    }
+    // One test at a time: the trigger can fire while a previous run is still
+    // waiting on the controller.
+    if state
+        .latency_test_in_flight
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return false;
+    }
+    let _guard = LatencyTestGuard(state.clone());
+
+    let nodes = flat_proxy_nodes(&state.snapshot.lock().expect("snapshot lock"))
+        .into_iter()
+        .map(|node| node.name)
+        .collect::<Vec<_>>();
+    if nodes.is_empty() {
+        return false;
+    }
+    let succeeded = controller_client().test_delays(&nodes).await;
+    app_log::info(&format!(
+        "event=controller_action action=test_delays attempted={} succeeded={succeeded} automatic={}",
+        nodes.len(),
+        trigger == LatencyTrigger::Automatic
+    ));
+    // An automatic run stays quiet: it is a background convenience, and the
+    // user did not ask for it, so a failure must not plant an error banner in
+    // the menu. An explicit request reports.
+    if trigger == LatencyTrigger::Requested {
+        set_action_error(
+            state,
+            (succeeded == 0)
+                .then(|| "Action failed: latency test could not reach any node".to_string()),
+        );
+    }
+    // Pull the results the test just produced. refresh() would do this too, but
+    // it also rebuilds the menu, and that is exactly what must not happen here.
+    if let Ok(poll) = controller_client().tray_state().await {
+        *state.snapshot.lock().expect("snapshot lock") = poll.snapshot;
+    }
+    // Deliberately NOT invalidating the menu signature. Forcing a rebuild makes
+    // tray.set_menu drop the live muda::Menu, whose Drop calls
+    // cancelTrackingWithoutAnimation — which slams shut the very menu the user
+    // opened to read these numbers. Write the new values into the existing rows
+    // instead.
+    repaint_delays_in_place(state);
+    true
+}
+
+/// Writes fresh latencies into the drawn proxy rows without rebuilding the menu.
+///
+/// Safe while the menu is tracking: only the item titles change. Must be called
+/// from an async task and never from inside `run_on_main_thread` — set_text
+/// hops to the main thread and blocks on the reply, so calling it from the main
+/// thread would deadlock.
+fn repaint_delays_in_place(state: &Arc<TrayState>) {
+    let delays = flat_proxy_nodes(&state.snapshot.lock().expect("snapshot lock"))
+        .into_iter()
+        .map(|node| (node.name, node.delay))
+        .collect::<HashMap<_, _>>();
+    for (name, item) in state.node_items.lock().expect("node items lock").iter() {
+        let Some(delay) = delays.get(name) else {
+            continue;
+        };
+        let _ = item.set_text(format!("{}    {}", name, delay_label(*delay)));
+    }
+}
+
+/// Releases `latency_test_in_flight` however the test exits.
+struct LatencyTestGuard(Arc<TrayState>);
+
+impl Drop for LatencyTestGuard {
+    fn drop(&mut self) {
+        self.0
+            .latency_test_in_flight
+            .store(false, Ordering::Release);
+    }
 }
 
 /// Time allowed for the agent to stop before the tray reports failure.
