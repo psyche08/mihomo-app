@@ -545,6 +545,28 @@ final class CoreTests: XCTestCase {
         XCTAssertNil(HealthSnapshotStore.read(from: path, now: captured.addingTimeInterval(-30)))
     }
 
+    func testConfigurationStillDecodesWithoutNewerKeys() throws {
+        // A daemon.json written by an older version must keep decoding. Adding
+        // `healthSnapshotPath` as a stored property made Codable require the
+        // key, so every existing install would have failed to start after
+        // upgrading — the end-to-end run caught that, no unit test did.
+        let legacy = #"""
+        {"systemDNSListen":{"host":"127.0.0.53","port":53},
+         "mihomoDNS":{"host":"127.0.0.1","port":1153},
+         "upstreamListen":{"host":"127.0.0.1","port":1054},
+         "manageSystemDNS":true,"loopbackInterface":"lo0",
+         "loopbackAlias":"127.0.0.53","loopbackNetmask":"255.0.0.0",
+         "systemDNSBackupPath":"/tmp/mihomo-test/global-dns-backup.plist",
+         "aliasMarkerPath":"/tmp/mihomo-test/alias-created",
+         "queryTimeoutMilliseconds":5000,"fallbackDNSServers":[]}
+        """#
+        let configuration = try JSONDecoder().decode(
+            ProxyConfiguration.self,
+            from: Data(legacy.utf8)
+        )
+        XCTAssertEqual(configuration.healthSnapshotPath, "/tmp/mihomo-test/runtime-health.json")
+    }
+
     func testPublishedHealthIsAbsentWhenNothingWasWritten() {
         let path = FileManager.default.temporaryDirectory
             .appendingPathComponent("missing-\(UUID().uuidString).json")

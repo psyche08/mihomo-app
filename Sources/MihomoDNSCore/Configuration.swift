@@ -20,8 +20,6 @@ public struct ProxyConfiguration: Codable, Equatable {
     public var loopbackNetmask: String
     public var systemDNSBackupPath: String
     public var aliasMarkerPath: String
-    /// Where the agent publishes its latest runtime health for the daemon.
-    public var healthSnapshotPath: String
     public var queryTimeoutMilliseconds: Int
     public var fallbackDNSServers: [String]
     public var mihomoProcess: MihomoProcessConfiguration?
@@ -38,7 +36,6 @@ public struct ProxyConfiguration: Codable, Equatable {
         loopbackNetmask: String = "255.0.0.0",
         systemDNSBackupPath: String = "/Library/Application Support/Mihomo App/global-dns-backup.plist",
         aliasMarkerPath: String = "/Library/Application Support/Mihomo App/alias-created",
-        healthSnapshotPath: String = "/Library/Application Support/Mihomo App/runtime-health.json",
         queryTimeoutMilliseconds: Int = 5_000,
         fallbackDNSServers: [String] = [],
         mihomoProcess: MihomoProcessConfiguration? = nil,
@@ -54,7 +51,6 @@ public struct ProxyConfiguration: Codable, Equatable {
         self.loopbackNetmask = loopbackNetmask
         self.systemDNSBackupPath = systemDNSBackupPath
         self.aliasMarkerPath = aliasMarkerPath
-        self.healthSnapshotPath = healthSnapshotPath
         self.queryTimeoutMilliseconds = queryTimeoutMilliseconds
         self.fallbackDNSServers = fallbackDNSServers
         self.mihomoProcess = mihomoProcess
@@ -67,6 +63,19 @@ public struct ProxyConfiguration: Codable, Equatable {
         let configuration = try JSONDecoder().decode(ProxyConfiguration.self, from: data)
         try configuration.validate()
         return configuration
+    }
+
+    /// Where the agent publishes its runtime health for the daemon to serve.
+    ///
+    /// Derived from an existing managed path rather than stored, so adding it
+    /// cannot break decoding of a daemon.json written by an older version —
+    /// Codable synthesis would otherwise require the new key and the agent
+    /// would fail to start after an upgrade.
+    public var healthSnapshotPath: String {
+        URL(fileURLWithPath: systemDNSBackupPath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("runtime-health.json")
+            .path
     }
 
     public func validate() throws {
