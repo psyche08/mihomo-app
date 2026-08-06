@@ -411,22 +411,7 @@ final class ControllerBroker: @unchecked Sendable {
         }
 
         let path = components.path
-        let exact: Set<String> = [
-            "GET /version", "GET /configs", "GET /proxies", "GET /rules",
-            "GET /providers/proxies", "GET /providers/rules", "GET /connections",
-            "DELETE /connections", "PATCH /configs", "PUT /configs", "PATCH /rules/disable",
-            "POST /cache/fakeip/flush", "POST /cache/dns/flush", "POST /configs/geo",
-        ]
-        let signature = "\(method) \(path)"
-        var allowed = exact.contains(signature)
-        allowed = allowed || route(method, path, prefix: "/proxies/", segmentCounts: [1], suffix: nil)
-        allowed = allowed || route(method, path, prefix: "/proxies/", segmentCounts: [1], suffix: "/delay")
-        allowed = allowed || route(method, path, prefix: "/group/", segmentCounts: [1], suffix: "/delay")
-        allowed = allowed || route(method, path, prefix: "/providers/proxies/", segmentCounts: [1], suffix: nil)
-        allowed = allowed || route(method, path, prefix: "/providers/proxies/", segmentCounts: [1, 2], suffix: "/healthcheck")
-        allowed = allowed || route(method, path, prefix: "/providers/rules/", segmentCounts: [1], suffix: nil)
-        allowed = allowed || route(method, path, prefix: "/connections/", segmentCounts: [1], suffix: nil)
-        guard allowed else {
+        guard ControllerRequestPolicy.allows(method: method, path: path) else {
             throw brokerError("unsupported controller operation")
         }
 
@@ -441,27 +426,6 @@ final class ControllerBroker: @unchecked Sendable {
         }
     }
 
-    private func route(
-        _ method: String,
-        _ path: String,
-        prefix: String,
-        segmentCounts: Set<Int>,
-        suffix: String?
-    ) -> Bool {
-        let methods: Set<String>
-        if prefix == "/proxies/" && suffix == nil { methods = ["PUT", "DELETE"] }
-        else if prefix == "/connections/" { methods = ["DELETE"] }
-        else if suffix == "/delay" || suffix == "/healthcheck" { methods = ["GET"] }
-        else { methods = ["PUT"] }
-        guard methods.contains(method), path.hasPrefix(prefix) else { return false }
-        var middle = String(path.dropFirst(prefix.count))
-        if let suffix {
-            guard middle.hasSuffix(suffix) else { return false }
-            middle.removeLast(suffix.count)
-        }
-        let segments = middle.split(separator: "/", omittingEmptySubsequences: false)
-        return segmentCounts.contains(segments.count) && segments.allSatisfy { !$0.isEmpty }
-    }
 
     private func validateConfigPatch(_ body: Data?) throws {
         guard let body,
