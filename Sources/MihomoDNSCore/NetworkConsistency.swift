@@ -511,10 +511,21 @@ enum DNSAcquisitionDecision: Equatable {
 /// own until the agent was restarted. Re-ensuring the alias (which never
 /// touches system DNS) breaks that latch.
 struct DNSAcquisitionPolicy {
-    func decide(
+    private var backoffUntilNanoseconds: UInt64?
+    private(set) var consecutiveFailures = 0
+    let initialBackoffNanoseconds: UInt64
+    let maximumBackoffNanoseconds: UInt64
+
+    init(initialBackoffSeconds: UInt64 = 5, maximumBackoffSeconds: UInt64 = 120) {
+        initialBackoffNanoseconds = initialBackoffSeconds * 1_000_000_000
+        maximumBackoffNanoseconds = maximumBackoffSeconds * 1_000_000_000
+    }
+
+    mutating func decide(
         upstreamRuntimeReady: Bool,
         dnsBridgeReady: Bool,
-        systemDNSManaged: Bool
+        systemDNSManaged: Bool,
+        nowNanoseconds: UInt64
     ) -> DNSAcquisitionDecision {
         guard upstreamRuntimeReady else { return .none }
         if systemDNSManaged {
@@ -523,10 +534,37 @@ struct DNSAcquisitionPolicy {
             // policy, which restores original DNS.
             return dnsBridgeReady ? .maintain : .none
         }
+        // Taking ownership can fail persistently — most realistically when
+        // another network extension is fighting us over macOS DNS. Without a
+        // backoff the retry runs at tick rate, and because a failed attempt
+        // rolls back (removing the loopback alias) while the next tick
+        // re-creates it, 127.0.0.53 would be added and removed every couple of
+        // seconds for as long as the conflict lasts.
+        if let backoffUntilNanoseconds, nowNanoseconds < backoffUntilNanoseconds {
+            return .none
+        }
         // Not managing yet. Manage as soon as the bridge answers; otherwise
         // repair the alias so a bridge knocked out by an earlier rollback can
         // recover instead of latching the observer into passive mode.
         return dnsBridgeReady ? .manage : .reacquireBridge
+    }
+
+    mutating func recordManageSucceeded() {
+        consecutiveFailures = 0
+        backoffUntilNanoseconds = nil
+    }
+
+    /// Backs off exponentially, so a persistent conflict costs one attempt per
+    /// `maximumBackoff` rather than one per tick, while still recovering on its
+    /// own once the conflict clears.
+    mutating func recordManageFailed(nowNanoseconds: UInt64) {
+        consecutiveFailures += 1
+        let shift = min(UInt64(consecutiveFailures - 1), 32)
+        let scaled = initialBackoffNanoseconds << shift
+        let delay = (scaled >> shift) == initialBackoffNanoseconds
+            ? min(scaled, maximumBackoffNanoseconds)
+            : maximumBackoffNanoseconds
+        backoffUntilNanoseconds = nowNanoseconds &+ delay
     }
 }
 
@@ -542,7 +580,7 @@ public final class NetworkConsistencyController: @unchecked Sendable {
     private var previous: NetworkConsistencyHealth?
     private var recoveryPolicy = RuntimeRecoveryPolicy()
     private var bridgeFailurePolicy = DNSBridgeFailurePolicy()
-    private let acquisitionPolicy = DNSAcquisitionPolicy()
+    private var acquisitionPolicy = DNSAcquisitionPolicy()
     private var egressPolicy = EgressProbePolicy()
     private let egressProbe: EgressProbeCoordinator
     /// Set by a wake notification; forces the next tick to re-probe egress
@@ -681,7 +719,8 @@ public final class NetworkConsistencyController: @unchecked Sendable {
         switch acquisitionPolicy.decide(
             upstreamRuntimeReady: upstreamRuntimeReady,
             dnsBridgeReady: before.dnsBridgeReady,
-            systemDNSManaged: before.systemDNSManaged
+            systemDNSManaged: before.systemDNSManaged,
+            nowNanoseconds: DispatchTime.now().uptimeNanoseconds
         ) {
         case .none:
             break
@@ -689,10 +728,21 @@ public final class NetworkConsistencyController: @unchecked Sendable {
             do {
                 try aliasManager.ensure()
                 try globalDNS.apply()
+                acquisitionPolicy.recordManageSucceeded()
                 action = "manage_dns"
                 changed = true
             } catch {
-                ServiceLog.error("event=network_transition_failed action=manage_dns rollback=restore_dns")
+                acquisitionPolicy.recordManageFailed(
+                    nowNanoseconds: DispatchTime.now().uptimeNanoseconds
+                )
+                // The numeric SystemConfiguration code is safe to record and is
+                // the only thing that makes a persistent conflict diagnosable;
+                // no path, server or name is logged.
+                ServiceLog.error(
+                    "event=network_transition_failed action=manage_dns rollback=restore_dns " +
+                    "consecutive=\(acquisitionPolicy.consecutiveFailures) " +
+                    "code=\(systemConfigurationCode(error))"
+                )
                 restoreSafeNetwork(source: "manage_dns_failure")
                 action = "manage_dns_failed"
                 changed = true
@@ -905,6 +955,26 @@ public final class NetworkConsistencyController: @unchecked Sendable {
             egressPolicy.clearProbeSchedule()
         }
         lastFoldedEgressSequence = egressProbe.latest().sequence
+    }
+
+    /// A log-safe identifier for why taking over system DNS failed: the failing
+    /// operation plus its SystemConfiguration error number. Carries no path,
+    /// server address or name.
+    private func systemConfigurationCode(_ error: Error) -> String {
+        guard let error = error as? GlobalDNSPreferencesError else { return "unknown" }
+        switch error {
+        case .unavailable: return "unavailable"
+        case .currentSetMissing: return "current_set_missing"
+        case .dynamicStoreUnavailable: return "dynamic_store_unavailable"
+        case .primaryServiceMissing: return "primary_service_missing"
+        case .invalidBackup: return "invalid_backup"
+        case .lockFailed(let code): return "lock/\(code)"
+        case .commitFailed(let code): return "commit/\(code)"
+        case .applyFailed(let code): return "apply/\(code)"
+        case .pathOperationFailed(let operation, let code): return "path_\(operation)/\(code)"
+        case .dynamicStateOperationFailed(let operation, let code):
+            return "dynamic_\(operation)/\(code)"
+        }
     }
 
     private func restoreSafeNetwork(source: String) {

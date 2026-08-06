@@ -514,9 +514,9 @@ final class CoreTests: XCTestCase {
     }
 
     func testDNSAcquisitionManagesOnceBridgeAnswers() {
-        let policy = DNSAcquisitionPolicy()
+        var policy = DNSAcquisitionPolicy()
         XCTAssertEqual(
-            policy.decide(upstreamRuntimeReady: true, dnsBridgeReady: true, systemDNSManaged: false),
+            policy.decide(upstreamRuntimeReady: true, dnsBridgeReady: true, systemDNSManaged: false, nowNanoseconds: 1),
             .manage
         )
     }
@@ -526,17 +526,108 @@ final class CoreTests: XCTestCase {
         // loopback alias so the bridge no longer answers and ownership was
         // released. The observer must re-ensure the alias instead of latching
         // into passive observation (the ~76h stuck state seen in the logs).
-        let policy = DNSAcquisitionPolicy()
+        var policy = DNSAcquisitionPolicy()
         XCTAssertEqual(
-            policy.decide(upstreamRuntimeReady: true, dnsBridgeReady: false, systemDNSManaged: false),
+            policy.decide(upstreamRuntimeReady: true, dnsBridgeReady: false, systemDNSManaged: false, nowNanoseconds: 1),
             .reacquireBridge
         )
     }
 
-    func testDNSAcquisitionMaintainsAliasWhileManaged() {
-        let policy = DNSAcquisitionPolicy()
+    func testDNSAcquisitionBacksOffInsteadOfThrashingTheLoopbackAlias() {
+        // Observed in the field: once taking over system DNS started failing,
+        // every tick rolled back (removing the loopback alias) and the next tick
+        // re-created it, so 127.0.0.53 was added and removed every ~2 seconds
+        // for eight minutes. A failure must buy silence, not an immediate retry.
+        var policy = DNSAcquisitionPolicy(initialBackoffSeconds: 5, maximumBackoffSeconds: 120)
+        let second: UInt64 = 1_000_000_000
+
         XCTAssertEqual(
-            policy.decide(upstreamRuntimeReady: true, dnsBridgeReady: true, systemDNSManaged: true),
+            policy.decide(
+                upstreamRuntimeReady: true,
+                dnsBridgeReady: true,
+                systemDNSManaged: false,
+                nowNanoseconds: second
+            ),
+            .manage
+        )
+        policy.recordManageFailed(nowNanoseconds: second)
+
+        // The rollback left the bridge down. Without backoff this would return
+        // .reacquireBridge on the very next tick and restart the cycle.
+        for tick in 2 ... 5 {
+            XCTAssertEqual(
+                policy.decide(
+                    upstreamRuntimeReady: true,
+                    dnsBridgeReady: false,
+                    systemDNSManaged: false,
+                    nowNanoseconds: UInt64(tick) * second
+                ),
+                .none,
+                "tick \(tick) must stay quiet during backoff"
+            )
+        }
+        // Once the window passes it tries again, so a transient conflict still
+        // recovers on its own.
+        XCTAssertEqual(
+            policy.decide(
+                upstreamRuntimeReady: true,
+                dnsBridgeReady: false,
+                systemDNSManaged: false,
+                nowNanoseconds: 7 * second
+            ),
+            .reacquireBridge
+        )
+    }
+
+    func testDNSAcquisitionBackoffGrowsAndIsCapped() {
+        var policy = DNSAcquisitionPolicy(initialBackoffSeconds: 5, maximumBackoffSeconds: 20)
+        let second: UInt64 = 1_000_000_000
+        policy.recordManageFailed(nowNanoseconds: 0)
+        // 5s window.
+        XCTAssertEqual(
+            policy.decide(upstreamRuntimeReady: true, dnsBridgeReady: true, systemDNSManaged: false, nowNanoseconds: 4 * second),
+            .none
+        )
+        policy.recordManageFailed(nowNanoseconds: 0)
+        // 10s window now.
+        XCTAssertEqual(
+            policy.decide(upstreamRuntimeReady: true, dnsBridgeReady: true, systemDNSManaged: false, nowNanoseconds: 9 * second),
+            .none
+        )
+        // Keep failing; the delay must saturate at the cap rather than overflow.
+        for _ in 0 ..< 40 {
+            policy.recordManageFailed(nowNanoseconds: 0)
+        }
+        XCTAssertEqual(
+            policy.decide(upstreamRuntimeReady: true, dnsBridgeReady: true, systemDNSManaged: false, nowNanoseconds: 19 * second),
+            .none
+        )
+        XCTAssertEqual(
+            policy.decide(upstreamRuntimeReady: true, dnsBridgeReady: true, systemDNSManaged: false, nowNanoseconds: 21 * second),
+            .manage
+        )
+    }
+
+    func testDNSAcquisitionSuccessClearsBackoff() {
+        var policy = DNSAcquisitionPolicy(initialBackoffSeconds: 60)
+        policy.recordManageFailed(nowNanoseconds: 0)
+        policy.recordManageSucceeded()
+        XCTAssertEqual(policy.consecutiveFailures, 0)
+        XCTAssertEqual(
+            policy.decide(
+                upstreamRuntimeReady: true,
+                dnsBridgeReady: true,
+                systemDNSManaged: false,
+                nowNanoseconds: 1
+            ),
+            .manage
+        )
+    }
+
+    func testDNSAcquisitionMaintainsAliasWhileManaged() {
+        var policy = DNSAcquisitionPolicy()
+        XCTAssertEqual(
+            policy.decide(upstreamRuntimeReady: true, dnsBridgeReady: true, systemDNSManaged: true, nowNanoseconds: 1),
             .maintain
         )
     }
@@ -544,9 +635,9 @@ final class CoreTests: XCTestCase {
     func testDNSAcquisitionYieldsToBridgeFailurePolicyWhenManagedBridgeDrops() {
         // Managed but the bridge dropped: acquisition stays idle so the
         // dedicated bridge-failure policy owns the restore decision.
-        let policy = DNSAcquisitionPolicy()
+        var policy = DNSAcquisitionPolicy()
         XCTAssertEqual(
-            policy.decide(upstreamRuntimeReady: true, dnsBridgeReady: false, systemDNSManaged: true),
+            policy.decide(upstreamRuntimeReady: true, dnsBridgeReady: false, systemDNSManaged: true, nowNanoseconds: 1),
             .none
         )
     }
@@ -837,13 +928,13 @@ final class CoreTests: XCTestCase {
     }
 
     func testDNSAcquisitionIdleWhenKernelRuntimeUnavailable() {
-        let policy = DNSAcquisitionPolicy()
+        var policy = DNSAcquisitionPolicy()
         XCTAssertEqual(
-            policy.decide(upstreamRuntimeReady: false, dnsBridgeReady: false, systemDNSManaged: false),
+            policy.decide(upstreamRuntimeReady: false, dnsBridgeReady: false, systemDNSManaged: false, nowNanoseconds: 1),
             .none
         )
         XCTAssertEqual(
-            policy.decide(upstreamRuntimeReady: false, dnsBridgeReady: true, systemDNSManaged: true),
+            policy.decide(upstreamRuntimeReady: false, dnsBridgeReady: true, systemDNSManaged: true, nowNanoseconds: 1),
             .none
         )
     }
