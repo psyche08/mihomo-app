@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="v1.269.0"
-EXPECTED_REVISION="6802999f204fdb7a97b41ade2f49693ed5eab8c9"
+VERSION="v1.271.0"
+EXPECTED_REVISION="c4622599d0a597378729a91c3b7f76c5d9803831"
 CACHE="$ROOT/.cache/metacubexd"
 OUTPUT="$ROOT/ui-dist"
 BUILD_MARKER="$CACHE/.mihomo-app-built-revision"

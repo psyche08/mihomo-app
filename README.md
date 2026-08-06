@@ -22,7 +22,7 @@ npm install
 npm run build
 ```
 
-The build pins MetaCubeXD `v1.269.0`, Mihomo `v1.19.28`, and verifies the
+The build pins MetaCubeXD `v1.271.0`, Mihomo `v1.19.28`, and verifies the
 Mihomo release checksum before bundling.
 
 Install or repair the privileged daemon from the tray, or inspect the operation

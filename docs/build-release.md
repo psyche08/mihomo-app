@@ -5,7 +5,7 @@
 | Component | Pin | Verification |
 |---|---|---|
 | Tauri | `2.11.x` Cargo/npm lockfiles | Cargo/npm integrity metadata |
-| MetaCubeXD | tag `v1.269.0`, commit `6802999f204fdb7a97b41ade2f49693ed5eab8c9` | exact revision check; MIT license copied |
+| MetaCubeXD | tag `v1.271.0`, commit `c4622599d0a597378729a91c3b7f76c5d9803831` | exact revision check; MIT license copied |
 | Mihomo | release `v1.19.28` | architecture-specific SHA-256 |
 | App icon | upstream Mihomo `Meta.png` | bundled source SHA-256 |
 
@@ -138,6 +138,14 @@ The updater private key is not part of the repository. Local releases default
 to `~/.tauri/mihomobox.key`, or use `TAURI_SIGNING_PRIVATE_KEY` /
 `TAURI_UPDATER_KEY_PATH`. Losing or rotating this key prevents already-installed
 clients from accepting later updates.
+
+## GitHub Release Notes
+
+Every GitHub Release title and description must be written in English. This
+includes the summary, change list, validation notes, and any manually added
+upgrade instructions. Review all user-visible release text for this requirement
+before publishing or updating a Release; tag names and artifact filenames remain
+unchanged.
 
 Each GitHub release must publish these assets from `dist/` under tag `vX.Y.Z`:
 
