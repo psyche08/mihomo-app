@@ -121,3 +121,80 @@ dns:
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProxyServerExclusionTests(unittest.TestCase):
+    def test_server_hosts_come_from_the_proxies_block_only(self) -> None:
+        lines = (
+            "dns:\n  server: 1.1.1.1\n"
+            "proxies:\n"
+            "  - name: A\n    server: jp.example.com\n    port: 443\n"
+            "  - name: B\n    server: 203.0.113.9\n    port: 443\n"
+            "  - name: C\n    server: jp.example.com\n    port: 8443\n"
+            "rules:\n  - MATCH,Proxy\n"
+        ).splitlines(keepends=True)
+        self.assertEqual(
+            MODULE.proxy_server_hosts(lines),
+            ["jp.example.com", "203.0.113.9"],
+        )
+
+    def test_fake_ip_answers_are_never_excluded(self) -> None:
+        # Writing a Fake-IP address into the exclusion list would exclude an
+        # address the kernel never dials while leaving the real one captured —
+        # worse than writing nothing.
+        self.assertEqual(MODULE.resolve_addresses([], "198.18."), [])
+        lines = "dns:\n  fake-ip-range: 198.18.0.1/16\n".splitlines(keepends=True)
+        self.assertEqual(MODULE.fake_ip_prefix(lines), "198.18.")
+        lines = "dns:\n  fake-ip-range: 10.0.0.1/8\n".splitlines(keepends=True)
+        self.assertEqual(MODULE.fake_ip_prefix(lines), "10.")
+
+    def test_exclusion_is_skipped_when_nothing_resolves(self) -> None:
+        # Resolution fails transiently; a stale-but-correct list from a previous
+        # load is worth more than an empty one. Stubbed rather than resolved for
+        # real: a name that should not exist still resolves on networks whose
+        # DNS hijacks NXDOMAIN, which is exactly how this test first failed.
+        lines = (
+            "tun:\n  enable: true\n  auto-route: true\n"
+            "dns:\n  fake-ip-range: 198.18.0.1/16\n"
+            "proxies:\n  - name: A\n    server: jp.example.com\n    port: 443\n"
+        ).splitlines(keepends=True)
+        original = MODULE.resolve_addresses
+        MODULE.resolve_addresses = lambda hosts, prefix: []
+        try:
+            self.assertEqual(MODULE.exclude_proxy_servers_from_tunnel(lines), lines)
+        finally:
+            MODULE.resolve_addresses = original
+
+    def test_exclusion_writes_every_resolved_address(self) -> None:
+        lines = (
+            "tun:\n  enable: true\n  auto-route: true\n"
+            "dns:\n  fake-ip-range: 198.18.0.1/16\n"
+            "proxies:\n  - name: A\n    server: jp.example.com\n    port: 443\n"
+        ).splitlines(keepends=True)
+        original = MODULE.resolve_addresses
+        MODULE.resolve_addresses = lambda hosts, prefix: ["198.51.100.7", "203.0.113.9"]
+        try:
+            text = "".join(MODULE.exclude_proxy_servers_from_tunnel(lines))
+        finally:
+            MODULE.resolve_addresses = original
+        self.assertIn("  route-exclude-address:\n", text)
+        self.assertIn("    - 198.51.100.7/32\n", text)
+        self.assertIn("    - 203.0.113.9/32\n", text)
+        # The rest of the tun block survives.
+        self.assertIn("  enable: true\n", text)
+        self.assertIn("  auto-route: true\n", text)
+
+    def test_exclusion_replaces_rather_than_appends_on_reload(self) -> None:
+        lines = (
+            "tun:\n  enable: true\n"
+            "  route-exclude-address:\n    - 203.0.113.1/32\n"
+            "  auto-route: true\n"
+        ).splitlines(keepends=True)
+        result = MODULE.replace_tun_list(
+            lines, "route-exclude-address", "    - 198.51.100.7/32\n"
+        )
+        text = "".join(result)
+        self.assertIn("    - 198.51.100.7/32\n", text)
+        self.assertNotIn("203.0.113.1", text)
+        self.assertEqual(text.count("route-exclude-address"), 1)
+        self.assertIn("  auto-route: true\n", text)
