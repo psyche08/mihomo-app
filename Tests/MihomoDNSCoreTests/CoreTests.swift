@@ -1091,7 +1091,7 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(interface, "lo0")
     }
 
-    func testOnlyErrorLinesKeepTheirText() throws {
+    func testErrorAndWarningLinesKeepTheirText() throws {
         let accumulator = SanitizedProcessLogAccumulator(maximumLines: 2)
         let message =
             "level=warning url=https://secret.example/sub?token=credential\n" +
@@ -1110,10 +1110,28 @@ final class CoreTests: XCTestCase {
         XCTAssertTrue(text.contains("private.example"))
         XCTAssertTrue(text.contains("proxy=Node-A"))
 
-        // The warning is still counted only — its text, and the subscription
-        // URL and token in it, must not reach disk.
-        XCTAssertFalse(text.contains("secret.example"))
+        // Warnings keep their text too, since the failure that motivated this
+        // — a proxy accepting connections and never completing one — reports as
+        // a timeout at warning, not as an error.
+        XCTAssertTrue(text.contains("level=warning"))
+        // Credentials are stripped from both levels regardless.
         XCTAssertFalse(text.contains("credential"))
+        XCTAssertTrue(text.contains("https://secret.example/sub"), "the path survives")
+    }
+
+    func testWarningRetentionIsBoundedFarBelowErrors() throws {
+        // Warnings outnumber errors by roughly two hundred to one, so a window
+        // keeps only a sample of them while every count stays exact.
+        let accumulator = SanitizedProcessLogAccumulator(
+            maximumLines: 200,
+            maximumRetainedErrors: 64,
+            maximumRetainedWarnings: 4
+        )
+        let raw = Data((0 ..< 200).map { "level=warning slow dial number \($0)\n" }.joined().utf8)
+        let summary = try XCTUnwrap(accumulator.ingest(raw))
+        let text = try XCTUnwrap(String(data: summary, encoding: .utf8))
+        XCTAssertTrue(text.contains("warning=200"), "the count stays exact")
+        XCTAssertEqual(text.components(separatedBy: "slow dial number").count - 1, 4)
     }
 
     func testRetainedErrorsDropCredentialsButKeepTheFailure() {

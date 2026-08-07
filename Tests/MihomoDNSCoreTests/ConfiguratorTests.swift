@@ -59,7 +59,7 @@ final class ConfiguratorTests: XCTestCase {
         XCTAssertEqual(once, twice, "applying twice must not keep growing the file")
         XCTAssertTrue(once.contains("  listen: 127.0.0.1:1153\n"))
         XCTAssertTrue(once.contains("  proxy-server-nameserver:\n    - tcp://127.0.0.1:1054\n"))
-        XCTAssertTrue(once.contains("log-level: error\n"))
+        XCTAssertTrue(once.contains("log-level: warning\n"))
         XCTAssertTrue(once.contains("    - 198.51.100.7/32\n"))
         // The user's own keys survive.
         XCTAssertTrue(once.contains("port: 7890\n"))

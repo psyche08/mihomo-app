@@ -88,10 +88,14 @@ public enum MihomoConfigurator {
 
         lines = replaceTopLevelScalar(lines, key: "external-controller", value: "\(controller.host):\(controller.port)")
         lines = replaceTopLevelScalar(lines, key: "secret", value: jsonQuoted(secret))
-        // The kernel emits an enormous amount at warning — a week of field logs
-        // held 1.82M warning lines against 8.5K errors — which buried the
-        // errors and cost continuous disk writes for output nobody reads.
-        lines = replaceTopLevelScalar(lines, key: "log-level", value: "error")
+        // Warning, not error. Dropping to error cut the volume enormously — a
+        // week of field logs held 1.82M warning lines against 8.5K errors — but
+        // it also removed the only trace of the failure it was meant to help
+        // diagnose: a proxy that accepts connections and then never completes
+        // one produces timeouts, which the kernel reports at warning, so the
+        // logs held nothing at all. Volume is handled by retaining a bounded
+        // sample of the text rather than by discarding the level.
+        lines = replaceTopLevelScalar(lines, key: "log-level", value: "warning")
 
         guard directScalar(lines, section: "tun", key: "enable") == "true" else {
             throw ConfiguratorError.tunDisabled

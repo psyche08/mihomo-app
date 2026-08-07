@@ -156,15 +156,22 @@ public final class SanitizedProcessLogAccumulator: @unchecked Sendable {
     private var errors = 0
     private var retainedErrors: [String] = []
     private let maximumRetainedErrors: Int
+    private var retainedWarnings: [String] = []
+    private let maximumRetainedWarnings: Int
 
     public init(
         maximumLines: Int = 512,
         maximumBytes: Int = 256 * 1_024,
-        maximumRetainedErrors: Int = 64
+        maximumRetainedErrors: Int = 64,
+        maximumRetainedWarnings: Int = 16
     ) {
         self.maximumLines = max(1, maximumLines)
         self.maximumBytes = max(1, maximumBytes)
         self.maximumRetainedErrors = max(0, maximumRetainedErrors)
+        // Warnings outnumber errors by roughly two hundred to one, so they get
+        // a much smaller share of each window. A sample is enough to recognise
+        // what a fault looks like; the counts stay exact either way.
+        self.maximumRetainedWarnings = max(0, maximumRetainedWarnings)
     }
 
     public func ingest(_ data: Data) -> Data? {
@@ -202,6 +209,7 @@ public final class SanitizedProcessLogAccumulator: @unchecked Sendable {
             retainError(line)
         } else if line.range(of: Data("level=warning".utf8)) != nil {
             warnings += 1
+            retainWarning(line)
         } else {
             infos += 1
         }
@@ -218,6 +226,20 @@ public final class SanitizedProcessLogAccumulator: @unchecked Sendable {
     ///
     /// Bounded per window so a persistent fault cannot fill the disk; the count
     /// remains exact even when the retained sample is capped.
+    /// Keeps a sample of warning text.
+    ///
+    /// Counting warnings and discarding them is what made a real outage
+    /// undiagnosable: a proxy that accepts connections and never completes one
+    /// fails by timing out, the kernel reports that at warning, and the logs
+    /// held a number and nothing else. Same redaction as errors.
+    private func retainWarning(_ line: Data) {
+        guard retainedWarnings.count < maximumRetainedWarnings,
+              let text = String(data: line, encoding: .utf8) else {
+            return
+        }
+        retainedWarnings.append(SanitizedProcessLogRedaction.redact(text))
+    }
+
     private func retainError(_ line: Data) {
         guard retainedErrors.count < maximumRetainedErrors,
               let text = String(data: line, encoding: .utf8) else {
@@ -233,9 +255,10 @@ public final class SanitizedProcessLogAccumulator: @unchecked Sendable {
             "lines=\(lines) bytes=\(bytes) info=\(infos) warning=\(warnings) error=\(errors)\n"
         // The retained errors follow the summary, so the counts stay the first
         // thing read while the detail sits with them.
-        let detail = retainedErrors.map { "\($0)\n" }.joined()
+        let detail = (retainedErrors + retainedWarnings).map { "\($0)\n" }.joined()
         let record = Data((message + detail).utf8)
         retainedErrors.removeAll(keepingCapacity: true)
+        retainedWarnings.removeAll(keepingCapacity: true)
         lines = 0
         bytes = 0
         infos = 0
