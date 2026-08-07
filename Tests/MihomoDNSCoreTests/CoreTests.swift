@@ -1033,11 +1033,11 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(policy.recordFailure(runtimeMilliseconds: 1_000), .retry(delayMilliseconds: 100, failures: 1))
     }
 
-    func testSanitizedProcessLogNeverPersistsRawContent() throws {
+    func testOnlyErrorLinesKeepTheirText() throws {
         let accumulator = SanitizedProcessLogAccumulator(maximumLines: 2)
         let message =
             "level=warning url=https://secret.example/sub?token=credential\n" +
-            "level=error domain=private.example\n"
+            "level=error dial failed host=private.example proxy=Node-A\n"
         let raw = Data(message.utf8)
 
         let summary = try XCTUnwrap(accumulator.ingest(raw))
@@ -1046,9 +1046,60 @@ final class CoreTests: XCTestCase {
         XCTAssertTrue(text.contains("lines=2"))
         XCTAssertTrue(text.contains("warning=1"))
         XCTAssertTrue(text.contains("error=1"))
+
+        // The error keeps what identifies the failure: reason, host, proxy.
+        XCTAssertTrue(text.contains("dial failed"))
+        XCTAssertTrue(text.contains("private.example"))
+        XCTAssertTrue(text.contains("proxy=Node-A"))
+
+        // The warning is still counted only — its text, and the subscription
+        // URL and token in it, must not reach disk.
         XCTAssertFalse(text.contains("secret.example"))
         XCTAssertFalse(text.contains("credential"))
-        XCTAssertFalse(text.contains("private.example"))
+    }
+
+    func testRetainedErrorsDropCredentialsButKeepTheFailure() {
+        let redact = SanitizedProcessLogRedaction.redact
+
+        // A subscription URL's query is where the node list is handed out.
+        let subscription = redact("level=error provider update https://example.com/sub?token=abc123")
+        XCTAssertFalse(subscription.contains("abc123"))
+        XCTAssertTrue(subscription.contains("https://example.com/sub"))
+
+        // Proxy credentials embedded in a URL.
+        let credentials = redact("level=error dial ss://user:hunter2@node.example:8388 failed")
+        XCTAssertFalse(credentials.contains("hunter2"))
+        XCTAssertTrue(credentials.contains("node.example"))
+
+        // Key/value secrets in any shape.
+        XCTAssertFalse(redact("level=error secret=s3cr3tvalue").contains("s3cr3tvalue"))
+        XCTAssertFalse(redact("level=error \"password\": \"letmein\"").contains("letmein"))
+        XCTAssertFalse(
+            redact("level=error uuid=b1e5f4a2-0000-4000-8000-abcdefabcdef").contains("b1e5f4a2")
+        )
+
+        // What diagnosis needs survives untouched.
+        let failure = redact(
+            "level=error connection refused host=www.google.com ip=142.250.72.4 proxy=JP-01"
+        )
+        XCTAssertTrue(failure.contains("connection refused"))
+        XCTAssertTrue(failure.contains("www.google.com"))
+        XCTAssertTrue(failure.contains("142.250.72.4"))
+        XCTAssertTrue(failure.contains("JP-01"))
+    }
+
+    func testRetainedErrorsAreBoundedPerWindow() throws {
+        // A persistent fault must not fill the disk; the count stays exact
+        // even once the retained sample is capped.
+        let accumulator = SanitizedProcessLogAccumulator(
+            maximumLines: 100,
+            maximumRetainedErrors: 3
+        )
+        let raw = Data((0 ..< 100).map { "level=error failure number \($0)\n" }.joined().utf8)
+        let summary = try XCTUnwrap(accumulator.ingest(raw))
+        let text = try XCTUnwrap(String(data: summary, encoding: .utf8))
+        XCTAssertTrue(text.contains("error=100"))
+        XCTAssertEqual(text.components(separatedBy: "failure number").count - 1, 3)
     }
 
     func testSanitizedProcessLogMigrationRemovesLegacyGenerationsOnlyOnce() throws {

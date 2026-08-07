@@ -154,10 +154,17 @@ public final class SanitizedProcessLogAccumulator: @unchecked Sendable {
     private var infos = 0
     private var warnings = 0
     private var errors = 0
+    private var retainedErrors: [String] = []
+    private let maximumRetainedErrors: Int
 
-    public init(maximumLines: Int = 512, maximumBytes: Int = 256 * 1_024) {
+    public init(
+        maximumLines: Int = 512,
+        maximumBytes: Int = 256 * 1_024,
+        maximumRetainedErrors: Int = 64
+    ) {
         self.maximumLines = max(1, maximumLines)
         self.maximumBytes = max(1, maximumBytes)
+        self.maximumRetainedErrors = max(0, maximumRetainedErrors)
     }
 
     public func ingest(_ data: Data) -> Data? {
@@ -192,6 +199,7 @@ public final class SanitizedProcessLogAccumulator: @unchecked Sendable {
         bytes += line.count + 1
         if line.range(of: Data("level=error".utf8)) != nil {
             errors += 1
+            retainError(line)
         } else if line.range(of: Data("level=warning".utf8)) != nil {
             warnings += 1
         } else {
@@ -199,12 +207,35 @@ public final class SanitizedProcessLogAccumulator: @unchecked Sendable {
         }
     }
 
+    /// Keeps the text of error lines so a fault can be diagnosed after it has
+    /// passed.
+    ///
+    /// Counting errors and discarding what they said meant an outage left
+    /// behind a number and nothing else — enough to know something failed,
+    /// never enough to know what. Error text may name a host, an address and
+    /// the proxy that was in use, because that is what identifies the failure.
+    /// Credentials are still stripped: see `SanitizedProcessLogRedaction`.
+    ///
+    /// Bounded per window so a persistent fault cannot fill the disk; the count
+    /// remains exact even when the retained sample is capped.
+    private func retainError(_ line: Data) {
+        guard retainedErrors.count < maximumRetainedErrors,
+              let text = String(data: line, encoding: .utf8) else {
+            return
+        }
+        retainedErrors.append(SanitizedProcessLogRedaction.redact(text))
+    }
+
     private func emit() -> Data {
         let timestamp = ISO8601DateFormatter().string(from: Date())
         let message =
             "\(timestamp) level=info event=mihomo_output_summary " +
             "lines=\(lines) bytes=\(bytes) info=\(infos) warning=\(warnings) error=\(errors)\n"
-        let record = Data(message.utf8)
+        // The retained errors follow the summary, so the counts stay the first
+        // thing read while the detail sits with them.
+        let detail = retainedErrors.map { "\($0)\n" }.joined()
+        let record = Data((message + detail).utf8)
+        retainedErrors.removeAll(keepingCapacity: true)
         lines = 0
         bytes = 0
         infos = 0

@@ -12,8 +12,12 @@ TUN privilege, DHCP-aware DNS forwarding, and macOS Global DNS.
    a second GUI-owned kernel process.
 3. Keep macOS DNS (`127.0.0.53:53`) separate from Mihomo's original-DNS escape
    (`127.0.0.1:1054`) to prevent recursion.
-4. Never log DNS names, packets, subscription URLs, controller secrets, or
-   proxy credentials.
+4. Never log packets, subscription URLs, controller secrets, or proxy
+   credentials. Error lines from the proxy kernel are the one exception to
+   naming things: they may carry the host, the address, the reason and the
+   proxy in use, because a count alone cannot diagnose a fault after it has
+   passed. Credentials are stripped from them regardless
+   (`SanitizedProcessLogRedaction`). Everything below error stays counted only.
 5. Pin and checksum bundled upstream artifacts. Retain third-party licenses.
 6. Validate Swift, Rust, MetaCubeXD generation, installer dry-run, and the final
    `.app` bundle before release.
