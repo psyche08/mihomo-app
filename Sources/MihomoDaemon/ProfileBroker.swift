@@ -125,9 +125,9 @@ final class ProfileBroker: @unchecked Sendable {
         let backup = directory.appendingPathComponent("original.yaml")
         try writePrivate(data, to: config, permissions: 0o600)
         var arguments = [
-            root.appendingPathComponent("configure_mihomo.py").path,
-            "--config", config.path,
-            "--backup", backup.path,
+            "--configure-profile",
+            "--profile", config.path,
+            "--profile-backup", backup.path,
         ]
         if publishController {
             arguments += [
@@ -136,7 +136,7 @@ final class ProfileBroker: @unchecked Sendable {
                 "--daemon-config", root.appendingPathComponent("daemon.json").path,
             ]
         }
-        guard try run("/usr/bin/python3", arguments) == 0 else {
+        guard try run(root.appendingPathComponent("mihomo-agent").path, arguments) == 0 else {
             throw profileError("profile configuration failed")
         }
         return config

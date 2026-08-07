@@ -253,9 +253,9 @@ prepare_profile() {
   }
   /usr/bin/install -o root -g wheel -m 0600 "$source" "$output"
   if [[ "$publish_controller" -eq 1 ]]; then
-    /usr/bin/python3 "$RESOURCE_ROOT/configure_mihomo.py" \
-      --config "$output" \
-      --backup "$backup" \
+    "$AGENT_SOURCE" --configure-profile \
+      --profile "$output" \
+      --profile-backup "$backup" \
       --secret-file "$CONTROLLER_SECRET" \
       --controller-metadata "$CONTROLLER_METADATA" \
       --daemon-config "$APP_SUPPORT/daemon.json"
@@ -264,9 +264,9 @@ prepare_profile() {
     /usr/sbin/chown root:wheel "$CONTROLLER_METADATA"
     /bin/chmod 0600 "$CONTROLLER_METADATA"
   else
-    /usr/bin/python3 "$RESOURCE_ROOT/configure_mihomo.py" \
-      --config "$output" \
-      --backup "$backup"
+    "$AGENT_SOURCE" --configure-profile \
+      --profile "$output" \
+      --profile-backup "$backup"
   fi
   /bin/rm -f "$backup"
   "$APP_SUPPORT/mihomo" -t -d "$MIHOMO_DATA" -f "$output"
@@ -353,7 +353,7 @@ switch_profile() {
   local source="$PROFILES_DIR/$name"
   [[ -f "$source" ]] || { echo "profile is not imported: $name" >&2; exit 1; }
   [[ -x "$APP_SUPPORT/mihomo" ]] || { echo "Mihomo daemon is not installed" >&2; exit 1; }
-  [[ -f "$RESOURCE_ROOT/configure_mihomo.py" ]] || { echo "missing profile configurator" >&2; exit 1; }
+  [[ -x "$AGENT_SOURCE" ]] || { echo "missing profile configurator" >&2; exit 1; }
 
   PROFILE_ROLLBACK_DIR="$(/usr/bin/mktemp -d /private/tmp/mihomo-profile-switch.XXXXXX)"
   if [[ -f "$MIHOMO_DATA/config.yaml" ]]; then
@@ -602,8 +602,12 @@ install_daemon() {
   run /usr/bin/install -o root -g wheel -m 0755 "$DAEMON_SOURCE" "$APP_SUPPORT/mihomo-daemon"
   run /usr/bin/install -o root -g wheel -m 0755 "$AGENT_SOURCE" "$APP_SUPPORT/mihomo-agent"
   run /usr/bin/install -o root -g wheel -m 0755 "$MIHOMO_SOURCE" "$APP_SUPPORT/mihomo"
-  run /usr/bin/install -o root -g wheel -m 0755 "$RESOURCE_ROOT/configure_mihomo.py" "$APP_SUPPORT/configure_mihomo.py"
   run /usr/bin/install -o root -g wheel -m 0600 "$RESOURCE_ROOT/daemon.json" "$APP_SUPPORT/daemon.json"
+  # Left behind by installations up to 0.6.1, when profile configuration was a
+  # Python helper staged here. Nothing calls it any more. Removed only on an
+  # explicit install or repair: a component-update rollback can restore a 0.6.1
+  # daemon, which still expects to find it.
+  run /bin/rm -f "$APP_SUPPORT/configure_mihomo.py"
 
   local selected_profile="$INITIAL_PROFILE"
   if [[ -z "$selected_profile" && -f "$ACTIVE_PROFILE" ]]; then
@@ -623,9 +627,9 @@ install_daemon() {
           "$RESOURCE_ROOT/default-config.yaml" "$MIHOMO_DATA/config.yaml"
       fi
     fi
-    run /usr/bin/python3 "$RESOURCE_ROOT/configure_mihomo.py" \
-      --config "$MIHOMO_DATA/config.yaml" \
-      --backup "$APP_SUPPORT/config.before-mihomo-app.yaml" \
+    run "$AGENT_SOURCE" --configure-profile \
+      --profile "$MIHOMO_DATA/config.yaml" \
+      --profile-backup "$APP_SUPPORT/config.before-mihomo-app.yaml" \
       --secret-file "$CONTROLLER_SECRET" \
       --controller-metadata "$CONTROLLER_METADATA" \
       --daemon-config "$APP_SUPPORT/daemon.json"

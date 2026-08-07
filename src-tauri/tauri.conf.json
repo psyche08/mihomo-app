@@ -47,7 +47,6 @@
       "../scripts/install-daemon-remote.sh": "scripts/install-daemon-remote.sh",
       "../deploy/daemon.json": "daemon/daemon.json",
       "../deploy/default-config.yaml": "daemon/default-config.yaml",
-      "../deploy/configure_mihomo.py": "daemon/configure_mihomo.py",
       "../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
       "../third_party/Mihomo.LICENSE": "licenses/Mihomo.LICENSE",
       "../third_party/MetaCubeXD.LICENSE": "licenses/MetaCubeXD.LICENSE",

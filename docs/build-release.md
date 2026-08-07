@@ -126,8 +126,15 @@ The signed App first synchronizes any changed root-owned `mihomo-daemon`,
 daemon accepts only the fixed component set, validates every replacement against
 its own leaf certificate, performs a rollback-capable atomic replacement, and
 lets launchd restart it when required. This does not replace or repair the
-LaunchDaemon plist, configuration helper, or installation layout; those remain
-explicit **Install / Repair Daemon** operations.
+LaunchDaemon plist or the installation layout; those remain explicit
+**Install / Repair Daemon** operations.
+
+Profile configuration lives inside `mihomo-agent`, reached through
+`--configure-profile`. It was previously a Python helper staged beside the
+daemon, which put it outside that component set: a release could ship a fix
+there and no existing installation would ever receive it, because only the
+three binaries are replaced. Anything that rewrites a profile therefore belongs
+in one of them.
 
 Thirty seconds after startup, the App checks the latest GitHub release manifest.
 A newer version is downloaded, verified with the updater public key, installed,

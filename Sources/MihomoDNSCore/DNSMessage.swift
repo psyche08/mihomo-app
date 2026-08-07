@@ -37,33 +37,44 @@ public enum DNSMessage {
 
     /// First IPv4 address in the answer section, in dotted-quad form.
     public static func firstIPv4Answer(_ data: Data) -> String? {
-        guard data.count >= 12 else { return nil }
+        ipv4Answers(data).first
+    }
+
+    /// Every IPv4 address in the answer section, in dotted-quad form.
+    ///
+    /// A host behind several addresses needs all of them excluded from the
+    /// tunnel: excluding one leaves the kernel's dial to any other captured,
+    /// which is the whole fault this exists to prevent.
+    public static func ipv4Answers(_ data: Data) -> [String] {
+        guard data.count >= 12 else { return [] }
         let base = data.startIndex
         let questions = Int(readUInt16(data, at: 4))
         let answers = Int(readUInt16(data, at: 6))
-        guard answers > 0 else { return nil }
+        guard answers > 0 else { return [] }
 
         var offset = 12
         // Questions carry a name then type and class.
         for _ in 0 ..< questions {
-            guard let next = skipName(data, from: offset) else { return nil }
+            guard let next = skipName(data, from: offset) else { return [] }
             offset = next + 4
         }
+        var found: [String] = []
         for _ in 0 ..< answers {
-            guard let afterName = skipName(data, from: offset) else { return nil }
+            guard let afterName = skipName(data, from: offset) else { break }
             offset = afterName
-            guard offset + 10 <= data.count else { return nil }
+            guard offset + 10 <= data.count else { break }
             let type = readUInt16(data, at: offset)
             let length = Int(readUInt16(data, at: offset + 8))
             offset += 10
-            guard offset + length <= data.count else { return nil }
+            guard offset + length <= data.count else { break }
             if type == 1, length == 4 {
                 let bytes = (0 ..< 4).map { data[base + offset + $0] }
-                return bytes.map(String.init).joined(separator: ".")
+                let address = bytes.map(String.init).joined(separator: ".")
+                if !found.contains(address) { found.append(address) }
             }
             offset += length
         }
-        return nil
+        return found
     }
 
     /// Advances past a name, following the one compression pointer a name may

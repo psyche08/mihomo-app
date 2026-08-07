@@ -2,12 +2,24 @@ import Darwin
 import Foundation
 import MihomoDNSCore
 
+/// stderr as a TextOutputStream, so command failures report on the right
+/// stream rather than being mixed into stdout.
+struct StandardError: TextOutputStream {
+    func write(_ text: String) {
+        FileHandle.standardError.write(Data(text.utf8))
+    }
+}
+
+var standardError = StandardError()
+
 private let defaultConfigPath = "/Library/Application Support/Mihomo App/daemon.json"
 private let arguments = CommandLine.arguments
 private let commandMode = arguments.contains("--check")
     || arguments.contains("--restore-system-dns")
     || arguments.contains("--check-system-dns")
     || arguments.contains("--health")
+    || arguments.contains("--configure-profile")
+    || arguments.contains("--restore-profile")
 
 ServiceLog.configure(
     logPath: commandMode
@@ -21,13 +33,53 @@ ServiceLog.installCrashSignalHandlers()
 ServiceLog.info("event=agent_started pid=\(getpid())")
 
 if arguments.contains("--help") || arguments.contains("-h") {
-    print("usage: mihomo-agent [--config PATH] [--check] [--health] [--check-system-dns] [--restore-system-dns]")
+    print("""
+    usage: mihomo-agent [--config PATH] [--check] [--health]
+                        [--check-system-dns] [--restore-system-dns]
+                        [--configure-profile --profile PATH --profile-backup PATH
+                         [--secret-file PATH] [--controller-metadata PATH]
+                         [--daemon-config PATH]]
+                        [--restore-profile --profile PATH --profile-backup PATH]
+    """)
     exit(0)
 }
 
 var configPath = defaultConfigPath
 if let index = arguments.firstIndex(of: "--config"), arguments.indices.contains(index + 1) {
     configPath = arguments[index + 1]
+}
+
+if arguments.contains("--configure-profile") || arguments.contains("--restore-profile") {
+    func option(_ name: String) -> String? {
+        guard let index = arguments.firstIndex(of: name),
+              arguments.indices.contains(index + 1) else { return nil }
+        return arguments[index + 1]
+    }
+    guard let profilePath = option("--profile"), let backupPath = option("--profile-backup") else {
+        ServiceLog.error("event=agent_command command=configure_profile result=missing_arguments")
+        print("--profile and --profile-backup are required", to: &standardError)
+        exit(2)
+    }
+    do {
+        if arguments.contains("--restore-profile") {
+            try MihomoConfigurator.restore(config: profilePath, backup: backupPath)
+            ServiceLog.info("event=agent_command command=restore_profile result=success")
+        } else {
+            try MihomoConfigurator.apply(MihomoConfigurator.Paths(
+                config: profilePath,
+                backup: backupPath,
+                secretFile: option("--secret-file"),
+                controllerMetadata: option("--controller-metadata"),
+                daemonConfig: option("--daemon-config")
+            ))
+            ServiceLog.info("event=agent_command command=configure_profile result=success")
+        }
+        exit(0)
+    } catch {
+        ServiceLog.error("event=agent_command command=configure_profile result=failed")
+        print("\(error.localizedDescription)", to: &standardError)
+        exit(1)
+    }
 }
 
 do {

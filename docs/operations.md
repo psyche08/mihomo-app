@@ -22,7 +22,7 @@ automatic updates, so this does not depend on rerunning the installer.
 
 The installer:
 
-1. copies `mihomo`, `mihomo-daemon`, `mihomo-agent`, and the profile configurator from the App to
+1. copies `mihomo`, `mihomo-daemon`, `mihomo-agent`, from the App to
    `/Library/Application Support/Mihomo App/`;
 2. migrates `/opt/homebrew/etc/mihomo/` when present, otherwise installs the
    minimal default profile;
@@ -45,7 +45,7 @@ do not require another administrator dialog. On launch, the App compares the
 bundled and installed daemon/agent/Mihomo digests. Changed binaries cross the
 authenticated XPC channel, are independently validated against the same leaf
 certificate, atomically replaced with rollback, and restarted by the daemon or
-launchd. Plist, configuration-helper, path-layout, or signing-certificate
+launchd. Plist, path-layout, or signing-certificate
 migrations still require **Install / Repair Daemon**.
 
 The App checks for updates thirty seconds after launch and every six hours after
@@ -152,7 +152,6 @@ importing or refreshing requires supplying them again.
 /Library/Application Support/Mihomo App/mihomo
 /Library/Application Support/Mihomo App/mihomo-daemon
 /Library/Application Support/Mihomo App/mihomo-agent
-/Library/Application Support/Mihomo App/configure_mihomo.py
 /Library/Application Support/Mihomo App/mihomo-data/config.yaml
 /Library/Application Support/Mihomo App/profiles/
 /Library/Application Support/Mihomo App/active-profile
