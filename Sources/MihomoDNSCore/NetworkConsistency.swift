@@ -186,6 +186,33 @@ public enum MihomoRuntimeInspector {
         return false
     }
 
+    /// The configured Fake-IP range, or Mihomo's default when unset.
+    static func fakeIPRange(path: String) -> String {
+        let fallback = "198.18.0.1/16"
+        guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return fallback }
+        var section: String?
+        for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(rawLine)
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+            if !line.hasPrefix(" ") && trimmed.hasSuffix(":") {
+                section = String(trimmed.dropLast())
+                continue
+            }
+            guard section == "dns", line.hasPrefix("  "), !line.hasPrefix("    ") else { continue }
+            let parts = trimmed.split(separator: ":", maxSplits: 1).map(String.init)
+            guard parts.count == 2, parts[0] == "fake-ip-range" else { continue }
+            let value = parts[1]
+                .split(separator: "#", maxSplits: 1)
+                .first
+                .map(String.init)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+            return (value?.isEmpty == false) ? value! : fallback
+        }
+        return fallback
+    }
+
     public static func flushMihomoDNSCaches(configuration: ProxyConfiguration) {
         _ = httpRequest(method: "POST", path: "/cache/fakeip/flush", configuration: configuration)
         _ = httpRequest(method: "POST", path: "/cache/dns/flush", configuration: configuration)
@@ -582,6 +609,9 @@ public final class NetworkConsistencyController: @unchecked Sendable {
     private var immediateEvaluationPending = false
     /// Last egress outcome written to the log, so only changes are recorded.
     private var lastLoggedEgressOutcome: EgressProbeOutcome = .unknown
+    /// The proxy-server resolution check runs once per runtime, the first time
+    /// the kernel is ready enough to answer.
+    private var checkedProxyServerResolution = false
     private let healthSnapshotPath: String?
 
     public convenience init(
@@ -837,6 +867,11 @@ public final class NetworkConsistencyController: @unchecked Sendable {
         // kernel + DNS bridge + system DNS ownership. If any of those is down,
         // the dedicated policies above already own the response.
         let fullyReady = upstreamRuntimeReady && before.dnsBridgeReady && before.systemDNSManaged
+        if upstreamRuntimeReady, !checkedProxyServerResolution {
+            checkedProxyServerResolution = true
+            reportLoopingProxyServers(tunnelInterface: before.tunInterface)
+        }
+
         if let egressAction = evaluateEgress(runtimeReady: fullyReady) {
             action = egressAction
             changed = true
@@ -872,6 +907,33 @@ public final class NetworkConsistencyController: @unchecked Sendable {
                 "network_consistent=\(after.networkConsistent)"
             )
             previous = after
+        }
+    }
+
+    /// Warns when the address a proxy server resolves to is routed back into
+    /// the tunnel, which silently prevents every proxied connection from
+    /// leaving.
+    ///
+    /// Nothing else detects this. The config is valid and loads, the interface
+    /// is up, DNS answers, direct traffic works, and the health model reports
+    /// everything green — because every signal it has is satisfied. Even the
+    /// egress probe stays silent, since with no reachable proxy it has nothing
+    /// to measure.
+    private func reportLoopingProxyServers(tunnelInterface: String?) {
+        guard let process = configuration.mihomoProcess else { return }
+        let findings = ProxyServerResolution.loopingServers(
+            configPath: process.configPath,
+            // The escape resolver, which answers with real addresses — the same
+            // path the kernel uses for its own proxy servers.
+            resolver: configuration.upstreamListen,
+            tunnelInterface: tunnelInterface
+        )
+        for finding in findings {
+            ServiceLog.error(
+                "event=proxy_server_routed_into_tunnel host=\(finding.host) " +
+                "address=\(finding.address) interface=\(finding.interface) " +
+                "detail=exclude_the_address_from_tun_auto_route"
+            )
         }
     }
 

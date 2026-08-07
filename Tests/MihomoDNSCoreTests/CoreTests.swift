@@ -1033,6 +1033,64 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(policy.recordFailure(runtimeMilliseconds: 1_000), .retry(delayMilliseconds: 100, failures: 1))
     }
 
+    func testProxyServerHostsAreReadFromTheProxiesBlockOnly() throws {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cfg-\(UUID().uuidString).yaml")
+            .path
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        // A `server:` key also appears under other blocks; only the proxies'
+        // own servers are dialled, so only those matter.
+        let config = """
+        mixed-port: 7897
+        dns:
+          enable: true
+          server: 1.1.1.1
+        proxies:
+          - name: JP
+            type: trojan
+            server: jp.example.com
+            port: 443
+          - name: US
+            type: vmess
+            server: 203.0.113.9
+            port: 443
+          - name: Dup
+            server: jp.example.com
+            port: 8443
+        rules:
+          - MATCH,Proxy
+        """
+        try config.write(toFile: path, atomically: true, encoding: .utf8)
+        let hosts = ProxyServerResolution.serverHosts(configPath: path)
+        XCTAssertEqual(hosts, ["jp.example.com", "203.0.113.9"], "deduplicated, proxies block only")
+        XCTAssertFalse(hosts.contains("1.1.1.1"), "the DNS block's server is not a proxy server")
+    }
+
+    func testALiteralProxyAddressNeedsNoResolution() {
+        XCTAssertTrue(ProxyServerResolution.isIPv4("203.0.113.9"))
+        XCTAssertFalse(ProxyServerResolution.isIPv4("jp.example.com"))
+        XCTAssertFalse(ProxyServerResolution.isIPv4("203.0.113"))
+        XCTAssertFalse(ProxyServerResolution.isIPv4("203.0.113.999"))
+    }
+
+    func testLoopDetectionIsInertWithoutATunnel() {
+        // With no tunnel there is no route to loop through, so the check must
+        // not resolve anything or report anything.
+        let findings = ProxyServerResolution.loopingServers(
+            configPath: "/nonexistent",
+            resolver: Endpoint(host: "127.0.0.1", port: 1054),
+            tunnelInterface: nil
+        )
+        XCTAssertTrue(findings.isEmpty)
+    }
+
+    func testLoopbackDoesNotRouteThroughATunnel() throws {
+        // Sanity-checks the routing lookup the detector relies on: loopback
+        // must resolve to lo0 on any machine, tunnel or not.
+        let interface = try XCTUnwrap(ProxyServerResolution.routeInterface(for: "127.0.0.1"))
+        XCTAssertEqual(interface, "lo0")
+    }
+
     func testOnlyErrorLinesKeepTheirText() throws {
         let accumulator = SanitizedProcessLogAccumulator(maximumLines: 2)
         let message =
