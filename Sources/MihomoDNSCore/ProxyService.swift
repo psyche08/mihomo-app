@@ -196,6 +196,13 @@ public final class ProxyService {
     private func startUDP(endpoint: Endpoint, forwarder: AsyncDNSForwarding) throws -> Channel {
         return try DatagramBootstrap(group: group)
             .channelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
+            // Default datagram receive buffer is 2048 bytes; a larger inbound
+            // query (EDNS clients advertise more) would be silently truncated by
+            // the kernel. Size to the maximum DNS wire length.
+            .channelOption(
+                ChannelOptions.recvAllocator,
+                value: FixedSizeRecvByteBufferAllocator(capacity: DNSMessage.maximumWireLength)
+            )
             .channelInitializer { channel in
                 channel.eventLoop.makeCompletedFuture {
                     try channel.pipeline.syncOperations.addHandler(

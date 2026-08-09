@@ -165,11 +165,17 @@ fn route_http(cli: &Path, request: &Request) -> Result<Vec<u8>, (u16, &'static s
             403,
             "managed binaries and UI are upgraded only by a signed MihomoBox release",
         )),
-        _ => invoke(
-            cli,
-            &["rpc", "controller", &request.method, &request.target],
-            Some(&request.body),
-        ),
+        _ => {
+            // Never let the dashboard bridge token reach the CLI argv, where any
+            // local process could read it via `ps`. It authenticates only this
+            // hop; the daemon injects its own controller secret upstream.
+            let forwarded = strip_token(&request.target);
+            invoke(
+                cli,
+                &["rpc", "controller", &request.method, &forwarded],
+                Some(&request.body),
+            )
+        }
     }
 }
 
@@ -218,6 +224,10 @@ fn invoke(
 }
 
 fn proxy_websocket(stream: &mut TcpStream, cli: &Path, target: &str, key: &str) {
+    // WebSocket clients authenticate via ?token=; strip it before it becomes an
+    // argv element of the spawned CLI (readable by any local process via `ps`).
+    let target = strip_token(target);
+    let target = target.as_str();
     let accept = websocket_accept(key);
     let response = format!(
         "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
@@ -405,6 +415,27 @@ fn query_value(target: &str, name: &str) -> Option<String> {
     })
 }
 
+/// Removes the `token` query parameter from a request target, preserving the
+/// path and any other query parameters. Used before forwarding the target to the
+/// CLI so the bridge secret never appears in a spawned process's argv.
+fn strip_token(target: &str) -> String {
+    let Some((path, query)) = target.split_once('?') else {
+        return target.to_string();
+    };
+    let remaining: Vec<&str> = query
+        .split('&')
+        .filter(|item| {
+            let key = item.split_once('=').map(|(key, _)| key).unwrap_or(item);
+            key != "token"
+        })
+        .collect();
+    if remaining.is_empty() {
+        path.to_string()
+    } else {
+        format!("{path}?{}", remaining.join("&"))
+    }
+}
+
 fn websocket_accept(key: &str) -> String {
     let mut value = key.as_bytes().to_vec();
     value.extend_from_slice(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
@@ -522,6 +553,21 @@ mod tests {
             query_value("/logs?level=info&token=abc123", "token").as_deref(),
             Some("abc123")
         );
+    }
+
+    #[test]
+    fn strip_token_removes_secret_but_keeps_other_query_and_path() {
+        assert_eq!(strip_token("/connections?token=secret"), "/connections");
+        assert_eq!(
+            strip_token("/logs?level=info&token=secret"),
+            "/logs?level=info"
+        );
+        assert_eq!(
+            strip_token("/logs?token=secret&level=info"),
+            "/logs?level=info"
+        );
+        assert_eq!(strip_token("/proxies"), "/proxies");
+        assert_eq!(strip_token("/proxies?type=all"), "/proxies?type=all");
     }
 
     #[test]

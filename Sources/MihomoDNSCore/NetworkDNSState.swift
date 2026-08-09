@@ -223,7 +223,13 @@ public final class NetworkDNSState: @unchecked Sendable {
         lock.lock()
         var retainedInterface = interfaceName
         var retainedService = serviceID
-        if servers.isEmpty, !previous.servers.isEmpty {
+        if servers.isEmpty, !previous.servers.isEmpty, serviceID == previous.serviceID {
+            // Last-resort retention when the new snapshot has no upstream and no
+            // usable fallback. Bounded to the same PrimaryService: retaining
+            // across a service transition would send original-DNS queries to the
+            // previous network's resolvers bound to its interface — a cross-
+            // network leak. On a real transition we publish an empty upstream and
+            // fail closed instead.
             servers = previous.servers
             retainedInterface = previous.interfaceName
             retainedService = previous.serviceID

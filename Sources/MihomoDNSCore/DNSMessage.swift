@@ -16,7 +16,12 @@ public enum DNSMessage {
     ])
 
     /// Builds an A query for `name`.
-    public static func addressQuery(for name: String, identifier: UInt16 = 0x4d48) -> Data? {
+    ///
+    /// The transaction ID defaults to a fresh random value per call. A fixed ID
+    /// would let an on-path or off-path host that only has to guess the ephemeral
+    /// source port forge a response to an internally generated query (e.g. proxy
+    /// server resolution), so callers should not pin it outside tests.
+    public static func addressQuery(for name: String, identifier: UInt16 = .random(in: .min ... .max)) -> Data? {
         let labels = name.split(separator: ".", omittingEmptySubsequences: true)
         guard !labels.isEmpty, labels.allSatisfy({ (1 ... 63).contains($0.utf8.count) }) else {
             return nil

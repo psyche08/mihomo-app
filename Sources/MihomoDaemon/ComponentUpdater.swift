@@ -121,8 +121,10 @@ final class ComponentUpdater: @unchecked Sendable {
                 // launchd starts the new daemon, which restores the single-agent
                 // invariant and reapplies managed networking exactly once.
                 if wasRunning, !restartDaemon {
-                    try agent.start()
-                    _ = try agent.health()
+                    // Verify the replaced agent/mihomo actually comes up healthy;
+                    // a bare start() only proves the binary exec'd, so a crash
+                    // loop would otherwise be committed instead of rolled back.
+                    try agent.startAndVerifyHealthy()
                 }
             } catch {
                 agent.stop()

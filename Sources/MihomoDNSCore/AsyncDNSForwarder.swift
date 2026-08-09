@@ -304,6 +304,14 @@ enum AsyncSocketDNSClient {
             promise: promise
         )
         var bootstrap = DatagramBootstrap(group: eventLoop)
+            // NIO's default datagram receive buffer is 2048 bytes; macOS silently
+            // discards the excess of a larger datagram, so a >2048-byte EDNS/DNSSEC
+            // answer would arrive truncated without the TC bit and skip the TCP
+            // retry. Size the buffer to the maximum DNS wire length instead.
+            .channelOption(
+                ChannelOptions.recvAllocator,
+                value: FixedSizeRecvByteBufferAllocator(capacity: DNSMessage.maximumWireLength)
+            )
             .channelInitializer { channel in
                 channel.pipeline.addHandler(handler)
             }
@@ -446,7 +454,16 @@ private final class SingleDatagramDNSHandler: ChannelInboundHandler, @unchecked 
     }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
-        var buffer = unwrapInboundIn(data).data
+        let envelope = unwrapInboundIn(data)
+        // The datagram socket is unconnected (bound to 0.0.0.0:0), so unlike the
+        // synchronous connect()-based client it gets no kernel source filtering.
+        // Drop any datagram not from the queried upstream and keep waiting for
+        // the legitimate reply, so an off-path host cannot inject a forged
+        // response by guessing only the ephemeral port and transaction ID.
+        guard envelope.remoteAddress == remote else {
+            return
+        }
+        var buffer = envelope.data
         guard let response = buffer.readData(length: buffer.readableBytes) else {
             finish(.failure(DNSForwardingError.invalidTCPResponse), context: context)
             return

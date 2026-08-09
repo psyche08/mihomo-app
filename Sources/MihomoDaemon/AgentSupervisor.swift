@@ -77,6 +77,39 @@ final class AgentSupervisor: @unchecked Sendable {
         return try encoder.encode(ProxyService.networkHealth(configuration: configuration))
     }
 
+    /// Starts the agent and confirms it actually came up before returning.
+    ///
+    /// `start()` succeeds as soon as the child `exec`s and `health()` never
+    /// throws on an unhealthy runtime, so a freshly replaced binary that launches
+    /// then crashes — or never brings up the controller — would otherwise pass a
+    /// caller's gate silently. This clears any stale reading, starts the agent,
+    /// then polls the agent's own freshly published health snapshot: it throws if
+    /// the process exits or the runtime does not become healthy within the
+    /// window, which lets a component update roll the binary back.
+    func startAndVerifyHealthy(
+        timeoutMilliseconds: Int = 20_000,
+        pollMilliseconds: Int = 250
+    ) throws {
+        let configuration = try ProxyConfiguration.load(path: configPath)
+        // Drop any snapshot from the previous instance so verification can only
+        // succeed on a reading the new agent published.
+        HealthSnapshotStore.remove(at: configuration.healthSnapshotPath)
+        try start()
+        let deadlineNanoseconds = DispatchTime.now().uptimeNanoseconds
+            + UInt64(max(0, timeoutMilliseconds)) * 1_000_000
+        while DispatchTime.now().uptimeNanoseconds < deadlineNanoseconds {
+            guard isRunning else {
+                throw supervisorError("mihomo-agent exited during health verification")
+            }
+            if let health = HealthSnapshotStore.read(from: configuration.healthSnapshotPath),
+               health.controllerReachable, health.mihomoDNSReady {
+                return
+            }
+            Thread.sleep(forTimeInterval: Double(max(1, pollMilliseconds)) / 1_000)
+        }
+        throw supervisorError("mihomo-agent did not become healthy after replacement")
+    }
+
     private func launchLocked() throws {
         guard FileManager.default.isExecutableFile(atPath: agentPath) else {
             throw supervisorError("installed mihomo-agent is missing")

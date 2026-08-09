@@ -28,6 +28,11 @@ final class ProfileBroker: @unchecked Sendable {
                 guard let name = request.arguments["name"] else {
                     throw profileError("profile name is required")
                 }
+                // Validate the caller-controlled name before it reaches the
+                // filesystem: appendingPathComponent does not resolve "..", so a
+                // traversing name would otherwise be read as root before
+                // activateProfile's own validation runs.
+                try validateName(name)
                 let source = root.appendingPathComponent("profiles").appendingPathComponent(name)
                 try activateProfile(name: name, data: Data(contentsOf: source))
                 return try listUnlocked()

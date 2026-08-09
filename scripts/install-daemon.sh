@@ -16,6 +16,7 @@ RENAMED_PLIST="/Library/LaunchDaemons/dev.linsheng.mihomo-app.daemon.plist"
 RENAMED_LABEL="dev.linsheng.mihomo-app.daemon"
 LEGACY_DIR="/opt/homebrew/etc/mihomo"
 LEGACY_LABEL="homebrew.mxcl.mihomo"
+LEGACY_PLIST="/Library/LaunchDaemons/$LEGACY_LABEL.plist"
 LEGACY_MARKER="$APP_SUPPORT/homebrew-mihomo-was-running"
 APP_BUNDLE=""
 DRY_RUN=0
@@ -320,7 +321,10 @@ rollback_profile_switch() {
   wait_for_job_absent "$LABEL" || true
   wait_for_managed_process_absent || true
   if [[ -f "$PROFILE_ROLLBACK_DIR/config.yaml" ]]; then
-    /usr/bin/install -o root -g wheel -m 0644 \
+    # config.yaml carries the injected controller secret and any profile
+    # credentials; it must stay 0600 like every other write path (see the
+    # first-start chmod), not the 0644 used for the plain active-profile name.
+    /usr/bin/install -o root -g wheel -m 0600 \
       "$PROFILE_ROLLBACK_DIR/config.yaml" "$MIHOMO_DATA/config.yaml"
   fi
   if [[ -f "$PROFILE_ROLLBACK_DIR/active-profile" ]]; then
@@ -498,6 +502,13 @@ rollback_installation() {
     /bin/launchctl enable "system/$RENAMED_LABEL" >/dev/null 2>&1 || true
     /bin/launchctl kickstart -k "system/$RENAMED_LABEL" >/dev/null 2>&1 || true
   elif [[ "$PREVIOUS_LEGACY_RUNNING" -eq 1 ]]; then
+    # Install may have already disabled+booted out the legacy job before failing,
+    # so re-enable and bootstrap it rather than only kickstart (which needs it
+    # still loaded). All best-effort during rollback.
+    /bin/launchctl enable "system/$LEGACY_LABEL" >/dev/null 2>&1 || true
+    if [[ -f "$LEGACY_PLIST" ]]; then
+      /bin/launchctl bootstrap system "$LEGACY_PLIST" >/dev/null 2>&1 || true
+    fi
     /bin/launchctl kickstart -k "system/$LEGACY_LABEL" >/dev/null 2>&1 || true
   fi
   [[ -z "$ROLLBACK_DIR" ]] || /bin/rm -rf "$ROLLBACK_DIR"
@@ -519,7 +530,15 @@ restore() {
     run "$APP_SUPPORT/mihomo-agent" --config "$APP_SUPPORT/daemon.json" --restore-system-dns
   fi
   if [[ -f "$LEGACY_MARKER" ]]; then
-    run /bin/launchctl kickstart -k "system/$LEGACY_LABEL"
+    # Undo the persistent disable set at install, then load the legacy job from
+    # its on-disk plist. kickstart cannot start a service that is no longer
+    # bootstrapped (install booted it out), which previously aborted uninstall
+    # mid-restore. Reviving the user's prior Mihomo must never block our own
+    # removal, so keep every step best-effort.
+    run /bin/launchctl enable "system/$LEGACY_LABEL" || true
+    if [[ -f "$LEGACY_PLIST" ]]; then
+      run /bin/launchctl bootstrap system "$LEGACY_PLIST" || true
+    fi
   fi
   run /bin/rm -f "$PLIST" "$RENAMED_PLIST"
   remove_cli_entry
@@ -642,6 +661,11 @@ install_daemon() {
 
   if /bin/launchctl print "system/$LEGACY_LABEL" >/dev/null 2>&1; then
     run /usr/bin/touch "$LEGACY_MARKER"
+    # bootout is runtime-only: the Homebrew plist stays on disk and launchd would
+    # re-bootstrap the legacy job at the next boot, running a second Mihomo kernel
+    # alongside the managed daemon. Persistently disable it too; --restore
+    # re-enables and bootstraps it during uninstall.
+    run /bin/launchctl disable "system/$LEGACY_LABEL"
     run /bin/launchctl bootout "system/$LEGACY_LABEL"
   fi
 
