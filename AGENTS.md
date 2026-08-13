@@ -1,13 +1,15 @@
 # AGENTS.md
 
-`mihomo-app` is an open-source macOS menu-bar application. Tauri owns the GUI
-and tray; the root `mihomo-daemon` owns the bundled Mihomo process, Enhanced
-TUN privilege, DHCP-aware DNS forwarding, and macOS Global DNS.
+`mihomo-app` is an open-source macOS menu-bar application. Tauri owns the app
+lifecycle, tray, updater, and login startup; an in-process SwiftUI module owns
+the main window. The root `mihomo-daemon` owns the bundled Mihomo process,
+Enhanced TUN privilege, DHCP-aware DNS forwarding, and macOS Global DNS.
 
 ## Always On
 
-1. Preserve the privilege boundary: WebView content never executes privileged
-   commands. Only the signed installer may install or repair the LaunchDaemon.
+1. Preserve the privilege boundary: the SwiftUI client exposes only typed
+   controller actions over authenticated XPC. Only the signed installer may
+   install or repair the LaunchDaemon.
 2. `mihomo-daemon` is the sole owner of the managed Mihomo process. Do not add
    a second GUI-owned kernel process.
 3. Keep macOS DNS (`127.0.0.53:53`) separate from Mihomo's original-DNS escape
@@ -21,8 +23,8 @@ TUN privilege, DHCP-aware DNS forwarding, and macOS Global DNS.
    from them regardless (`SanitizedProcessLogRedaction`), and each window keeps
    only a bounded sample. Info stays counted only.
 5. Pin and checksum bundled upstream artifacts. Retain third-party licenses.
-6. Validate Swift, Rust, MetaCubeXD generation, installer dry-run, and the final
-   `.app` bundle before release.
+6. Validate Swift, Rust, the pinned MetaCubeXD visual reference, installer
+   dry-run, and the final `.app` bundle before release.
 
 ## Progressive Disclosure
 

@@ -1,6 +1,7 @@
 use crate::app_log;
-use crate::dashboard::DashboardBridge;
 use crate::mihomo::{MihomoClient, Snapshot};
+use crate::native_window;
+use crate::startup;
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
@@ -35,7 +36,6 @@ enum TunAction {
 }
 
 struct TrayState {
-    dashboard: Option<DashboardBridge>,
     snapshot: Mutex<Snapshot>,
     actions: Mutex<HashMap<String, DynamicAction>>,
     profile_busy: Mutex<bool>,
@@ -43,6 +43,10 @@ struct TrayState {
     last_action_error: Mutex<Option<String>>,
     refresh_in_flight: AtomicBool,
     poll_failures: AtomicU32,
+    /// Keeps login-item filesystem work outside the runtime refresh path and
+    /// bounds retries when the user's LaunchAgents directory is unavailable.
+    login_autostart_done_or_in_flight: AtomicBool,
+    login_autostart_failures: AtomicU32,
     /// Live handle to the Enhanced TUN item, so its check mark can be written
     /// back after macOS toggles it on click.
     tun_item: Mutex<Option<CheckMenuItem<tauri::Wry>>>,
@@ -166,9 +170,7 @@ impl MenuSignature {
 }
 
 pub fn setup(app: &AppHandle) -> tauri::Result<()> {
-    let dashboard = cli_path().and_then(|path| DashboardBridge::start(&path));
     let state = Arc::new(TrayState {
-        dashboard,
         snapshot: Mutex::new(Snapshot::default()),
         actions: Mutex::new(HashMap::new()),
         profile_busy: Mutex::new(false),
@@ -176,6 +178,8 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         last_action_error: Mutex::new(None),
         refresh_in_flight: AtomicBool::new(false),
         poll_failures: AtomicU32::new(0),
+        login_autostart_done_or_in_flight: AtomicBool::new(false),
+        login_autostart_failures: AtomicU32::new(0),
         tun_item: Mutex::new(None),
         menu_tun_checked: Mutex::new(false),
         tun_busy: AtomicBool::new(false),
@@ -521,30 +525,20 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
     };
     app_log::info(&format!("event=tray_action action={action}"));
     if id == "show" {
-        let Some(state) = app.try_state::<Arc<TrayState>>() else {
-            return;
-        };
-        let state = state.inner().clone();
-        if state.dashboard.is_none() {
-            show_dashboard_unavailable_prompt();
-            return;
+        match native_window::show(app) {
+            Ok(()) => app_log::info("event=main_window kind=swiftui result=shown"),
+            Err(_) => {
+                app_log::error("event=main_window kind=swiftui result=failed");
+                show_native_window_unavailable_prompt();
+            }
         }
-        if let Some(window) = app.get_webview_window("main") {
-            prepare_main_window(&window, state.dashboard.as_ref());
-            let _ = window.unminimize();
-            let _ = window.show();
-            let _ = window.set_focus();
-            app_log::info("event=main_window result=shown");
-        }
-        tauri::async_runtime::spawn(async move {
-            let available = controller_client().controller_available().await;
-            app_log::info(&format!("event=main_window controller_ready={available}"));
-        });
         return;
     }
     if id == "exit" {
         app_log::info("event=app_exit_requested");
-        app.exit(0);
+        if native_window::shutdown_and_exit(app, 0).is_err() {
+            app.exit(0);
+        }
         return;
     }
     if id == "open-logs" {
@@ -745,6 +739,36 @@ fn refresh(app: AppHandle, state: Arc<TrayState>, mode: RefreshMode) {
             }
         };
         *state.snapshot.lock().expect("snapshot lock") = snapshot.clone();
+        if startup::should_consider_default(snapshot.enhanced_tun, network_healthy)
+            && state
+                .login_autostart_done_or_in_flight
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+        {
+            let startup_state = state.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                match startup::apply_login_autostart_default() {
+                    Ok(outcome) => app_log::info(&format!(
+                        "event=login_autostart_default result={}",
+                        outcome.log_value()
+                    )),
+                    Err(_) => {
+                        let failures = startup_state
+                            .login_autostart_failures
+                            .fetch_add(1, Ordering::AcqRel)
+                            + 1;
+                        app_log::error(&format!(
+                            "event=login_autostart_default result=failed attempt={failures}"
+                        ));
+                        if failures < startup::MAX_SESSION_ATTEMPTS {
+                            startup_state
+                                .login_autostart_done_or_in_flight
+                                .store(false, Ordering::Release);
+                        }
+                    }
+                }
+            });
+        }
         let profile_busy = *state.profile_busy.lock().expect("profile busy lock");
         let action_error = state
             .last_action_error
@@ -922,34 +946,6 @@ fn delay_label(delay: Option<u64>) -> String {
 
 fn controller_client() -> MihomoClient {
     MihomoClient::new()
-}
-
-fn prepare_main_window(
-    window: &tauri::WebviewWindow<tauri::Wry>,
-    dashboard: Option<&DashboardBridge>,
-) {
-    let Some(dashboard) = dashboard else {
-        return;
-    };
-    let endpoint = serde_json::json!({
-        "url": dashboard.url,
-        "secret": dashboard.secret,
-    });
-    let script = format!(
-        r#"(() => {{
-            const endpoint = {endpoint};
-            const managed = {{ id: 'local-mihomo', url: endpoint.url, secret: endpoint.secret, label: 'Local mihomo (XPC)' }};
-            let list = [];
-            try {{ list = JSON.parse(localStorage.getItem('endpointList') || '[]'); }} catch (_) {{}}
-            if (!Array.isArray(list)) list = [];
-            list = [managed, ...list.filter(item => item && item.id !== managed.id)];
-            localStorage.setItem('endpointList', JSON.stringify(list));
-            localStorage.setItem('selectedEndpoint', managed.id);
-            window.metacubexd = {{ ...(window.metacubexd || {{}}), endpoint }};
-            window.location.replace('/');
-        }})()"#,
-    );
-    let _ = window.eval(&script);
 }
 
 fn title_case(value: &str) -> String {
@@ -1495,11 +1491,11 @@ fn show_profile_required_prompt() {
         .status();
 }
 
-fn show_dashboard_unavailable_prompt() {
+fn show_native_window_unavailable_prompt() {
     let _ = Command::new("/usr/bin/osascript")
         .args([
             "-e",
-            "display dialog \"The local Dashboard bridge is unavailable. Reinstall MihomoBox before opening the Main Window.\" buttons {\"OK\"} default button \"OK\" with title \"MihomoBox\" with icon caution",
+            "display dialog \"The native SwiftUI window is unavailable. Reinstall MihomoBox before opening the Main Window.\" buttons {\"OK\"} default button \"OK\" with title \"MihomoBox\" with icon caution",
         ])
         .spawn();
 }

@@ -11,6 +11,11 @@ test "$VERSION" = "$(/usr/bin/sed -n 's/^version = "\([^"]*\)"/\1/p' \
 /usr/bin/env node -e \
   'for (const path of process.argv.slice(1)) JSON.parse(require("fs").readFileSync(path, "utf8"))' \
   src-tauri/tauri.conf.json src-tauri/tauri.release.conf.json
+/usr/bin/env node -e '
+  const config = require("./src-tauri/tauri.conf.json")
+  if ((config.app?.windows ?? []).length !== 0) throw new Error("Tauri must not create a WebView")
+  if (Object.hasOwn(config.build ?? {}, "frontendDist")) throw new Error("frontendDist must be absent")
+'
 /usr/bin/grep -q 'github.com/psyche08/mihomo-app/releases/latest/download/latest.json' \
   src-tauri/tauri.conf.json
 
@@ -22,9 +27,33 @@ Tests/e2e.sh
 /bin/bash Tests/test_release_common.sh
 /bin/bash -n scripts/*.sh
 /usr/bin/plutil -lint deploy/dev.linsheng.mihomo.daemon.plist
+test "$(/usr/libexec/PlistBuddy -c 'Print :RunAtLoad' \
+  deploy/dev.linsheng.mihomo.daemon.plist)" = "true"
+mihomobox_tun_validation_awk='
+  /^tun:$/ { tun_blocks += 1; in_tun = 1; next }
+  in_tun && /^[^[:space:]]/ { in_tun = 0 }
+  in_tun && /^  enable:/ {
+    enable_keys += 1
+    if ($0 ~ /^  enable:[[:space:]]+true([[:space:]]|$)/) enabled = 1
+    else invalid = 1
+  }
+  END { exit(tun_blocks == 1 && enable_keys == 1 && enabled && !invalid ? 0 : 1) }
+'
+/usr/bin/awk "$mihomobox_tun_validation_awk" deploy/default-config.yaml
+if printf 'tun:\n  nested:\n    enable: true\n' |
+  /usr/bin/awk "$mihomobox_tun_validation_awk"; then
+  echo "nested tun enable must not satisfy the default-config gate" >&2
+  exit 1
+fi
+if /usr/bin/grep -R -q '"autostart:' src-tauri/capabilities; then
+  echo "UI capabilities must not control login autostart" >&2
+  exit 1
+fi
 scripts/install-daemon.sh --dry-run
 
+/usr/bin/env npm run prepare:metacubexd
 /usr/bin/env npm run prepare:binaries
+test -f .build/release/libMihomoBoxUI.a
 if .build/release/mihomoboxctl profile import-url ftp://invalid.example/profile.yaml \
   >/dev/null 2>&1; then
   echo "CLI accepted a non-HTTP subscription URL" >&2
@@ -48,6 +77,10 @@ test -x "$APP/Contents/MacOS/mihomo"
 test -x "$APP/Contents/MacOS/mihomo-daemon"
 test -x "$APP/Contents/MacOS/mihomo-agent"
 test -x "$APP/Contents/MacOS/mihomoboxctl"
+test ! -e "$APP/Contents/Resources/index.html"
+test ! -d "$APP/Contents/Resources/ui-dist"
+/usr/bin/otool -L "$APP/Contents/MacOS/mihomo-app" |
+  /usr/bin/grep -q '/SwiftUI.framework/'
 "$APP/Contents/MacOS/mihomoboxctl" --help >/dev/null
 test -x "$APP/Contents/Resources/scripts/install-daemon.sh"
 test -x "$APP/Contents/Resources/scripts/install-daemon-remote.sh"

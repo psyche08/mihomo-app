@@ -3,11 +3,12 @@
 ## Components
 
 ```text
-MihomoBox.app (current user, Tauri)
-├── Contents/MacOS/mihomo-app       tray + window
-├── Contents/MacOS/mihomoboxctl     signed XPC client used by CLI and desktop transport
-├── loopback dashboard bridge       per-process token + mapped XPC operations
-├── WebView                         immutable generated MetaCubeXD dashboard
+MihomoBox.app (current user)
+├── Contents/MacOS/mihomo-app       Tauri lifecycle, tray, updater
+├── linked MihomoBoxUI              SwiftUI window + typed controller store
+├── current-user login item         starts only the hidden tray App after login
+├── linked MihomoControl            signed direct XPC client used by SwiftUI
+├── Contents/MacOS/mihomoboxctl     signed XPC client used by CLI
 └── Resources/daemon + scripts      bootstrap installer inputs
               │
               │ authenticated XPC (same signing certificate)
@@ -39,13 +40,14 @@ boundary without modifying the LaunchDaemon plist.
 
 | Resource | Owner | Reason |
 |---|---|---|
-| Main window and tray | current-user Tauri process | UI must not run as root |
+| App lifecycle and tray | current-user Tauri process | app shell must not run as root |
+| Main window and dashboard state | in-process SwiftUI module | native UI with no browser bridge |
 | Desktop/CLI control requests | signed XPC client | no direct privileged or controller access |
 | XPC authentication and command authorization | root daemon | one narrow privilege boundary |
 | Agent lifecycle and profile transactions | root daemon | serialized, rollback-capable mutations |
 | Mihomo process, DNS, network observation | root agent | one runtime owner keeps network state coherent |
 | Controller credentials | root runtime boundary | clients receive typed results, never the secret |
-| MetaCubeXD files | immutable App resources | no remote UI code execution |
+| MetaCubeXD reference | pinned source and screenshots, not executable App content | reproducible visual provenance |
 
 The daemon does not bind DNS sockets, watch network state, or launch Mihomo.
 The agent does not accept connections from Desktop or CLI. It is launched only
@@ -70,13 +72,14 @@ validation before exchanging messages:
 Requests are typed and versioned. The broker allowlist covers status/snapshot,
 agent start-stop-restart, profile import/switch/reload, Enhanced TUN, outbound
 mode, proxy selection, latency tests, signed component synchronization, and
-MetaCubeXD's validated REST and live stream routes. Component synchronization
+the native dashboard's validated controller REST and live stream routes. Component synchronization
 accepts exactly three named binary blobs with fixed size limits, validates each
 against the daemon's leaf-certificate requirement, stages and backs up inside
 the root-owned support directory, and rolls back the complete set on failure.
-Controller proxy requests are checked against the pinned UI's method/path
-contract; controller identity, managed DNS keys, arbitrary shell, filesystem,
-and arbitrary network endpoints are not exposed.
+Controller proxy requests are checked against a fixed method/path contract.
+SwiftUI receives decoded DTOs through a typed gateway; its public API cannot
+express controller identity, managed DNS or TUN patches, arbitrary shell,
+filesystem, arbitrary request bodies, or arbitrary network endpoints.
 
 ## Startup Sequence
 
@@ -88,9 +91,16 @@ and arbitrary network endpoints are not exposed.
 5. The agent adds `127.0.0.53` to `lo0`, binds UDP/TCP 53, and starts Mihomo.
 6. After controller, TUN, fake-IP route, and DNS validation, the agent backs up
    and applies DNS to the active PrimaryService.
-7. Tauri starts later as an accessory application, compares bundled and
-   installed component digests through XPC, and synchronizes signed changes.
-8. Tauri polls runtime state through XPC and checks the signed App update feed.
+7. Tauri starts as an accessory application, compares bundled and installed
+   component digests through XPC, and synchronizes signed changes.
+8. Tauri polls runtime state through XPC. The first healthy Enhanced TUN state
+   observed from an App in `/Applications` or `~/Applications` applies a
+   one-time user-level default to start Tauri hidden at login. The root
+   LaunchDaemon, rather than this login item, remains responsible for restoring
+   the managed service and `tun.enable: true` at system startup.
+9. Tauri checks the signed App update feed. The main `NSWindow` is still absent;
+   selecting `Show Main Window` creates one `NSHostingController`, starts the
+   bounded SwiftUI controller streams, and reuses that window until App exit.
 
 If the agent exits unexpectedly, the daemon restores the single-agent
 invariant before relaunch. Requested stop/uninstall paths suppress restart and

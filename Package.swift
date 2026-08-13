@@ -11,6 +11,7 @@ let package = Package(
         .executable(name: "mihomo-daemon", targets: ["MihomoDaemon"]),
         .executable(name: "mihomo-agent", targets: ["MihomoAgent"]),
         .executable(name: "mihomoboxctl", targets: ["MihomoBoxCLI"]),
+        .library(name: "MihomoBoxUI", type: .static, targets: ["MihomoBoxUI"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.81.0"),
@@ -43,9 +44,21 @@ let package = Package(
             dependencies: ["MihomoDNSCore"]
         ),
         .executableTarget(name: "MihomoBoxCLI", dependencies: ["MihomoControl"]),
+        .target(
+            name: "MihomoBoxUI",
+            dependencies: ["MihomoControl"],
+            linkerSettings: [
+                .linkedFramework("AppKit"),
+                .linkedFramework("SwiftUI"),
+            ]
+        ),
         .testTarget(
             name: "MihomoDNSCoreTests",
             dependencies: ["MihomoControl", "MihomoDNSCore"]
+        ),
+        .testTarget(
+            name: "MihomoBoxUITests",
+            dependencies: ["MihomoBoxUI", "MihomoControl"]
         ),
     ],
     swiftLanguageModes: [.v5]

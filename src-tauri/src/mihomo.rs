@@ -38,9 +38,22 @@ pub struct ControlError;
 
 impl Snapshot {
     fn group(&self, name: &str) -> Option<&ProxyGroup> {
+        self.groups.iter().find(|group| group.name == name)
+    }
+
+    fn global_group(&self) -> Option<&ProxyGroup> {
+        self.group("GLOBAL").or_else(|| {
+            self.groups
+                .iter()
+                .find(|group| group.name.eq_ignore_ascii_case("GLOBAL"))
+        })
+    }
+
+    fn known_target(&self, name: &str) -> bool {
         self.groups
             .iter()
-            .find(|group| group.name.eq_ignore_ascii_case(name))
+            .flat_map(|group| &group.proxies)
+            .any(|proxy| proxy.name == name)
     }
 
     fn target_routes_through_proxy(&self, target: &str, visited: &mut HashSet<String>) -> bool {
@@ -48,9 +61,9 @@ impl Snapshot {
             return false;
         }
         let Some(group) = self.group(target) else {
-            return true;
+            return self.known_target(target);
         };
-        let key = group.name.to_lowercase();
+        let key = group.name.clone();
         if !visited.insert(key.clone()) || group.current.is_empty() {
             return false;
         }
@@ -60,7 +73,7 @@ impl Snapshot {
     }
 
     fn global_proxy_target(&self) -> Option<String> {
-        let global = self.group("GLOBAL")?;
+        let global = self.global_group()?;
         if !global.current.is_empty()
             && self.target_routes_through_proxy(&global.current, &mut HashSet::new())
         {
@@ -83,7 +96,7 @@ impl Snapshot {
     }
 
     fn global_routes_through_proxy(&self) -> bool {
-        self.group("GLOBAL").is_some_and(|global| {
+        self.global_group().is_some_and(|global| {
             !global.current.is_empty()
                 && self.target_routes_through_proxy(&global.current, &mut HashSet::new())
         })
@@ -234,12 +247,6 @@ impl MihomoClient {
             active_profile: envelope.profiles.active_profile,
             network_consistent: envelope.health.map(|health| health.network_consistent),
         })
-    }
-
-    pub async fn controller_available(&self) -> bool {
-        self.control("dashboard.version", BTreeMap::new())
-            .await
-            .is_ok()
     }
 
     async fn fetch_snapshot(&self) -> Result<Snapshot, ControlError> {
@@ -429,6 +436,40 @@ mod tests {
     }
 
     #[test]
+    fn global_route_names_are_case_sensitive_and_missing_targets_fail_closed() {
+        let snapshot = Snapshot {
+            reachable: true,
+            mode: "global".to_string(),
+            groups: vec![
+                ProxyGroup {
+                    name: "GLOBAL".to_string(),
+                    current: "a".to_string(),
+                    proxies: vec![node("a"), node("A"), node("Missing")],
+                },
+                ProxyGroup {
+                    name: "a".to_string(),
+                    current: "DIRECT".to_string(),
+                    proxies: vec![node("DIRECT")],
+                },
+            ],
+            ..Snapshot::default()
+        };
+        assert!(!snapshot.global_routes_through_proxy());
+        assert_eq!(snapshot.global_proxy_target().as_deref(), Some("A"));
+
+        let missing = Snapshot {
+            groups: vec![ProxyGroup {
+                name: "GLOBAL".to_string(),
+                current: "Missing".to_string(),
+                proxies: vec![],
+            }],
+            ..snapshot
+        };
+        assert!(!missing.global_routes_through_proxy());
+        assert_eq!(missing.global_proxy_target(), None);
+    }
+
+    #[test]
     fn control_is_unavailable_without_a_daemon() {
         // The control channel is XPC now, not a spawned helper: with no daemon
         // listening this must fail rather than hang or pretend to succeed.
@@ -439,7 +480,9 @@ mod tests {
             .build()
             .expect("runtime");
         if !std::path::Path::new("/Library/Application Support/Mihomo App/mihomo-daemon").exists() {
-            assert!(!runtime.block_on(MihomoClient::new().controller_available()));
+            assert!(runtime
+                .block_on(MihomoClient::new().fetch_snapshot())
+                .is_err());
         }
     }
 

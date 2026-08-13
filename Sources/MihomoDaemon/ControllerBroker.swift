@@ -6,8 +6,7 @@ final class ControllerBroker: @unchecked Sendable {
     private let configPath: String
     private let streamLock = NSLock()
     private var streams: [String: ControllerStreamSession] = [:]
-    /// Which control peer opened each stream, so peer death can release them.
-    private var owners: [String: ObjectIdentifier] = [:]
+    private var streamOwnership = ControllerStreamOwnership()
     private let maximumStreams = 32
     private let sessionLock = NSLock()
     private var pooledSession: URLSession?
@@ -32,7 +31,7 @@ final class ControllerBroker: @unchecked Sendable {
         streamLock.lock()
         let active = Array(streams.values)
         streams.removeAll()
-        owners.removeAll()
+        streamOwnership.removeAll()
         streamLock.unlock()
         for stream in active {
             stream.close()
@@ -49,12 +48,12 @@ final class ControllerBroker: @unchecked Sendable {
             guard let identifier = request.arguments["session"] else {
                 throw brokerError("controller stream session is required")
             }
-            return try nextStreamMessage(identifier: identifier)
+            return try nextStreamMessage(identifier: identifier, owner: owner)
         case .controllerStreamClose:
             guard let identifier = request.arguments["session"] else {
                 throw brokerError("controller stream session is required")
             }
-            closeStream(identifier: identifier)
+            try closeStream(identifier: identifier, owner: owner)
             return Data()
         default:
             break
@@ -305,10 +304,12 @@ final class ControllerBroker: @unchecked Sendable {
             stream.close()
             throw brokerError("controller stream limit reached")
         }
-        streams[stream.identifier] = stream
-        if let owner {
-            owners[stream.identifier] = owner
+        guard streamOwnership.register(identifier: stream.identifier, owner: owner) else {
+            streamLock.unlock()
+            stream.close()
+            throw brokerError("controller stream session is unavailable")
         }
+        streams[stream.identifier] = stream
         streamLock.unlock()
         ServiceLog.info("event=controller_stream result=opened")
         return try JSONSerialization.data(
@@ -317,13 +318,14 @@ final class ControllerBroker: @unchecked Sendable {
         )
     }
 
-    private func nextStreamMessage(identifier: String) throws -> Data {
+    private func nextStreamMessage(identifier: String, owner: ObjectIdentifier?) throws -> Data {
         guard UUID(uuidString: identifier) != nil else {
             throw brokerError("invalid controller stream session")
         }
         streamLock.lock()
         removeExpiredStreamsLocked()
-        let stream = streams[identifier]
+        let stream = streamOwnership.allows(identifier: identifier, owner: owner)
+            ? streams[identifier] : nil
         streamLock.unlock()
         guard let stream else {
             throw brokerError("controller stream session is unavailable")
@@ -331,15 +333,34 @@ final class ControllerBroker: @unchecked Sendable {
         do {
             return try stream.receive()
         } catch {
-            closeStream(identifier: identifier)
+            closeStreamUnconditionally(identifier: identifier)
             throw error
         }
     }
 
-    private func closeStream(identifier: String) {
+    private func closeStream(identifier: String, owner: ObjectIdentifier?) throws {
+        guard UUID(uuidString: identifier) != nil else {
+            throw brokerError("invalid controller stream session")
+        }
+        streamLock.lock()
+        removeExpiredStreamsLocked()
+        guard streams[identifier] != nil,
+              streamOwnership.remove(identifier: identifier, owner: owner) else {
+            streamLock.unlock()
+            throw brokerError("controller stream session is unavailable")
+        }
+        let stream = streams.removeValue(forKey: identifier)
+        streamLock.unlock()
+        stream?.close()
+        ServiceLog.info("event=controller_stream result=closed")
+    }
+
+    /// Daemon-side cleanup must not depend on a live caller. Receive failures,
+    /// expiry and peer teardown are authoritative reasons to reclaim a stream.
+    private func closeStreamUnconditionally(identifier: String) {
         streamLock.lock()
         let stream = streams.removeValue(forKey: identifier)
-        owners.removeValue(forKey: identifier)
+        streamOwnership.remove(identifier: identifier)
         streamLock.unlock()
         if let stream {
             stream.close()
@@ -359,7 +380,7 @@ final class ControllerBroker: @unchecked Sendable {
         guard !expired.isEmpty else { return }
         for identifier in expired {
             streams.removeValue(forKey: identifier)?.close()
-            owners.removeValue(forKey: identifier)
+            streamOwnership.remove(identifier: identifier)
         }
         ServiceLog.info("event=controller_stream result=expired count=\(expired.count)")
     }
@@ -373,10 +394,9 @@ final class ControllerBroker: @unchecked Sendable {
     /// few times could exhaust the budget and be told the limit was reached.
     func releaseStreams(owner: ObjectIdentifier) {
         streamLock.lock()
-        let identifiers = owners.filter { $0.value == owner }.map(\.key)
+        let identifiers = streamOwnership.removeAll(ownedBy: owner)
         let released = identifiers.compactMap { identifier -> ControllerStreamSession? in
-            owners.removeValue(forKey: identifier)
-            return streams.removeValue(forKey: identifier)
+            streams.removeValue(forKey: identifier)
         }
         streamLock.unlock()
         for stream in released {
@@ -390,7 +410,10 @@ final class ControllerBroker: @unchecked Sendable {
     private func removeExpiredStreams() {
         streamLock.lock()
         let expired = streams.filter { $0.value.isExpired }.map(\.key)
-        let removed = expired.compactMap { streams.removeValue(forKey: $0) }
+        let removed = expired.compactMap { identifier -> ControllerStreamSession? in
+            streamOwnership.remove(identifier: identifier)
+            return streams.removeValue(forKey: identifier)
+        }
         streamLock.unlock()
         for stream in removed {
             stream.close()
@@ -402,61 +425,8 @@ final class ControllerBroker: @unchecked Sendable {
 
     private func validateControllerRequest(method: String, target: String, body: Data?) throws {
         guard ["GET", "PUT", "PATCH", "POST", "DELETE"].contains(method),
-              target.utf8.count <= 4_096,
-              let components = URLComponents(string: target),
-              components.scheme == nil, components.host == nil, components.fragment == nil,
-              components.path.hasPrefix("/"), !components.path.contains(".."),
-              (body?.count ?? 0) <= 1_048_576 else {
+              ControllerRequestPolicy.allows(method: method, target: target, body: body) else {
             throw brokerError("invalid controller request")
-        }
-
-        let path = components.path
-        guard ControllerRequestPolicy.allows(method: method, path: path) else {
-            throw brokerError("unsupported controller operation")
-        }
-
-        if method == "PATCH", path == "/configs" {
-            try validateConfigPatch(body)
-        }
-        if method == "PUT", path == "/configs" {
-            try validateInlineConfig(body)
-        }
-        if method == "PUT", path.hasPrefix("/proxies/"), !path.hasSuffix("/delay") {
-            guard let body, body.count > 0 else { throw brokerError("proxy selection body is required") }
-        }
-    }
-
-
-    private func validateConfigPatch(_ body: Data?) throws {
-        guard let body,
-              let object = try JSONSerialization.jsonObject(with: body) as? [String: Any] else {
-            throw brokerError("config patch must be a JSON object")
-        }
-        let protected = Set([
-            "external-controller", "external-controller-tls", "secret", "external-ui",
-            "external-ui-url", "external-ui-name", "authentication", "skip-auth-prefixes",
-        ])
-        guard protected.isDisjoint(with: object.keys) else {
-            throw brokerError("controller identity fields are managed by MihomoBox")
-        }
-        if let dns = object["dns"] as? [String: Any] {
-            let managedDNS = Set([
-                "listen", "respect-rules", "nameserver", "direct-nameserver",
-                "proxy-server-nameserver",
-            ])
-            guard managedDNS.isDisjoint(with: dns.keys) else {
-                throw brokerError("DNS recursion-boundary fields are managed by MihomoBox")
-            }
-        }
-    }
-
-    private func validateInlineConfig(_ body: Data?) throws {
-        guard let body,
-              let object = try JSONSerialization.jsonObject(with: body) as? [String: Any],
-              let payload = object["payload"] as? String, !payload.isEmpty,
-              (object["path"] as? String ?? "").isEmpty,
-              Set(object.keys).isSubset(of: ["path", "payload"]) else {
-            throw brokerError("inline config reload requires a payload and an empty path")
         }
     }
 
@@ -477,6 +447,8 @@ final class ControllerBroker: @unchecked Sendable {
 }
 
 private final class ControllerStreamSession: @unchecked Sendable {
+    private static let maximumFrameBytes = 16 * 1_024 * 1_024
+
     let identifier = UUID().uuidString
     private let session: URLSession
     private let task: URLSessionWebSocketTask
@@ -490,6 +462,7 @@ private final class ControllerStreamSession: @unchecked Sendable {
         self.errorFactory = errorFactory
         session = URLSession(configuration: .ephemeral)
         task = session.webSocketTask(with: request)
+        task.maximumMessageSize = Self.maximumFrameBytes
         task.resume()
     }
 
@@ -524,7 +497,12 @@ private final class ControllerStreamSession: @unchecked Sendable {
             throw errorFactory("controller stream timed out")
         }
         touch()
-        return try result?.get() ?? { throw errorFactory("controller stream failed") }()
+        let frame = try result?.get() ?? { throw errorFactory("controller stream failed") }()
+        guard frame.count <= Self.maximumFrameBytes else {
+            close()
+            throw errorFactory("controller stream frame exceeds the size limit")
+        }
+        return frame
     }
 
     func close() {

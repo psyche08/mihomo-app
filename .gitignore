@@ -2,6 +2,7 @@
 /.swiftpm/
 /.cache/
 /node_modules/
+/.pnpm-store/
 /ui-dist/
 /dist/
 /src-tauri/target/

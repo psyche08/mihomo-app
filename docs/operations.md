@@ -33,6 +33,15 @@ The installer:
 7. verifies controller, TUN, Fake-IP route, DNS bridge, Mihomo DNS, persisted
    PrimaryService DNS, and effective resolver state.
 
+There are two intentionally separate startup mechanisms. The root
+LaunchDaemon starts the managed network service at system startup with the
+active profile, whose managed configuration requires `tun.enable: true`. Once
+the App has observed a healthy Enhanced TUN runtime, it also applies a one-time
+current-user login-item default so the hidden tray App returns after login.
+Only an installed copy under `/Applications` or `~/Applications` applies this
+default. That login item is not privileged and never owns a Mihomo process.
+Turning it off later in macOS System Settings is respected.
+
 It also installs `/usr/local/bin/mihomoboxctl` as a symlink to the signed App
 bundle. An unrelated existing file or symlink at that path is preserved.
 

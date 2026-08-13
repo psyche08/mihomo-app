@@ -29,6 +29,7 @@ release_write_notary_state() {
   state_dir="$(/usr/bin/dirname "$state_file")"
   /bin/mkdir -p "$state_dir"
   temporary="$(/usr/bin/mktemp "$state_dir/.notary-state.XXXXXX")"
+  # shellcheck disable=SC2016
   /usr/bin/env node -e '
     const fs = require("fs");
     const [path, target, sha256, submissionId, uploaded, status] =
@@ -63,4 +64,32 @@ release_read_notary_state() {
     if (value === null || value === undefined) process.exit(0);
     process.stdout.write(typeof value === "boolean" ? String(value) : value);
   ' "$state_file" "$key"
+}
+
+release_valid_submission_id() {
+  [[ "$1" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]]
+}
+
+# notarytool may emit other diagnostic UUIDs. Only an explicit `id:` field is
+# a submission identity, and multiple distinct IDs are ambiguous rather than a
+# reason to guess and risk waiting on or stapling the wrong artifact.
+release_submission_id_from_log() {
+  local log="$1"
+  local ids
+  local count
+  [[ -f "$log" && ! -L "$log" ]] || return 1
+  ids="$(
+    /usr/bin/sed -nE \
+      's/^[[:space:]]*id:[[:space:]]*([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})[[:space:]]*$/\1/p' \
+      "$log" |
+      /usr/bin/sort -u
+  )"
+  count="$(
+    /usr/bin/printf '%s\n' "$ids" |
+      /usr/bin/sed '/^[[:space:]]*$/d' |
+      /usr/bin/wc -l |
+      /usr/bin/tr -d '[:space:]'
+  )"
+  [[ "$count" == 1 ]] || return 1
+  /usr/bin/printf '%s\n' "$ids"
 }

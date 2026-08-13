@@ -1,7 +1,8 @@
 # Tray and Controller Contract
 
-The main window is hidden at startup. Tauri uses macOS accessory activation
-policy so the tray is the primary interface.
+The main window is native SwiftUI and hidden at startup. Tauri keeps the macOS
+accessory activation policy, event loop, updater, and tray; an in-process
+`NSHostingController` owns the dashboard window.
 
 ## Menu
 
@@ -72,6 +73,18 @@ shutdown restores real DNS, atomically replaces the configuration, restarts
 the agent, and accepts success only after controller, TUN, Fake-IP route, DNS
 bridge, Mihomo DNS, and system DNS are all healthy.
 
+The first time an installed App observes that Enhanced TUN and the managed
+network are both healthy, the native App enables a current-user macOS login
+item. This is a one-time default: a cancelled or failed action that never
+reaches healthy runtime state cannot register anything, and MihomoBox does not
+re-add the login item after the user later turns it off in System Settings.
+Only an App under `/Applications` or `~/Applications` can apply the default, so
+a DMG, App Translocation, Downloads copy, or development smoke build cannot
+persist a temporary path. The Rust shell writes and validates the user-level
+LaunchAgent atomically; the SwiftUI module receives no LaunchAgent write API. The login
+item starts the hidden menu-bar App after login and does not directly launch
+Mihomo or execute a privileged operation.
+
 The tray has exactly two administrator-authorized entry points: the first TUN
 enable when the daemon is not installed, and explicit `Install / Repair
 Daemon…`. Once installed, TUN enable/disable, service start/stop/restart,
@@ -91,24 +104,42 @@ reinvoke the installer or request another administrator dialog.
 | Reload active profile | `profile.reload` |
 | Import/switch profile | `profile.import` / `profile.switch` |
 | Start/stop/restart proxy runtime | `agent.start` / `agent.stop` / `agent.restart` |
-| MetaCubeXD controller REST | validated `dashboard.controller-request` |
-| MetaCubeXD live streams | `dashboard.controller-stream-open/next/close` |
+| SwiftUI controller reads/mutations | typed operations or validated `dashboard.controller-request` |
+| SwiftUI live streams | `dashboard.controller-stream-open/next/close` |
 
-The desktop bridge covers the fixed MetaCubeXD controller contract: config,
-proxy and group selection/latency, proxy and rule providers, rules, connection
-close, cache flush, GEO refresh, and the `connections`, `traffic`, `memory`, and
-`logs` WebSockets. Each browser WebSocket owns one long-lived signed CLI/XPC
-session and one long-lived controller WebSocket. Length-framed messages reuse
-that path until close; they do not create a process, XPC peer, or upstream
-WebSocket per message. The daemon limits concurrent sessions, expires abandoned
-sessions, validates method/path/body before forwarding, and injects the
-root-owned controller credential. Controller identity fields and
-the DNS recursion-boundary keys remain non-editable. A config reload with an
-empty payload maps to `profile.reload`; MetaCubeXD's remote-config action may
-send a non-empty inline payload through XPC, but must use an empty `path` so the
-controller cannot read an arbitrary root-owned file. Runtime restart maps to
-`agent.restart`; backend/UI self-upgrade remains blocked because bundled
-artifacts must stay pinned, checksummed, and signed.
+The native `ControlGateway` covers config, proxy/group selection and latency,
+proxy and rule providers, rules, connection close, cache flush, GEO refresh,
+and the `connections`, `traffic`, `memory`, and `logs` streams. Ordinary calls
+reuse one serialized signed XPC session. Each live stream owns a separate XPC
+session so a blocking stream cannot starve mutations; closing or hiding the
+window cancels the Swift task and explicitly closes its daemon-side stream.
+The daemon binds every stream identifier to the XPC peer that opened it, so a
+different signed peer cannot read or close that stream. Frames are bounded to
+16 MiB and histories/logs are bounded in memory.
+
+`DashboardStore` consumes only that typed gateway in normal builds. It loads
+the static catalogs again when their page is opened, refreshes proxy and rule
+providers after profile reload/restart, and derives Usage only from the live
+connection/traffic streams. Connection close is not applied optimistically:
+the store reads `/connections` back before changing the displayed state. Proxy
+selection, outbound mode, Allow LAN, Unified Delay, IPv6, core log level, TCP
+concurrency, and process lookup mode likewise use typed mutations followed by
+controller readback. A refused action remains visible as an in-window error.
+Preview fixtures require an explicit development flag and a checkout build
+path; an installed application cannot enter preview mode.
+
+There is no loopback HTTP server, browser token, WebView, or `mihomoboxctl`
+child process in the desktop data path. The daemon still validates every
+method/path/body and injects the root-owned controller credential. The public
+Swift gateway exposes fixed actions and safe runtime patches only; controller
+identity, DNS recursion-boundary keys, and every TUN field remain
+unrepresentable. Profile reload maps to `profile.reload`, runtime restart maps
+to `agent.restart`. After either restart, the window waits for controller
+readiness and revalidates the Global selector chain. If it cannot repair an
+unsafe Global route through a real proxy, it stops the agent and restores the
+managed network instead of leaving traffic on `DIRECT`. Backend/UI self-upgrade
+remains blocked because bundled artifacts must stay pinned, checksummed, and
+signed.
 
 Local YAML import copies the selected regular file into the current user's
 mode-`0700` staging directory as a mode-`0600` file so it is immediately visible
@@ -131,12 +162,15 @@ root-owned; Desktop and CLI receive typed state/results rather than the secret.
 ## Window Lifecycle
 
 - Startup: hidden.
-- `Show Main Window`: first request controller `/version` through XPC. If the
-  active controller (normally `127.0.0.1:9090`) is unavailable, keep the window
-  hidden and show a service-unavailable dialog. On success, refresh the desktop
-  bridge, reconnect the local dashboard, unminimize, show, and focus it. The
-  dashboard receives a process-random loopback bridge token, never Mihomo's
-  root-owned controller secret. The bridge exposes only mapped controller
-  operations and forwards them through the signed XPC helper.
+- Login startup: after the one-time default above has been applied, macOS starts
+  the current-user App hidden. The root LaunchDaemon separately restores the
+  managed service and its `tun.enable: true` profile at system startup.
+- `Show Main Window`: create or reuse the single SwiftUI `NSWindow`, unminimize,
+  show, and focus it. The store immediately loads an authenticated XPC snapshot
+  and starts four independent bounded streams. If the daemon/controller is
+  unavailable, the window stays visible with a reconnectable offline state;
+  it never receives Mihomo's root-owned controller secret.
 - Window close: hide rather than terminate.
-- `Exit`: terminate the Tauri user process only; launchd keeps networking alive.
+- Window hide/minimize: cancel live streams; showing restarts them idempotently.
+- `Exit`: tear down the SwiftUI host, then terminate only the Tauri user process;
+  launchd keeps networking alive.

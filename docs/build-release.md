@@ -5,20 +5,22 @@
 | Component | Pin | Verification |
 |---|---|---|
 | Tauri | `2.11.x` Cargo/npm lockfiles | Cargo/npm integrity metadata |
-| MetaCubeXD | tag `v1.271.0`, commit `c4622599d0a597378729a91c3b7f76c5d9803831` | exact revision check; MIT license copied |
+| MetaCubeXD visual reference | tag `v1.271.0`, commit `c4622599d0a597378729a91c3b7f76c5d9803831` | exact revision check; MIT license copied |
 | Mihomo | release `v1.19.28` | architecture-specific SHA-256 |
 | App icon | upstream Mihomo `Meta.png` | bundled source SHA-256 |
 
-`scripts/prepare-metacubexd.sh` builds the upstream static dashboard and
-overlays only `config.js`. It does not fork or patch MetaCubeXD source.
+`scripts/prepare-metacubexd.sh` is an explicit reference-refresh tool. It builds
+the pinned upstream dashboard for visual comparison and does not participate
+in the App bundle. The shipped main window is native SwiftUI.
 
 `scripts/fetch-mihomo.sh` selects the target-triple asset, verifies the pinned
 archive checksum, and stages the executable using Tauri's required
 `name-<target-triple>` convention.
 
-`scripts/prepare-binaries.sh` builds the Swift release daemon, agent, and XPC
-client and stages all external binaries. Tauri places them in `Contents/MacOS`
-without the target suffix.
+`scripts/prepare-binaries.sh` builds the Swift release daemon, agent, XPC client,
+and static `MihomoBoxUI` library, then stages the external executables. Cargo
+links the SwiftUI library into `mihomo-app`; Tauri places the executables in
+`Contents/MacOS` without the target suffix.
 
 SwiftPM and Cargo both cache absolute build paths. Their preparation scripts
 record the project root and clean only generated caches when the checkout moves.
@@ -46,9 +48,38 @@ MihomoBox.app/Contents/MacOS/mihomoboxctl
 For an explicit window smoke test without changing the default hidden startup:
 
 ```bash
-MIHOMO_APP_SMOKE_SHOW_WINDOW=1 \
-  'src-tauri/target/release/bundle/macos/MihomoBox.app/Contents/MacOS/mihomo-app'
+'src-tauri/target/release/bundle/macos/MihomoBox.app/Contents/MacOS/mihomo-app' \
+  --smoke-show-window
 ```
+
+Add `--native-ui-preview` as well to use bounded in-memory fixtures for visual
+QA without requiring a release-signed XPC peer. The environment variables
+`MIHOMO_APP_SMOKE_SHOW_WINDOW=1` and `MIHOMO_NATIVE_UI_PREVIEW=1` are equivalent
+for automation. Preview is honored only when the executable itself is running
+from this checkout's `.build` or `src-tauri/target` tree; installed Apps ignore
+it. Production code has no unsigned XPC bypass, and preview mode never opens a
+control session.
+
+The ad-hoc bundle produced by `validate.sh` proves native linkage, policy tests,
+request mapping and packaging only. It cannot prove the certificate-constrained
+Mach service handshake: ad-hoc processes are deliberately rejected, and local
+validation never installs or activates the privileged daemon.
+
+Before shipping, exercise the signed IPC path on an isolated macOS test machine:
+
+1. build and sign the App and every bundled helper with the same Developer ID leaf;
+2. explicitly install the bundled LaunchDaemon and activate a test profile;
+3. run the signed `mihomoboxctl rpc version`, `rpc snapshot`, and
+   `rpc connections` read-only probes;
+4. open the SwiftUI window without preview mode and verify live proxy, rule,
+   connection, traffic, memory, and log data;
+5. exercise a proxy selection, rule toggle, connection close, and each safe
+   Core Config control, then verify controller readback in the window and
+   `rpc snapshot` where applicable.
+
+This signed-machine check is a release acceptance gate, not part of ordinary
+validation, because it requires an installed root service and changes test
+network/runtime state.
 
 ## Signing and Notarization
 
@@ -84,9 +115,13 @@ command to whatever proxy the host runs.
 Notarization progress is stored under `dist/.release-state/`, keyed by artifact
 SHA-256. The state contains no credentials and records the submission ID,
 whether upload completion was explicitly confirmed, and the last notarization
-phase. A restarted release resumes `wait` only for a confirmed upload; an
-`Accepted` artifact proceeds directly to stapling. A changed artifact receives a
-new state file and is never confused with an older submission.
+phase. Each artifact is submitted exactly once. As soon as `notarytool` exposes
+one unambiguous submission ID, every retry and resumed run waits on that ID even
+if the submit process later crashes or never prints its final upload marker. A
+state or persistent submit log without one recoverable ID fails closed and must
+be reconciled manually; it is never treated as permission to submit again. An
+`Accepted` artifact proceeds directly to stapling. A changed artifact receives
+a new state file and is never confused with an older submission.
 
 If a release process exits after creating the signed artifacts, resume the exact
 existing App/archive/DMG without rebuilding or re-signing:
@@ -172,6 +207,7 @@ from installing the update.
 
 ## License Outputs
 
-The project MIT license and `THIRD_PARTY_NOTICES.md` are bundled. Generated
-MetaCubeXD assets include the upstream full license text. Mihomo binaries are
+The project MIT license and `THIRD_PARTY_NOTICES.md` are bundled. The
+MetaCubeXD license is retained because its pinned interface and Sunset theme are
+the design reference for the native reimplementation. Mihomo binaries are
 unmodified official release artifacts.

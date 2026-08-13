@@ -70,17 +70,19 @@ notarize_with_retry() {
   local delay=5
   local maximum_attempts=5
   local submission_id=""
-  local uploaded=false
+  local upload_confirmed=false
   local artifact_sha256
   local state_file
+  local submit_log
   local persisted_status=""
   local output
   local status
   artifact_sha256="$(release_sha256 "$target")"
   state_file="$(release_notary_state_file "$target" "$artifact_sha256")"
+  submit_log="$state_file.submit.log"
   if [[ -f "$state_file" ]]; then
     submission_id="$(release_read_notary_state "$state_file" submission_id)"
-    uploaded="$(release_read_notary_state "$state_file" upload_confirmed)"
+    upload_confirmed="$(release_read_notary_state "$state_file" upload_confirmed)"
     persisted_status="$(release_read_notary_state "$state_file" status)"
     case "$persisted_status" in
       accepted)
@@ -91,76 +93,102 @@ notarize_with_retry() {
         echo "notarization state is rejected artifact_sha256=$artifact_sha256" >&2
         return 1
         ;;
-      uploaded)
-        if [[ -z "$submission_id" || "$uploaded" != true ]]; then
-          echo "invalid persisted notarization state: $state_file" >&2
-          return 1
-        fi
-        echo "resuming uploaded notarization submission id=$submission_id"
-        ;;
-      *)
-        uploaded=false
-        ;;
+      *) ;;
     esac
   fi
-  while true; do
-    output="$(/usr/bin/mktemp /private/tmp/mihomobox-notary.XXXXXX)"
-    set +e
-    if [[ "$uploaded" == true ]]; then
-      /usr/bin/xcrun notarytool wait "$submission_id" \
-        --apple-id "$NOTARY_APPLE_ID" \
-        --team-id "$NOTARY_TEAM_ID" \
-        --password "$NOTARY_PASSWORD" \
-        --timeout 30m 2>&1 | /usr/bin/tee "$output"
-    else
+
+  # A shell or notarytool crash can happen after the ID reaches the persistent
+  # log but before the JSON state is updated. Recover that exact ID; never turn
+  # an ambiguous prior attempt into a second submission.
+  if [[ -z "$submission_id" && -f "$submit_log" ]]; then
+    submission_id="$(release_submission_id_from_log "$submit_log" || true)"
+    if [[ -n "$submission_id" ]]; then
+      if /usr/bin/grep -q 'Successfully uploaded file' "$submit_log"; then
+        upload_confirmed=true
+      fi
       release_write_notary_state \
-        "$state_file" "$target" "$artifact_sha256" "$submission_id" false uploading
-      /usr/bin/xcrun notarytool submit "$target" \
-        --apple-id "$NOTARY_APPLE_ID" \
-        --team-id "$NOTARY_TEAM_ID" \
-        --password "$NOTARY_PASSWORD" \
-        --no-s3-acceleration \
-        --wait \
-        --timeout 30m 2>&1 | /usr/bin/tee "$output"
+        "$state_file" "$target" "$artifact_sha256" "$submission_id" \
+        "$upload_confirmed" submitted
+      echo "recovered notarization submission id=$submission_id from persistent log"
     fi
+  fi
+
+  if [[ -n "$submission_id" ]]; then
+    if ! release_valid_submission_id "$submission_id"; then
+      echo "invalid persisted notarization submission ID: $state_file" >&2
+      return 1
+    fi
+    echo "resuming notarization submission id=$submission_id"
+  elif [[ -f "$state_file" ]]; then
+    echo "notarization attempt has no recoverable submission ID; refusing automatic resubmission: $state_file" >&2
+    return 1
+  else
+    release_write_notary_state \
+      "$state_file" "$target" "$artifact_sha256" "" false submitting
+    /usr/bin/printf '' >"$submit_log"
+    /bin/chmod 0600 "$submit_log"
+    echo "submitting notarization artifact exactly once"
+    set +e
+    /usr/bin/xcrun notarytool submit "$target" \
+      --apple-id "$NOTARY_APPLE_ID" \
+      --team-id "$NOTARY_TEAM_ID" \
+      --password "$NOTARY_PASSWORD" \
+      --no-s3-acceleration \
+      --no-progress 2>&1 | /usr/bin/tee "$submit_log"
     status="${PIPESTATUS[0]}"
     set -e
+    /bin/chmod 0600 "$submit_log"
+    submission_id="$(release_submission_id_from_log "$submit_log" || true)"
     if [[ -z "$submission_id" ]]; then
-      submission_id="$(/usr/bin/sed -n \
-        's/^  id: \([0-9A-Fa-f-]*\)$/\1/p' "$output" | /usr/bin/head -1)"
+      release_write_notary_state \
+        "$state_file" "$target" "$artifact_sha256" "" false submit_unknown
+      echo "submit ended without one recoverable submission ID; inspect Apple history manually and do not resubmit automatically" >&2
+      return "$(( status == 0 ? 1 : status ))"
     fi
+    if /usr/bin/grep -q 'Successfully uploaded file' "$submit_log"; then
+      upload_confirmed=true
+    fi
+    release_write_notary_state \
+      "$state_file" "$target" "$artifact_sha256" "$submission_id" \
+      "$upload_confirmed" submitted
+    if (( status != 0 )); then
+      echo "notarytool submit exited status=$status after exposing an ID; continuing by ID only" >&2
+    fi
+  fi
+
+  while true; do
+    output="$(/usr/bin/mktemp /private/tmp/mihomobox-notary-wait.XXXXXX)"
+    set +e
+    /usr/bin/xcrun notarytool wait "$submission_id" \
+      --apple-id "$NOTARY_APPLE_ID" \
+      --team-id "$NOTARY_TEAM_ID" \
+      --password "$NOTARY_PASSWORD" \
+      --timeout 30m 2>&1 | /usr/bin/tee "$output"
+    status="${PIPESTATUS[0]}"
+    set -e
     if (( status == 0 )); then
       release_write_notary_state \
-        "$state_file" "$target" "$artifact_sha256" "$submission_id" true accepted
+        "$state_file" "$target" "$artifact_sha256" "$submission_id" \
+        "$upload_confirmed" accepted
       /bin/rm -f -- "$output"
       return 0
     fi
     if /usr/bin/grep -Eq 'status: (Invalid|Rejected)' "$output"; then
       release_write_notary_state \
         "$state_file" "$target" "$artifact_sha256" "$submission_id" \
-        "$uploaded" rejected
+        "$upload_confirmed" rejected
       /bin/rm -f -- "$output"
       return "$status"
     fi
-    if [[ "$uploaded" == true ]]; then
-      release_write_notary_state \
-        "$state_file" "$target" "$artifact_sha256" "$submission_id" true uploaded
-    elif [[ -n "$submission_id" ]] \
-      && /usr/bin/grep -q 'Successfully uploaded file' "$output"; then
-      uploaded=true
-      release_write_notary_state \
-        "$state_file" "$target" "$artifact_sha256" "$submission_id" true uploaded
-    else
-      release_write_notary_state \
-        "$state_file" "$target" "$artifact_sha256" "$submission_id" false \
-        transport_failed
-    fi
+    release_write_notary_state \
+      "$state_file" "$target" "$artifact_sha256" "$submission_id" \
+      "$upload_confirmed" submitted
     /bin/rm -f -- "$output"
     if (( attempt >= maximum_attempts )); then
-      echo "notarization failed after $attempt attempts: $target" >&2
+      echo "notarization wait failed after $attempt attempts; resume this exact submission later: $target" >&2
       return "$status"
     fi
-    echo "notarization retry attempt=$attempt delay_seconds=$delay uploaded=$uploaded" >&2
+    echo "notarization wait retry attempt=$attempt delay_seconds=$delay submission_id=$submission_id" >&2
     /bin/sleep "$delay"
     attempt=$((attempt + 1))
     delay=$((delay * 2))
@@ -183,7 +211,8 @@ if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
     echo "updater private key not found: $UPDATER_KEY_PATH" >&2
     exit 1
   fi
-  export TAURI_SIGNING_PRIVATE_KEY="$(/bin/cat "$UPDATER_KEY_PATH")"
+  TAURI_SIGNING_PRIVATE_KEY="$(/bin/cat "$UPDATER_KEY_PATH")"
+  export TAURI_SIGNING_PRIVATE_KEY
 fi
 export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
 DMG_STAGE="$(/usr/bin/mktemp -d /private/tmp/mihomobox-dmg.XXXXXX)"

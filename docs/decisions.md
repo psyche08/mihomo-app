@@ -2,14 +2,19 @@
 
 ## Tauri instead of Electron
 
-The requested distribution uses Tauri v2 for a smaller native shell and a Rust
-tray/controller layer. MetaCubeXD remains the dashboard rather than reimplementing
-its proxy, rule, connection, and log interfaces.
+Tauri v2 remains the smaller native process shell, event loop, Rust tray,
+updater, and login-start owner. It does not own a WebView window: the same
+process statically links `MihomoBoxUI` and hosts one SwiftUI `NSWindow`.
 
-## Build MetaCubeXD, do not load a hosted panel
+## Native SwiftUI dashboard instead of a bundled WebView
 
-Bundled static assets work offline, have deterministic reviewable provenance,
-and avoid executing UI code that changed after the App was signed.
+The original build embedded pinned MetaCubeXD static assets. The dashboard is
+now reimplemented with SwiftUI while retaining MetaCubeXD's
+seven-page information architecture and Sunset visual reference. This removes
+the loopback HTTP/token bridge and browser-to-CLI transport, integrates with
+macOS accessibility, and keeps all controller access behind a typed signed XPC
+gateway. The MetaCubeXD tag and license remain pinned for reproducible design
+provenance; no upstream JavaScript executes in the App.
 
 ## Root agent owns Mihomo continuously
 
@@ -40,6 +45,16 @@ binary.
 A LaunchDaemon that executes inside `/Applications/MihomoBox.app` breaks when
 the user moves, replaces, or deletes the App. The signed bundle is the install
 source; root-owned copies are the runtime.
+
+## Login startup follows a healthy Enhanced TUN activation
+
+First launch alone does not add a login item or prompt for administrator
+access. After the native App observes Enhanced TUN and the managed network both
+healthy, it applies a one-time current-user login-start default. This also
+migrates an already-healthy installation. A later user override is retained;
+the App does not repeatedly re-register the item. The unprivileged login item
+only restores the hidden tray App, while the root LaunchDaemon independently
+restores the managed network service with `tun.enable: true` at system startup.
 
 ## SystemConfiguration DNS instead of a DNS Settings profile
 

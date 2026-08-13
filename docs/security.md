@@ -12,13 +12,16 @@
   rejected.
 - The daemon exposes a typed allowlist, never shell execution, arbitrary file
   reads/writes, arbitrary controller paths, or arbitrary network requests.
-  MetaCubeXD forwarding accepts only the pinned UI's known method/path shapes;
-  it strips the dashboard token and injects the root-owned controller secret.
+  Native controller forwarding accepts only fixed known method/path shapes and
+  injects the root-owned controller secret inside the daemon.
 - `mihomo-agent` has no public XPC/Mach service. Only the root daemon may launch
   it from its root-owned stable path.
-- MetaCubeXD is immutable local content inside the signed App. It has no shell,
-  installer, root filesystem, or direct privileged capability. Native control
-  mutations cross the authenticated XPC boundary.
+- The in-process SwiftUI module has no shell, installer, root filesystem, raw
+  controller endpoint, or direct privileged capability. Its public gateway is
+  typed, and every control mutation crosses the authenticated XPC boundary.
+- The native Rust shell may create the current user's MihomoBox LaunchAgent
+  after a healthy Enhanced TUN activation. SwiftUI cannot write login items,
+  and that LaunchAgent starts only the unprivileged Tauri App.
 - Bootstrap/repair installation is explicit and uses the macOS administrator
   dialog. Subsequent lifecycle, profile reload, TUN, outbound-mode, and proxy
   operations do not elevate interactively.
@@ -26,8 +29,10 @@
   installer. It accepts exactly daemon, agent, and Mihomo bytes, caps their
   sizes, verifies every staged executable against the current daemon's exact
   leaf certificate, and rolls back on replacement or health-check failure.
-- launchd executes stable root-owned copies, never files in a user-writable Git
-  checkout or movable App bundle.
+- The privileged root LaunchDaemon executes stable root-owned copies, never
+  files in a user-writable Git checkout or movable App bundle. The separate
+  current-user LaunchAgent may execute only an installed App under
+  `/Applications` or `~/Applications` and has no privileged capability.
 
 Release XPC intentionally fails closed for unsigned and ad-hoc development
 builds because they have no Apple-issued leaf signing certificate. XPC
@@ -48,7 +53,8 @@ the network data plane.
 
 ## Supply Chain
 
-- MetaCubeXD uses a pinned tag.
+- MetaCubeXD uses a pinned tag as the native UI's design reference; no upstream
+  JavaScript executes in the App.
 - Mihomo uses a pinned release and SHA-256.
 - Cargo/npm/pnpm lockfiles pin package dependency graphs.
 - Daemon, agent, CLI, Desktop, and DMG use one Developer ID certificate.
@@ -81,6 +87,11 @@ Mihomo stdout/stderr is reduced in memory to aggregate line, byte, and severity
 counts before it reaches disk. Upgrade installation removes legacy raw Mihomo
 log generations that could predate this boundary. Normal audit logs are
 batch-written; fatal-signal logs remain isolated and synchronous.
+
+The SwiftUI Logs page redacts credential-shaped values before a controller
+frame enters observable state, retains at most 500 entries in memory, and has
+no export or persistence path. Connection and usage details are likewise
+bounded to the current UI session and are never written to application logs.
 
 HTTP subscription credentials live only in the importing user process and are
 not persisted. Downloads use an ephemeral URL session, reject non-HTTP(S) and

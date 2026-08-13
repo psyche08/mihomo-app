@@ -1,8 +1,9 @@
 mod app_log;
 mod component_sync;
 mod control;
-mod dashboard;
 mod mihomo;
+mod native_window;
+mod startup;
 mod tray;
 mod updater;
 
@@ -10,7 +11,6 @@ pub fn run() {
     app_log::install_crash_logging();
     app_log::info("event=app_started");
     let result = tauri::Builder::default()
-        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             #[cfg(target_os = "macos")]
@@ -18,21 +18,13 @@ pub fn run() {
             tray::setup(app.handle())?;
             component_sync::start();
             updater::start(app.handle().clone());
-            if std::env::var_os("MIHOMO_APP_SMOKE_SHOW_WINDOW").is_some() {
-                use tauri::Manager;
-                if let Some(window) = app.get_webview_window("main") {
-                    window.show()?;
-                    window.set_focus()?;
-                }
+            let smoke_window = std::env::var_os("MIHOMO_APP_SMOKE_SHOW_WINDOW").is_some()
+                || std::env::args_os().any(|argument| argument == "--smoke-show-window");
+            if smoke_window {
+                native_window::show(app.handle())?;
             }
             app_log::info("event=app_setup_completed");
             Ok(())
-        })
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.hide();
-            }
         })
         .run(tauri::generate_context!());
     match result {

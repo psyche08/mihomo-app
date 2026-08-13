@@ -13,10 +13,13 @@ Copyright 2023 KT
 
 ## MetaCubeXD
 
-MetaCubeXD is distributed under the MIT License. The pinned static dashboard is
-built from <https://github.com/MetaCubeX/metacubexd>.
+MetaCubeXD is distributed under the MIT License. Its pinned seven-page
+information architecture and Sunset theme are the visual reference for this
+application's native SwiftUI implementation. The upstream source is available
+from <https://github.com/MetaCubeX/metacubexd>; its JavaScript is not bundled or
+executed by MihomoBox.
 
 Copyright 2023 MetaCubeX
 
-The full license texts are retained with the generated dashboard and the
+The full license texts are retained in the application resources and the
 upstream projects remain the authoritative source for their copyright notices.

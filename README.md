@@ -2,9 +2,10 @@
 
 An open-source native macOS menu-bar controller for Mihomo.
 
-- Tauri v2 application with a hidden-by-default main window.
+- Tauri v2 menu-bar shell with a hidden-by-default native SwiftUI main window.
 - App and tray artwork is derived from Mihomo's official `Meta.png`.
-- MetaCubeXD is built and embedded as the main dashboard.
+- The seven-page dashboard follows MetaCubeXD's information architecture and
+  Sunset visual language, implemented natively with SwiftUI.
 - Tray controls required Enhanced TUN, outbound mode, proxy selection with
   latency, local and authenticated HTTP(S) YAML import/switch, network
   recovery, daemon installation, and exit.
@@ -22,8 +23,9 @@ npm install
 npm run build
 ```
 
-The build pins MetaCubeXD `v1.271.0`, Mihomo `v1.19.28`, and verifies the
-Mihomo release checksum before bundling.
+The build pins Mihomo `v1.19.28` and verifies its release checksum before
+bundling. MetaCubeXD `v1.271.0` remains pinned as the reproducible design and
+interaction reference for the native UI.
 
 Install or repair the privileged daemon from the tray, or inspect the operation
 first:
