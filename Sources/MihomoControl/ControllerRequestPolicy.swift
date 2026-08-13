@@ -47,8 +47,6 @@ public enum ControllerRequestPolicy {
             return validConfigPatch(body)
         case ("PATCH", "/rules/disable"):
             return validRulePatch(body)
-        case ("PUT", let route) where route.hasPrefix("/proxies/"):
-            return validProxySelection(body)
         default:
             return body == nil || body?.isEmpty == true
         }
@@ -56,10 +54,8 @@ public enum ControllerRequestPolicy {
 
     public static func allows(method: String, path: String) -> Bool {
         if exact.contains("\(method) \(path)") { return true }
-        return matches(method, path, prefix: "/proxies/", segmentCounts: [1], suffix: nil)
-            || matches(method, path, prefix: "/proxies/", segmentCounts: [1], suffix: "/delay")
+        return matches(method, path, prefix: "/proxies/", segmentCounts: [1], suffix: "/delay")
             || matches(method, path, prefix: "/group/", segmentCounts: [1], suffix: "/delay")
-            || matches(method, path, prefix: "/providers/proxies/", segmentCounts: [1], suffix: nil)
             || matches(
                 method, path, prefix: "/providers/proxies/",
                 segmentCounts: [1, 2], suffix: "/healthcheck"
@@ -76,8 +72,7 @@ public enum ControllerRequestPolicy {
         suffix: String?
     ) -> Bool {
         let methods: Set<String>
-        if prefix == "/proxies/" && suffix == nil { methods = ["PUT", "DELETE"] }
-        else if prefix == "/connections/" { methods = ["DELETE"] }
+        if prefix == "/connections/" { methods = ["DELETE"] }
         else if suffix == "/delay" || suffix == "/healthcheck" { methods = ["GET"] }
         else { methods = ["PUT"] }
         guard methods.contains(method), path.hasPrefix(prefix) else { return false }
@@ -159,16 +154,6 @@ public enum ControllerRequestPolicy {
         return object.allSatisfy { key, value in
             Int(key).map { $0 >= 0 } == true && isJSONBoolean(value)
         }
-    }
-
-    private static func validProxySelection(_ body: Data?) -> Bool {
-        guard let object = jsonObject(body), object.count == 1,
-              let name = object["name"] as? String,
-              !name.isEmpty,
-              name.utf8.count <= 1_024 else {
-            return false
-        }
-        return !name.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
     }
 
     private static func jsonObject(_ body: Data?) -> [String: Any]? {

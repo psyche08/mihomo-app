@@ -1116,7 +1116,8 @@ final class CoreTests: XCTestCase {
         XCTAssertTrue(text.contains("level=warning"))
         // Credentials are stripped from both levels regardless.
         XCTAssertFalse(text.contains("credential"))
-        XCTAssertTrue(text.contains("https://secret.example/sub"), "the path survives")
+        XCTAssertTrue(text.contains("https://secret.example/<redacted>"))
+        XCTAssertFalse(text.contains("/sub"), "subscription paths are credentials")
     }
 
     func testWarningRetentionIsBoundedFarBelowErrors() throws {
@@ -1137,10 +1138,11 @@ final class CoreTests: XCTestCase {
     func testRetainedErrorsDropCredentialsButKeepTheFailure() {
         let redact = SanitizedProcessLogRedaction.redact
 
-        // A subscription URL's query is where the node list is handed out.
+        // A subscription URL may carry access material in its path or query.
         let subscription = redact("level=error provider update https://example.com/sub?token=abc123")
         XCTAssertFalse(subscription.contains("abc123"))
-        XCTAssertTrue(subscription.contains("https://example.com/sub"))
+        XCTAssertFalse(subscription.contains("/sub"))
+        XCTAssertTrue(subscription.contains("https://example.com/<redacted>"))
 
         // Proxy credentials embedded in a URL.
         let credentials = redact("level=error dial ss://user:hunter2@node.example:8388 failed")
@@ -1152,6 +1154,19 @@ final class CoreTests: XCTestCase {
         XCTAssertFalse(redact("level=error \"password\": \"letmein\"").contains("letmein"))
         XCTAssertFalse(
             redact("level=error uuid=b1e5f4a2-0000-4000-8000-abcdefabcdef").contains("b1e5f4a2")
+        )
+        XCTAssertFalse(
+            redact("Authorization: Bearer short-secret").contains("short-secret")
+        )
+        XCTAssertFalse(
+            redact("proxy-authorization: Basic dXNlcjpwYXNz").contains("dXNlcjpwYXNz")
+        )
+        XCTAssertFalse(redact("Cookie: session=short-cookie").contains("short-cookie"))
+        XCTAssertFalse(
+            redact("provider https://only-token@example.com/private").contains("only-token")
+        )
+        XCTAssertFalse(
+            redact("provider https://example.com/sub/path-secret").contains("path-secret")
         )
 
         // What diagnosis needs survives untouched.
@@ -1178,19 +1193,24 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(text.components(separatedBy: "failure number").count - 1, 3)
     }
 
-    func testSanitizedProcessLogMigrationRemovesLegacyGenerationsOnlyOnce() throws {
+    func testSanitizedProcessLogMigrationRemovesLegacyAndV1GenerationsOnlyOnce() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let path = root.appendingPathComponent("mihomo.log").path
         for candidate in [path, "\(path).1", "\(path).2", "\(path).3"] {
-            try Data("domain=legacy.example\n".utf8).write(to: URL(fileURLWithPath: candidate))
+            try Data("Authorization: Bearer leaked-short-token\n".utf8)
+                .write(to: URL(fileURLWithPath: candidate))
         }
+        try Data("old marker\n".utf8).write(
+            to: URL(fileURLWithPath: "\(path).sanitized-v1")
+        )
 
         try SanitizedProcessLogMigration.prepare(logPath: path)
         XCTAssertFalse(FileManager.default.fileExists(atPath: path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: "\(path).sanitized-v1"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: "\(path).sanitized-v1"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: "\(path).sanitized-v2"))
 
         try Data("event=mihomo_output_summary\n".utf8).write(to: URL(fileURLWithPath: path))
         try SanitizedProcessLogMigration.prepare(logPath: path)

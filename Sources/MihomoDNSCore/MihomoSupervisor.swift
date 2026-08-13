@@ -41,7 +41,7 @@ public final class MihomoSupervisor: @unchecked Sendable {
         guard FileManager.default.fileExists(atPath: configuration.configPath) else {
             throw MihomoSupervisorError.configMissing(configuration.configPath)
         }
-        try stopStaleOwnedProcess()
+        Self.stopOwnedProcess(configuration: configuration)
         try SanitizedProcessLogMigration.prepare(logPath: configuration.logPath)
         lock.lock()
         stopping = false
@@ -235,7 +235,11 @@ public final class MihomoSupervisor: @unchecked Sendable {
         }
     }
 
-    private func stopStaleOwnedProcess() throws {
+    /// Terminates only the process recorded by the root-owned PID file when
+    /// that PID still resolves to the configured Mihomo executable. The daemon
+    /// uses this after an abnormal agent exit so an orphaned kernel cannot keep
+    /// TUN/controller state alive after a fail-closed stop.
+    public static func stopOwnedProcess(configuration: MihomoProcessConfiguration) {
         guard let value = try? String(contentsOfFile: configuration.pidPath, encoding: .utf8),
               let pid = Int32(value.trimmingCharacters(in: .whitespacesAndNewlines)),
               mihomo_dns_pid_executable_matches(pid, configuration.binaryPath) == 1 else {

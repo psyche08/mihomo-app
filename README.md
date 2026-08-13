@@ -2,26 +2,28 @@
 
 An open-source native macOS menu-bar controller for Mihomo.
 
-- Tauri v2 menu-bar shell with a hidden-by-default native SwiftUI main window.
+- Pure Swift/AppKit menu-bar shell with a hidden-by-default SwiftUI main window.
 - App and tray artwork is derived from Mihomo's official `Meta.png`.
 - The seven-page dashboard follows MetaCubeXD's information architecture and
   Sunset visual language, implemented natively with SwiftUI.
-- Tray controls required Enhanced TUN, outbound mode, proxy selection with
+- Tray controls include Enhanced TUN, outbound mode, proxy selection with
   latency, local and authenticated HTTP(S) YAML import/switch, network
   recovery, daemon installation, and exit.
-- The App bundle contains architecture-matched `mihomo`, `mihomo-daemon`, and
-  `mihomoboxctl` executables under `Contents/MacOS`.
+- The App bundle contains architecture-matched `mihomo`, `mihomo-daemon`,
+  `mihomo-agent`, and `mihomoboxctl` executables under `Contents/MacOS`.
 - The root daemon supervises Mihomo and provides DHCP-aware system DNS without
   a DNS Settings profile.
+- Sparkle verifies and atomically installs signed App updates; desktop control
+  goes directly from Swift to authenticated Mach XPC.
 
 ## Build
 
-Requirements: macOS 14+, Xcode/Swift, Rust, Node.js, npm, pnpm, and `dig`.
+Requirements: macOS 14+, Xcode/Swift, `pnpm` for refreshing the pinned visual
+reference, `minisign` for the temporary 0.7 updater compatibility asset, and
+`dig`.
 
-```bash
-npm install
-npm run build
-```
+Compilation is intentionally operator-executed outside agent sandboxes. Use the
+native build command documented in [docs/build-release.md](docs/build-release.md).
 
 The build pins Mihomo `v1.19.28` and verifies its release checksum before
 bundling. MetaCubeXD `v1.271.0` remains pinned as the reproducible design and
@@ -31,19 +33,20 @@ Install or repair the privileged daemon from the tray, or inspect the operation
 first:
 
 ```bash
-sudo scripts/install-daemon.sh --dry-run
+scripts/install-daemon.sh --app-bundle ./build/MihomoBox.app --dry-run
 ```
 
-Restore system DNS and remove the daemon:
+Restore system DNS and remove the daemon through the signed bundled CLI:
 
 ```bash
-sudo scripts/install-daemon.sh --restore
+/Applications/MihomoBox.app/Contents/MacOS/mihomoboxctl uninstall
 ```
 
-Import and transactionally activate a local profile:
+Import and transactionally activate a local profile over authenticated XPC:
 
 ```bash
-sudo scripts/install-daemon.sh --import-profile /path/to/profile.yaml --activate
+/Applications/MihomoBox.app/Contents/MacOS/mihomoboxctl \
+  profile import /path/to/profile.yaml --activate
 ```
 
 After installation, the same safe operations are available through the CLI:
@@ -58,8 +61,9 @@ mihomoboxctl restart
 mihomoboxctl stop
 ```
 
-Read-only commands do not require elevated privileges. Mutating commands enter
-the same bundled installer boundary and request authorization with `sudo`.
+Read-only and normal runtime/profile mutations use authenticated XPC without
+elevation. Only `install`, `uninstall`, and explicit repair enter the verified
+App-snapshot installer boundary and request administrator authorization.
 
 ## Documentation
 

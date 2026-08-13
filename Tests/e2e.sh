@@ -3,15 +3,19 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP="/private/tmp/mihomo-agent-e2e"
-BINARY="$ROOT/.build/debug/mihomo-agent"
+BINARY="${MIHOMO_AGENT_BINARY:-$ROOT/.build/release/mihomo-agent}"
 FAKE_PID=""
 PROXY_PID=""
 
 cleanup() {
-  [[ -n "$PROXY_PID" ]] && kill "$PROXY_PID" >/dev/null 2>&1 || true
-  [[ -n "$FAKE_PID" ]] && kill "$FAKE_PID" >/dev/null 2>&1 || true
-  [[ -n "$PROXY_PID" ]] && wait "$PROXY_PID" >/dev/null 2>&1 || true
-  [[ -n "$FAKE_PID" ]] && wait "$FAKE_PID" >/dev/null 2>&1 || true
+  if [[ -n "$PROXY_PID" ]]; then
+    kill "$PROXY_PID" >/dev/null 2>&1 || true
+    wait "$PROXY_PID" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$FAKE_PID" ]]; then
+    kill "$FAKE_PID" >/dev/null 2>&1 || true
+    wait "$FAKE_PID" >/dev/null 2>&1 || true
+  fi
 }
 trap cleanup EXIT INT TERM
 

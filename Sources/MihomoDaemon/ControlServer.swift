@@ -12,15 +12,85 @@ final class ControlDispatcher: @unchecked Sendable {
     private let controller: ControllerBroker
     private let profiles: ProfileBroker
     private let components: ComponentUpdater
+    private let mutationLock = NSLock()
 
     init(agent: AgentSupervisor, configPath: String) throws {
         self.agent = agent
-        controller = ControllerBroker(configPath: configPath)
-        profiles = ProfileBroker(agent: agent)
-        components = try ComponentUpdater(agent: agent)
+        let controllerBroker = ControllerBroker(configPath: configPath)
+        let validateStartedRuntime = {
+            try Self.validateStartedRuntime(agent: agent, controller: controllerBroker)
+        }
+        controller = controllerBroker
+        profiles = ProfileBroker(
+            agent: agent,
+            validateStartedRuntime: validateStartedRuntime
+        )
+        components = try ComponentUpdater(
+            agent: agent,
+            validateStartedRuntime: validateStartedRuntime
+        )
+    }
+
+    /// Boot keeps the Mach service available even when the managed runtime
+    /// cannot prove a safe route. This lets the signed App repair a profile or
+    /// retry start without launchd crash-looping the root daemon.
+    func startInitialRuntime() {
+        mutationLock.lock()
+        defer { mutationLock.unlock() }
+        if components.recoveryRequired {
+            let restored = agent.stopAndRestoreVerified()
+            ServiceLog.error(
+                "event=initial_runtime result=" +
+                (restored ? "component_recovery_required" : "restore_unconfirmed")
+            )
+            return
+        }
+        if components.requiresDaemonRestart {
+            ServiceLog.info("event=component_update result=restart_after_interrupted_recovery")
+            scheduleDaemonRestart()
+            return
+        }
+        if profiles.activationRequired {
+            do {
+                try components.commitPendingBootValidation()
+                ServiceLog.info("event=initial_runtime result=awaiting_profile")
+            } catch {
+                let rolledBack = components.rollbackPendingBootValidation()
+                ServiceLog.error(
+                    "event=initial_runtime result=" +
+                    (rolledBack ? "component_rolled_back" : "component_recovery_required")
+                )
+                if rolledBack { scheduleDaemonRestart() }
+            }
+            return
+        }
+        do {
+            try agent.start()
+            try ensureStartedRuntimeLocked()
+            try components.commitPendingBootValidation()
+            ServiceLog.info("event=initial_runtime result=ready")
+        } catch {
+            let restored = agent.stopAndRestoreVerified()
+            let hadPendingUpdate = components.hasPendingBootValidation
+            let componentRollback = components.rollbackPendingBootValidation()
+            ServiceLog.error(
+                "event=initial_runtime result=" +
+                (restored && componentRollback ? "stopped" : "restore_unconfirmed")
+            )
+            if hadPendingUpdate, componentRollback {
+                scheduleDaemonRestart()
+            }
+        }
     }
 
     func dispatch(_ request: ControlRequest, owner: ObjectIdentifier? = nil) -> ControlResponse {
+        let mutating = Self.isMutating(request.operation)
+        if mutating {
+            mutationLock.lock()
+        }
+        defer {
+            if mutating { mutationLock.unlock() }
+        }
         let operation = request.operation.rawValue
         let auditEveryRequest = request.operation != .controllerStreamNext
         if auditEveryRequest {
@@ -29,6 +99,15 @@ final class ControlDispatcher: @unchecked Sendable {
         guard request.version == mihomoControlProtocolVersion else {
             ServiceLog.error("event=control_request operation=\(operation) result=unsupported_version")
             return ControlResponse(success: false, error: "unsupported control protocol version")
+        }
+        if components.recoveryRequired,
+           Self.isMutating(request.operation),
+           request.operation != .stopAgent {
+            ServiceLog.error("event=control_request operation=\(operation) result=recovery_required")
+            return ControlResponse(
+                success: false,
+                error: "component recovery is required before runtime mutations"
+            )
         }
         do {
             let payload: Data?
@@ -60,13 +139,23 @@ final class ControlDispatcher: @unchecked Sendable {
                     "health": health ?? NSNull(),
                 ], options: [.sortedKeys])
             case .startAgent:
+                guard !profiles.activationRequired else {
+                    throw serverError("activate a profile before starting the managed runtime")
+                }
                 try agent.start()
+                try ensureStartedRuntimeLocked()
                 payload = nil
             case .stopAgent:
-                agent.stop()
+                guard agent.stopAndRestoreVerified() else {
+                    throw serverError("the network restore could not be confirmed")
+                }
                 payload = nil
             case .restartAgent:
+                guard !profiles.activationRequired else {
+                    throw serverError("activate a profile before starting the managed runtime")
+                }
                 try agent.restart()
+                try ensureStartedRuntimeLocked()
                 payload = nil
             case .componentStatus:
                 payload = try components.status()
@@ -80,9 +169,7 @@ final class ControlDispatcher: @unchecked Sendable {
                     "daemon_restart": result.restartDaemon,
                 ], options: [.sortedKeys])
                 if result.restartDaemon {
-                    DispatchQueue.global().asyncAfter(deadline: .now() + .seconds(1)) {
-                        exit(1)
-                    }
+                    scheduleDaemonRestart()
                 }
             case .listProfiles:
                 payload = try profiles.list()
@@ -94,7 +181,17 @@ final class ControlDispatcher: @unchecked Sendable {
                 // gating it meant the one deterministic cleanup path failed
                 // exactly when the agent stopped and every stream was dying.
                 payload = try controller.perform(request, owner: owner)
-            case .snapshot, .setTUN, .setOutboundMode, .selectProxy, .testDelay,
+            case .setTUN:
+                guard !profiles.activationRequired else {
+                    throw serverError("activate a profile before enabling Enhanced TUN")
+                }
+                guard agent.isRunning else {
+                    throw serverError("Mihomo agent is not running")
+                }
+                payload = try controller.perform(request, owner: owner)
+                try ensureStartedRuntimeLocked()
+            case .snapshot, .setOutboundMode, .selectProxy,
+                 .refreshProxyProvider, .testDelay,
                  .controllerVersion, .listRules, .listProxyProviders, .listRuleProviders,
                  .listConnections, .closeAllConnections, .controllerRequest,
                  .controllerStreamMessage, .controllerStreamOpen, .controllerStreamNext:
@@ -107,6 +204,21 @@ final class ControlDispatcher: @unchecked Sendable {
                 ServiceLog.info("event=control_request operation=\(operation) result=success")
             }
             return ControlResponse(success: true, payload: payload)
+        } catch ControllerBrokerCriticalError.unsafeGlobalRuntime {
+            // A controller mutation that cannot restore a proven-safe Global
+            // route must fail closed. Stopping the daemon-owned agent also
+            // restores system DNS through the normal shutdown path.
+            let restored = agent.stopAndRestoreVerified()
+            ServiceLog.error(
+                "event=control_request operation=\(operation) result=" +
+                (restored ? "failed_closed" : "restore_unconfirmed")
+            )
+            return ControlResponse(
+                success: false,
+                error: restored
+                    ? "the unsafe Global runtime was stopped"
+                    : "the unsafe Global runtime stop was attempted; network restore is unconfirmed"
+            )
         } catch {
             ServiceLog.error("event=control_request operation=\(operation) result=failed")
             return ControlResponse(
@@ -118,6 +230,91 @@ final class ControlDispatcher: @unchecked Sendable {
 
     private func serverError(_ message: String) -> Error {
         NSError(domain: "MihomoControlServer", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+    }
+
+    private func scheduleDaemonRestart() {
+        DispatchQueue.global().asyncAfter(deadline: .now() + .seconds(1)) {
+            exit(1)
+        }
+    }
+
+    private static func isMutating(_ operation: ControlOperation) -> Bool {
+        switch operation {
+        case .startAgent, .stopAgent, .restartAgent, .upgradeComponents,
+             .importProfile, .switchProfile, .reloadProfile, .setTUN,
+             .setOutboundMode, .selectProxy, .refreshProxyProvider,
+             .closeAllConnections:
+            return true
+        case .controllerRequest:
+            // ControllerRequestPolicy is still the authority for the exact
+            // method/path/body. The dispatcher serializes every such request
+            // because this operation represents both safe reads and bounded
+            // mutations, and the typed envelope does not carry the method here.
+            return true
+        case .ping, .status, .trayState, .snapshot, .componentStatus,
+             .controllerVersion, .listRules, .listProxyProviders,
+             .listRuleProviders, .listConnections, .controllerStreamMessage,
+             .controllerStreamOpen, .controllerStreamNext, .controllerStreamClose,
+             .listProfiles, .testDelay:
+            return false
+        }
+    }
+
+    private func ensureStartedRuntimeLocked() throws {
+        do {
+            try Self.validateStartedRuntime(agent: agent, controller: controller)
+        } catch {
+            throw ControllerBrokerCriticalError.unsafeGlobalRuntime
+        }
+    }
+
+    /// Activation is committed only after the complete managed-network truth
+    /// is live. A controller socket alone is not enough: TUN, Fake-IP routing,
+    /// both DNS bridges and system DNS ownership must all agree.
+    private static func validateStartedRuntime(
+        agent: AgentSupervisor,
+        controller: ControllerBroker,
+        timeout: TimeInterval = 20
+    ) throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        var lastError: Error?
+        repeat {
+            guard agent.isRunning else {
+                throw ControllerBrokerCriticalError.unsafeGlobalRuntime
+            }
+            do {
+                try controller.ensureSafeGlobalRoute()
+                let health = try agent.freshHealth()
+                guard health.controllerReachable,
+                      health.tunEnabled,
+                      health.tunInterface?.isEmpty == false,
+                      health.fakeIPMode,
+                      health.fakeIPRouteReady,
+                      health.dnsBridgeReady,
+                      health.mihomoDNSReady,
+                      health.systemDNSManaged,
+                      health.networkConsistent else {
+                    throw serverErrorStatic("the managed network is not ready")
+                }
+                return
+            } catch ControllerBrokerCriticalError.unsafeGlobalRuntime {
+                throw ControllerBrokerCriticalError.unsafeGlobalRuntime
+            } catch {
+                lastError = error
+                if Date() < deadline {
+                    Thread.sleep(forTimeInterval: 0.25)
+                }
+            }
+        } while Date() < deadline
+        throw lastError ?? serverErrorStatic("the managed network did not become ready")
+    }
+
+    private static func serverErrorStatic(_ message: String) -> Error {
+        NSError(
+            domain: "MihomoControlServer",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: message]
+        )
     }
 }
 

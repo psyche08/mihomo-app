@@ -24,7 +24,7 @@ enum DashboardLogRedaction {
       "auth", "authorization", "access_key", "sign", "signature", "uuid",
     ].joined(separator: "|")
     add(
-      "(?<![A-Za-z0-9_])((?:proxy-)?authorization)\\s*:\\s*"
+      "(?<![A-Za-z0-9_])((?:proxy-)?authorization|cookie|set-cookie)\\s*:\\s*"
         + "(?:basic|bearer|digest)?\\s*[^\\s,;]+",
       "$1: \(placeholder)"
     )
@@ -37,7 +37,7 @@ enum DashboardLogRedaction {
       "(?<![A-Za-z0-9_])(\(keys))\"?\\s*[=:]\\s*\"?[^\\s\"&,}]+\"?",
       "$1=\(placeholder)"
     )
-    add("(https?://[^\\s?]+)\\?[^\\s]*", "$1?\(placeholder)")
+    add("(https?://)(?:[^/@\\s]+@)?([^/\\s?#]+)(?:[/\\s?#][^\\s]*)?", "$1$2/\(placeholder)")
     add("(?<![A-Za-z0-9+/=])[A-Za-z0-9+/=]{40,}(?![A-Za-z0-9+/=])", placeholder)
     return built
   }()

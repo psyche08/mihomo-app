@@ -34,7 +34,6 @@ protocol DashboardControlGateway: Sendable {
   func updateGeoData() async throws
   func reloadActiveProfile() async throws
   func restartAgent() async throws
-  func stopAgentForUnsafeGlobal() async throws
   func connectionsStream() -> AsyncThrowingStream<ControllerConnectionsFrame, Error>
   func trafficStream() -> AsyncThrowingStream<ControllerTrafficFrame, Error>
   func memoryStream() -> AsyncThrowingStream<ControllerMemoryFrame, Error>
@@ -391,7 +390,7 @@ public final class DashboardStore: ObservableObject {
   public func reloadConfiguration() async {
     await performAction {
       try await gateway.reloadActiveProfile()
-      let snapshot = try await safeSnapshotAfterRestart()
+      let snapshot = try await waitForRuntimeSnapshot()
       apply(snapshot: snapshot)
       startAllStreams()
       try await refreshProfileCatalogs()
@@ -401,7 +400,7 @@ public final class DashboardStore: ObservableObject {
   public func restartRuntime() async {
     await performAction {
       try await gateway.restartAgent()
-      let snapshot = try await safeSnapshotAfterRestart()
+      let snapshot = try await waitForRuntimeSnapshot()
       apply(snapshot: snapshot)
       startAllStreams()
       try await refreshProfileCatalogs()
@@ -565,25 +564,6 @@ public final class DashboardStore: ObservableObject {
       }
     }
     throw lastError
-  }
-
-  private func safeSnapshotAfterRestart() async throws -> ControllerSnapshot {
-    let observed = try await waitForRuntimeSnapshot()
-    if observed.configs.mode.caseInsensitiveCompare("global") == .orderedSame,
-      !observed.globalRoutesThroughProxy
-    {
-      do {
-        return try await gateway.applyOutboundMode(.global)
-      } catch {
-        do {
-          try await gateway.stopAgentForUnsafeGlobal()
-        } catch {
-          throw ControlGatewayError.unsafeGlobalFailClosedStopFailed
-        }
-        throw ControlGatewayError.unsafeGlobalRuntimeStopped
-      }
-    }
-    return observed
   }
 
   private func startAllStreams() {
@@ -1095,15 +1075,25 @@ public final class DashboardStore: ObservableObject {
   static func previewRequested(
     environment: [String: String] = ProcessInfo.processInfo.environment,
     arguments: [String] = ProcessInfo.processInfo.arguments,
-    executableURL: URL? = Bundle.main.executableURL
+    executableURL: URL? = Bundle.main.executableURL,
+    developmentUpdatesDisabled: Bool = Bundle.main.object(
+      forInfoDictionaryKey: "MihomoBoxDevelopmentUpdatesDisabled"
+    ) as? Bool == true
   ) -> Bool {
     let requested =
       environment["MIHOMO_NATIVE_UI_PREVIEW"] == "1" || arguments.contains("--native-ui-preview")
     guard requested, let executableURL else {
       return false
     }
-    let path = executableURL.standardizedFileURL.path
-    return path.contains("/src-tauri/target/") || path.contains("/.build/")
+    let resolved = executableURL.resolvingSymlinksInPath().standardizedFileURL
+    let components = resolved.pathComponents
+    if let buildIndex = components.firstIndex(of: ".build") {
+      return buildIndex > 0 && components[buildIndex - 1] == "mihomo-app"
+    }
+    guard developmentUpdatesDisabled,
+      components.suffix(4) == ["MihomoBox.app", "Contents", "MacOS", "mihomo-app"]
+    else { return false }
+    return components.dropLast(4).last == "build"
   }
 
   private func loadPreviewFixtures() {

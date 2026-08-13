@@ -4,8 +4,9 @@
 
 ```text
 MihomoBox.app (current user)
-├── Contents/MacOS/mihomo-app       Tauri lifecycle, tray, updater
+├── Contents/MacOS/mihomo-app       Swift/AppKit lifecycle + tray
 ├── linked MihomoBoxUI              SwiftUI window + typed controller store
+├── embedded Sparkle.framework      signed App update and atomic relaunch
 ├── current-user login item         starts only the hidden tray App after login
 ├── linked MihomoControl            signed direct XPC client used by SwiftUI
 ├── Contents/MacOS/mihomoboxctl     signed XPC client used by CLI
@@ -36,12 +37,20 @@ they use authenticated XPC. Later App releases synchronize the fixed
 `mihomo-daemon`, `mihomo-agent`, and `mihomo` component set through that XPC
 boundary without modifying the LaunchDaemon plist.
 
+An install without an existing root-owned active-profile marker stages the
+bundled REJECT provisioning profile, but the LaunchDaemon starts only its XPC
+control plane. The agent, TUN, and DNS ownership remain stopped until the App
+activates its bounded snapshot of the selected user profile and the daemon
+proves full network health. This avoids both a DIRECT window and a temporary
+traffic outage while keeping user-controlled paths outside the root bootstrap.
+
 ## Ownership
 
 | Resource | Owner | Reason |
 |---|---|---|
-| App lifecycle and tray | current-user Tauri process | app shell must not run as root |
+| App lifecycle and tray | current-user Swift/AppKit process | app shell must not run as root |
 | Main window and dashboard state | in-process SwiftUI module | native UI with no browser bridge |
+| App update verification and replacement | embedded pinned Sparkle framework | mature EdDSA and atomic install boundary |
 | Desktop/CLI control requests | signed XPC client | no direct privileged or controller access |
 | XPC authentication and command authorization | root daemon | one narrow privilege boundary |
 | Agent lifecycle and profile transactions | root daemon | serialized, rollback-capable mutations |
@@ -81,6 +90,15 @@ SwiftUI receives decoded DTOs through a typed gateway; its public API cannot
 express controller identity, managed DNS or TUN patches, arbitrary shell,
 filesystem, arbitrary request bodies, or arbitrary network endpoints.
 
+All mutating operations share one daemon transaction lock, including requests
+from different App/CLI peers. Outbound-mode and proxy-selection transactions
+perform before-state capture, controller mutation, readback and rollback inside
+that lock and return the verified post-snapshot in the same XPC response. Raw
+controller forwarding cannot express mode, TUN, proxy-selector, proxy-provider,
+DNS, or controller-identity mutations. A fail-closed stop is successful only
+after an uncached inspection proves the agent/controller/TUN are gone, system
+DNS is unmanaged, and the remaining network state is consistent.
+
 ## Startup Sequence
 
 1. launchd starts `mihomo-daemon` and registers its Mach service before login.
@@ -91,29 +109,45 @@ filesystem, arbitrary request bodies, or arbitrary network endpoints.
 5. The agent adds `127.0.0.53` to `lo0`, binds UDP/TCP 53, and starts Mihomo.
 6. After controller, TUN, fake-IP route, and DNS validation, the agent backs up
    and applies DNS to the active PrimaryService.
-7. Tauri starts as an accessory application, compares bundled and installed
+7. The Swift `NSApplication` starts with accessory activation policy, compares bundled and installed
    component digests through XPC, and synchronizes signed changes.
-8. Tauri polls runtime state through XPC. The first healthy Enhanced TUN state
+8. The AppKit tray polls runtime state through XPC. The first healthy Enhanced TUN state
    observed from an App in `/Applications` or `~/Applications` applies a
-   one-time user-level default to start Tauri hidden at login. The root
+   one-time user-level default to start MihomoBox hidden at login. The root
    LaunchDaemon, rather than this login item, remains responsible for restoring
    the managed service and `tun.enable: true` at system startup.
-9. Tauri checks the signed App update feed. The main `NSWindow` is still absent;
+9. Sparkle checks the signed App update feed. The main `NSWindow` is still absent;
    selecting `Show Main Window` creates one `NSHostingController`, starts the
    bounded SwiftUI controller streams, and reuses that window until App exit.
    The hosting controller follows AppKit's resizable content bounds. The last
    non-full-screen frame is restored on the next process launch and constrained
    to a connected display before presentation.
 
+All user-interface control is in one process:
+
+```text
+NSMenu / SwiftUI
+    → typed Swift control object
+    → MihomoControlSession
+    → authenticated Mach XPC
+```
+
+`DashboardStore`, `ControlGateway`, and the tray coordinator are in-process
+types, not services or subprocesses. `mihomoboxctl` remains bundled for explicit
+operator use, but the App never spawns it for normal control.
+
 If the agent exits unexpectedly, the daemon restores the single-agent
 invariant before relaunch. Requested stop/uninstall paths suppress restart and
 wait for the agent's DNS restoration to finish.
 
-When the daemon binary changes, the old authenticated daemon returns the update
-result and exits with failure after a short grace period. launchd's existing
-`KeepAlive` policy then starts the newly verified binary. Agent or Mihomo-only
-changes restart only the agent. No administrator dialog is involved after the
-initial LaunchDaemon installation.
+When the daemon binary changes, the old authenticated daemon keeps a root-only
+pending record and complete signed backup, atomically replaces the fixed set,
+then exits after a short grace period. launchd starts the new daemon, which
+commits only after full route/TUN/DNS health validation. A failed or interrupted
+boot atomically restores the old set and restarts again; the App/CLI sees
+`update_pending` until commit and cannot report transient new hashes as
+success. Agent or Mihomo-only changes validate before deleting their backup.
+No administrator dialog is involved after the initial LaunchDaemon installation.
 
 ## Runtime Endpoints
 

@@ -21,5 +21,14 @@ executed by MihomoBox.
 
 Copyright 2023 MetaCubeX
 
+## Sparkle
+
+Sparkle 2.9.4 is distributed under the MIT License together with the retained
+licenses of its bundled third-party components. MihomoBox uses Sparkle only in
+the unprivileged user application to verify and install signed App updates; it
+does not change the root daemon or XPC trust boundary.
+
+Copyright (c) 2006-2013 Andy Matuschak and contributors
+
 The full license texts are retained in the application resources and the
 upstream projects remain the authoritative source for their copyright notices.

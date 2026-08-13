@@ -8,16 +8,20 @@ PROFILES_DIR="$APP_SUPPORT/profiles"
 ACTIVE_PROFILE="$APP_SUPPORT/active-profile"
 CONTROLLER_SECRET="$APP_SUPPORT/controller-secret"
 CONTROLLER_METADATA="$APP_SUPPORT/controller.json"
+COMPONENT_VERSION="$APP_SUPPORT/component-version"
+PROVISIONING_STATE="$APP_SUPPORT/provisioning"
 CLI_ENTRY="/usr/local/bin/mihomoboxctl"
+CLI_TARGET_METADATA="$APP_SUPPORT/cli-target"
 LOG_DIR="/Library/Logs/Mihomo App"
 PLIST="/Library/LaunchDaemons/dev.linsheng.mihomo.daemon.plist"
 LABEL="dev.linsheng.mihomo.daemon"
 RENAMED_PLIST="/Library/LaunchDaemons/dev.linsheng.mihomo-app.daemon.plist"
 RENAMED_LABEL="dev.linsheng.mihomo-app.daemon"
-LEGACY_DIR="/opt/homebrew/etc/mihomo"
 LEGACY_LABEL="homebrew.mxcl.mihomo"
 LEGACY_MARKER="$APP_SUPPORT/homebrew-mihomo-was-running"
 APP_BUNDLE=""
+VERIFIED_APP_SNAPSHOT=0
+VERIFIED_APP_VERSION=""
 DRY_RUN=0
 RESTORE=0
 RESTORE_NETWORK=0
@@ -25,7 +29,6 @@ START_SERVICE=0
 RESTART_SERVICE=0
 IMPORT_PROFILE=""
 SWITCH_PROFILE=""
-INITIAL_PROFILE=""
 ACTIVATE_PROFILE=0
 ROLLBACK_DIR=""
 PROFILE_ROLLBACK_DIR=""
@@ -38,12 +41,17 @@ PREVIOUS_CLI_LINK_PRESENT=0
 CLI_LINK_CHANGED=0
 
 usage() {
-  echo "usage: $0 [--app-bundle PATH] [--initial-profile PATH] [--dry-run] [--restore | --restore-network | --start | --restart | --import-profile PATH [--activate] | --switch-profile NAME]"
+  echo "usage: $0 [--app-bundle PATH --dry-run] [--restore | --restore-network | --start | --restart | --import-profile PATH [--activate] | --switch-profile NAME]"
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --app-bundle) APP_BUNDLE="${2:?missing app bundle path}"; shift 2 ;;
+    --verified-app-snapshot)
+      APP_BUNDLE="${2:?missing verified App snapshot path}"
+      VERIFIED_APP_SNAPSHOT=1
+      shift 2
+      ;;
     --dry-run) DRY_RUN=1; shift ;;
     --restore) RESTORE=1; shift ;;
     --restore-network) RESTORE_NETWORK=1; shift ;;
@@ -51,7 +59,6 @@ while [[ $# -gt 0 ]]; do
     --restart) RESTART_SERVICE=1; shift ;;
     --import-profile) IMPORT_PROFILE="${2:?missing profile path}"; shift 2 ;;
     --switch-profile) SWITCH_PROFILE="${2:?missing profile name}"; shift 2 ;;
-    --initial-profile) INITIAL_PROFILE="${2:?missing initial profile path}"; shift 2 ;;
     --activate) ACTIVATE_PROFILE=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -70,10 +77,6 @@ if [[ "$ACTIVATE_PROFILE" -eq 1 && -z "$IMPORT_PROFILE" ]]; then
   echo "--activate requires --import-profile" >&2
   exit 2
 fi
-if [[ -n "$INITIAL_PROFILE" && $((RESTORE + RESTORE_NETWORK + START_SERVICE + RESTART_SERVICE + (${#IMPORT_PROFILE} > 0) + (${#SWITCH_PROFILE} > 0))) -gt 0 ]]; then
-  echo "--initial-profile is only valid while installing the daemon" >&2
-  exit 2
-fi
 if [[ "$DRY_RUN" -eq 1 && ( -n "$IMPORT_PROFILE" || -n "$SWITCH_PROFILE" ) ]]; then
   echo "--dry-run is not supported for profile operations" >&2
   exit 2
@@ -89,12 +92,99 @@ run() {
   fi
 }
 
+ensure_root_directory() {
+  local path="$1"
+  local mode="$2"
+  run /bin/mkdir -p "$path"
+  [[ "$DRY_RUN" -eq 0 ]] || return 0
+  [[ -d "$path" && ! -L "$path" &&
+    "$(/usr/bin/stat -f '%u' "$path")" == "0" ]] || {
+    echo "refusing non-root or symlinked managed directory" >&2
+    return 1
+  }
+  /usr/sbin/chown root:wheel "$path"
+  /bin/chmod "$mode" "$path"
+}
+
 require_root() {
   if [[ "$DRY_RUN" -eq 0 && "$EUID" -ne 0 ]]; then
     echo "install-daemon.sh must run as root" >&2
     exit 1
   fi
 }
+
+require_verified_bootstrap() {
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    [[ "$VERIFIED_APP_SNAPSHOT" -eq 0 ]] || {
+      echo "--verified-app-snapshot is reserved for the signed Swift bootstrap" >&2
+      exit 1
+    }
+    return
+  fi
+
+  require_root
+  [[ "$VERIFIED_APP_SNAPSHOT" -eq 1 ]] || {
+    echo "refusing privileged execution outside the signed Swift bootstrap" >&2
+    exit 1
+  }
+  [[ "$APP_BUNDLE" == /private/tmp/mihomobox-bootstrap.*/MihomoBox.app &&
+    -d "$APP_BUNDLE" && ! -L "$APP_BUNDLE" ]] || {
+    echo "invalid verified App snapshot" >&2
+    exit 1
+  }
+  local stage="${APP_BUNDLE%/MihomoBox.app}"
+  [[ -d "$stage" && ! -L "$stage" &&
+    "$(/usr/bin/stat -f '%u:%Lp' "$stage")" == "0:700" ]] || {
+    echo "verified App snapshot is not in a root-private directory" >&2
+    exit 1
+  }
+  local installer="$APP_BUNDLE/Contents/Resources/scripts/install-daemon.sh"
+  [[ -f "$installer" && ! -L "$installer" && -x "$installer" &&
+    "$installer" -ef "${BASH_SOURCE[0]}" ]] || {
+    echo "installer is not the verified regular snapshot resource" >&2
+    exit 1
+  }
+  local info_plist="$APP_BUNDLE/Contents/Info.plist"
+  [[ -f "$info_plist" && ! -L "$info_plist" ]] || {
+    echo "verified App snapshot is missing a regular Info.plist" >&2
+    exit 1
+  }
+  VERIFIED_APP_VERSION="$(/usr/bin/plutil -extract CFBundleShortVersionString raw \
+    -o - "$info_plist")" || {
+    echo "verified App snapshot version is unavailable" >&2
+    exit 1
+  }
+  [[ "$VERIFIED_APP_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
+    echo "verified App snapshot version is not strict semantic versioning" >&2
+    exit 1
+  }
+  ROOT="$APP_BUNDLE/Contents/Resources"
+}
+
+write_component_version() {
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "+ atomically install component-version from the verified App snapshot"
+    return
+  fi
+  [[ -n "$VERIFIED_APP_VERSION" ]] || {
+    echo "verified App component version is unavailable" >&2
+    return 1
+  }
+  local staged
+  staged="$(/usr/bin/mktemp "$APP_SUPPORT/.component-version.XXXXXX")"
+  /usr/bin/printf '%s\n' "$VERIFIED_APP_VERSION" > "$staged"
+  /usr/sbin/chown root:wheel "$staged"
+  /bin/chmod 0600 "$staged"
+  /bin/mv -f "$staged" "$COMPONENT_VERSION"
+  [[ -f "$COMPONENT_VERSION" && ! -L "$COMPONENT_VERSION" &&
+    "$(/usr/bin/stat -f '%u:%g:%Lp' "$COMPONENT_VERSION")" == "0:0:600" &&
+    "$(/usr/bin/sed -n '1p' "$COMPONENT_VERSION")" == "$VERIFIED_APP_VERSION" ]] || {
+    echo "component-version atomic readback failed" >&2
+    return 1
+  }
+}
+
+require_verified_bootstrap
 
 resolve_sources() {
   if [[ -n "$APP_BUNDLE" ]]; then
@@ -108,8 +198,16 @@ resolve_sources() {
     AGENT_SOURCE="$ROOT/.build/release/mihomo-agent"
     CLI_SOURCE="$ROOT/.build/release/mihomoboxctl"
     local triple
-    triple="${TARGET_TRIPLE:-$(rustc -vV | /usr/bin/sed -n 's/^host: //p')}"
-    MIHOMO_SOURCE="$ROOT/src-tauri/binaries/mihomo-$triple"
+    if [[ -n "${TARGET_TRIPLE:-}" ]]; then
+      triple="$TARGET_TRIPLE"
+    else
+      case "${TARGET_ARCH:-$(/usr/bin/uname -m)}" in
+        arm64) triple="aarch64-apple-darwin" ;;
+        x86_64) triple="x86_64-apple-darwin" ;;
+        *) echo "unsupported target architecture" >&2; exit 1 ;;
+      esac
+    fi
+    MIHOMO_SOURCE="$ROOT/.build/staging/mihomo-$triple"
     RESOURCE_ROOT="$ROOT/deploy"
   fi
 }
@@ -189,42 +287,60 @@ managed_controller_ready() {
   [[ "$health" == *'"controller_reachable":true'* ]]
 }
 
-managed_cli_link() {
-  local target="$1"
-  [[ "$target" == */MihomoBox.app/Contents/MacOS/mihomoboxctl ]]
-}
-
 install_cli_entry() {
   if [[ -z "$APP_BUNDLE" ]]; then
-    echo "warning: skipping global CLI link outside a MihomoBox.app installation" >&2
+    echo "warning: skipping global CLI outside a MihomoBox.app installation" >&2
     return
   fi
   local parent="${CLI_ENTRY%/*}"
+  local managed_target="$APP_SUPPORT/mihomoboxctl"
   if [[ -e "$CLI_ENTRY" && ! -L "$CLI_ENTRY" ]]; then
-    echo "warning: preserving unrelated $CLI_ENTRY; use the CLI from MihomoBox.app/Contents/MacOS" >&2
+    echo "warning: preserving unrelated $CLI_ENTRY; use $managed_target" >&2
     return
   fi
   if [[ -L "$CLI_ENTRY" ]]; then
-    local target
-    target="$(/usr/bin/readlink "$CLI_ENTRY")"
-    if ! managed_cli_link "$target"; then
-      echo "warning: preserving unrelated symlink $CLI_ENTRY -> $target" >&2
-      return
+    local existing_target
+    existing_target="$(/usr/bin/readlink "$CLI_ENTRY")"
+    if [[ "$existing_target" != "$managed_target" ]]; then
+      local recorded_target=""
+      if [[ -f "$CLI_TARGET_METADATA" && ! -L "$CLI_TARGET_METADATA" &&
+        "$(/usr/bin/stat -f '%u:%g' "$CLI_TARGET_METADATA")" == "0:0" ]]; then
+        recorded_target="$(/usr/bin/sed -n '1p' "$CLI_TARGET_METADATA")"
+      fi
+      if [[ "$existing_target" != "$recorded_target" || -z "$recorded_target" ]]; then
+        echo "warning: preserving unrelated symlink $CLI_ENTRY" >&2
+        return
+      fi
     fi
-    [[ "$target" == "$CLI_SOURCE" ]] && return
   fi
   run /bin/mkdir -p "$parent"
-  if [[ "$DRY_RUN" -eq 0 ]]; then CLI_LINK_CHANGED=1; fi
-  run /bin/ln -sfn "$CLI_SOURCE" "$CLI_ENTRY"
+  run /bin/ln -sfn "$managed_target" "$CLI_ENTRY"
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    CLI_LINK_CHANGED=1
+    [[ -L "$CLI_ENTRY" && "$(/usr/bin/readlink "$CLI_ENTRY")" == "$managed_target" ]] || {
+      echo "managed CLI link readback failed" >&2
+      return 1
+    }
+    local staged
+    staged="$(/usr/bin/mktemp "$APP_SUPPORT/.cli-target.XXXXXX")"
+    /usr/bin/printf '%s\n' "$managed_target" > "$staged"
+    /usr/sbin/chown root:wheel "$staged"
+    /bin/chmod 0600 "$staged"
+    /bin/mv -f "$staged" "$CLI_TARGET_METADATA"
+  fi
 }
 
 remove_cli_entry() {
-  [[ -L "$CLI_ENTRY" ]] || return 0
-  local target
-  target="$(/usr/bin/readlink "$CLI_ENTRY")"
-  if managed_cli_link "$target"; then
+  local recorded_target=""
+  if [[ -f "$CLI_TARGET_METADATA" && ! -L "$CLI_TARGET_METADATA" &&
+    "$(/usr/bin/stat -f '%u:%g' "$CLI_TARGET_METADATA")" == "0:0" ]]; then
+    recorded_target="$(/usr/bin/sed -n '1p' "$CLI_TARGET_METADATA")"
+  fi
+  if [[ -n "$recorded_target" && -L "$CLI_ENTRY" &&
+    "$(/usr/bin/readlink "$CLI_ENTRY")" == "$recorded_target" ]]; then
     run /bin/rm -f "$CLI_ENTRY"
   fi
+  run /bin/rm -f "$CLI_TARGET_METADATA"
 }
 
 validate_profile_name() {
@@ -294,9 +410,8 @@ install_profile_for_first_start() {
     echo "selected profile does not exist or is not a regular file" >&2
     return 1
   }
-  /bin/mkdir -p "$PROFILES_DIR" "$MIHOMO_DATA"
-  /usr/sbin/chown root:wheel "$PROFILES_DIR"
-  /bin/chmod 0755 "$PROFILES_DIR"
+  ensure_root_directory "$PROFILES_DIR" 0755
+  ensure_root_directory "$MIHOMO_DATA" 0755
 
   local stored
   stored="$(/usr/bin/mktemp "$PROFILES_DIR/.import.XXXXXX")"
@@ -410,9 +525,8 @@ import_profile() {
   local name="${source##*/}"
   validate_profile_name "$name"
   [[ -x "$APP_SUPPORT/mihomo" ]] || { echo "Mihomo daemon is not installed" >&2; exit 1; }
-  /bin/mkdir -p "$PROFILES_DIR" "$MIHOMO_DATA"
-  /usr/sbin/chown root:wheel "$PROFILES_DIR"
-  /bin/chmod 0755 "$PROFILES_DIR"
+  ensure_root_directory "$PROFILES_DIR" 0755
+  ensure_root_directory "$MIHOMO_DATA" 0755
 
   local validation
   validation="$(/usr/bin/mktemp "$MIHOMO_DATA/.profile-import.XXXXXX")"
@@ -474,10 +588,14 @@ rollback_installation() {
   /bin/rm -rf "$APP_SUPPORT"
   /bin/rm -f "$PLIST" "$RENAMED_PLIST"
   if [[ "$CLI_LINK_CHANGED" -eq 1 ]]; then
-    /bin/rm -f "$CLI_ENTRY"
-    if [[ "$PREVIOUS_CLI_LINK_PRESENT" -eq 1 ]]; then
-      /bin/mkdir -p "${CLI_ENTRY%/*}"
-      /bin/ln -s "$PREVIOUS_CLI_LINK" "$CLI_ENTRY"
+    local installed_target="$APP_SUPPORT/mihomoboxctl"
+    if [[ -L "$CLI_ENTRY" &&
+      "$(/usr/bin/readlink "$CLI_ENTRY")" == "$installed_target" ]]; then
+      /bin/rm -f "$CLI_ENTRY"
+      if [[ "$PREVIOUS_CLI_LINK_PRESENT" -eq 1 ]]; then
+        /bin/mkdir -p "${CLI_ENTRY%/*}"
+        /bin/ln -s "$PREVIOUS_CLI_LINK" "$CLI_ENTRY"
+      fi
     fi
   fi
   if [[ -d "$ROLLBACK_DIR/app-support" ]]; then
@@ -535,6 +653,10 @@ start_service() {
       echo "Mihomo LaunchDaemon is not installed; run mihomoboxctl install first" >&2
       exit 1
     }
+    [[ ! -f "$PROVISIONING_STATE" ]] || {
+      echo "activate a profile before starting the managed runtime" >&2
+      exit 1
+    }
   fi
 
   if /bin/launchctl print "system/$LABEL" >/dev/null 2>&1; then
@@ -585,11 +707,23 @@ install_daemon() {
   require_root
   resolve_sources
   if [[ "$DRY_RUN" -eq 0 ]]; then
-    [[ -x "$DAEMON_SOURCE" ]] || { echo "missing daemon: $DAEMON_SOURCE" >&2; exit 1; }
-    [[ -x "$AGENT_SOURCE" ]] || { echo "missing agent: $AGENT_SOURCE" >&2; exit 1; }
-    [[ -x "$MIHOMO_SOURCE" ]] || { echo "missing Mihomo: $MIHOMO_SOURCE" >&2; exit 1; }
+    [[ -f "$DAEMON_SOURCE" && ! -L "$DAEMON_SOURCE" && -x "$DAEMON_SOURCE" ]] || {
+      echo "missing regular daemon: $DAEMON_SOURCE" >&2
+      exit 1
+    }
+    [[ -f "$AGENT_SOURCE" && ! -L "$AGENT_SOURCE" && -x "$AGENT_SOURCE" ]] || {
+      echo "missing regular agent: $AGENT_SOURCE" >&2
+      exit 1
+    }
+    [[ -f "$MIHOMO_SOURCE" && ! -L "$MIHOMO_SOURCE" && -x "$MIHOMO_SOURCE" ]] || {
+      echo "missing regular Mihomo: $MIHOMO_SOURCE" >&2
+      exit 1
+    }
     if [[ -n "$APP_BUNDLE" ]]; then
-      [[ -x "$CLI_SOURCE" ]] || { echo "missing CLI: $CLI_SOURCE" >&2; exit 1; }
+      [[ -f "$CLI_SOURCE" && ! -L "$CLI_SOURCE" && -x "$CLI_SOURCE" ]] || {
+        echo "missing regular CLI: $CLI_SOURCE" >&2
+        exit 1
+      }
     fi
   fi
 
@@ -598,10 +732,23 @@ install_daemon() {
     trap rollback_installation ERR
   fi
 
-  run /bin/mkdir -p "$APP_SUPPORT" "$MIHOMO_DATA" "$LOG_DIR"
+  ensure_root_directory "$APP_SUPPORT" 0755
+  ensure_root_directory "$MIHOMO_DATA" 0755
+  ensure_root_directory "$LOG_DIR" 0755
   run /usr/bin/install -o root -g wheel -m 0755 "$DAEMON_SOURCE" "$APP_SUPPORT/mihomo-daemon"
   run /usr/bin/install -o root -g wheel -m 0755 "$AGENT_SOURCE" "$APP_SUPPORT/mihomo-agent"
   run /usr/bin/install -o root -g wheel -m 0755 "$MIHOMO_SOURCE" "$APP_SUPPORT/mihomo"
+  if [[ -n "$APP_BUNDLE" ]]; then
+    run /usr/bin/install -o root -g wheel -m 0755 "$CLI_SOURCE" "$APP_SUPPORT/mihomoboxctl"
+    if [[ "$DRY_RUN" -eq 0 ]]; then
+      if ! [[ -f "$APP_SUPPORT/mihomoboxctl" && ! -L "$APP_SUPPORT/mihomoboxctl" &&
+        "$(/usr/bin/stat -f '%u:%g:%Lp' "$APP_SUPPORT/mihomoboxctl")" == "0:0:755" ]] ||
+        ! /usr/bin/cmp -s "$CLI_SOURCE" "$APP_SUPPORT/mihomoboxctl"; then
+        echo "installed CLI readback failed" >&2
+        exit 1
+      fi
+    fi
+  fi
   run /usr/bin/install -o root -g wheel -m 0600 "$RESOURCE_ROOT/daemon.json" "$APP_SUPPORT/daemon.json"
   # Left behind by installations up to 0.6.1, when profile configuration was a
   # Python helper staged here. Nothing calls it any more. Removed only on an
@@ -609,7 +756,8 @@ install_daemon() {
   # daemon, which still expects to find it.
   run /bin/rm -f "$APP_SUPPORT/configure_mihomo.py"
 
-  local selected_profile="$INITIAL_PROFILE"
+  local selected_profile=""
+  local provisioning_install=0
   if [[ -z "$selected_profile" && -f "$ACTIVE_PROFILE" ]]; then
     local selected_name
     selected_name="$(/usr/bin/sed -n '1p' "$ACTIVE_PROFILE")"
@@ -618,15 +766,15 @@ install_daemon() {
   fi
   if [[ -n "$selected_profile" ]]; then
     install_profile_for_first_start "$selected_profile"
+    run /bin/rm -f "$PROVISIONING_STATE"
   else
-    if [[ ! -f "$MIHOMO_DATA/config.yaml" ]]; then
-      if [[ -d "$LEGACY_DIR" ]]; then
-        run /bin/cp -R "$LEGACY_DIR/." "$MIHOMO_DATA/"
-      else
-        run /usr/bin/install -o root -g wheel -m 0644 \
-          "$RESOURCE_ROOT/default-config.yaml" "$MIHOMO_DATA/config.yaml"
-      fi
-    fi
+    # A configuration without an active-profile marker has no authenticated
+    # product-level owner. Never reuse it during install/repair: older builds
+    # could leave a DIRECT fallback here. The bundled provisioning profile is
+    # deliberately REJECT-only; the signed App activates the selected profile
+    # over typed XPC after this verified installer returns.
+    run /usr/bin/install -o root -g wheel -m 0644 \
+      "$RESOURCE_ROOT/default-config.yaml" "$MIHOMO_DATA/config.yaml"
     run "$AGENT_SOURCE" --configure-profile \
       --profile "$MIHOMO_DATA/config.yaml" \
       --profile-backup "$APP_SUPPORT/config.before-mihomo-app.yaml" \
@@ -638,6 +786,10 @@ install_daemon() {
     run /usr/sbin/chown root:wheel "$CONTROLLER_METADATA"
     run /bin/chmod 0600 "$CONTROLLER_METADATA"
     run "$APP_SUPPORT/mihomo" -t -d "$MIHOMO_DATA" -f "$MIHOMO_DATA/config.yaml"
+    provisioning_install=1
+    run /usr/bin/touch "$PROVISIONING_STATE"
+    run /usr/sbin/chown root:wheel "$PROVISIONING_STATE"
+    run /bin/chmod 0600 "$PROVISIONING_STATE"
   fi
 
   if /bin/launchctl print "system/$LEGACY_LABEL" >/dev/null 2>&1; then
@@ -662,23 +814,34 @@ install_daemon() {
   run /usr/bin/install -o root -g wheel -m 0644 \
     "$RESOURCE_ROOT/dev.linsheng.mihomo.daemon.plist" "$PLIST"
   run /bin/rm -f "$RENAMED_PLIST"
+  # Commit the version floor before the new daemon starts so its first
+  # component-update request cannot observe an unversioned installation. The
+  # surrounding installation rollback restores the prior marker on any later
+  # health failure.
+  write_component_version
   run /bin/launchctl bootstrap system "$PLIST"
   run /bin/launchctl enable "system/$LABEL"
   run /bin/launchctl kickstart -k "system/$LABEL"
 
-  wait_for "authenticated Mihomo controller" managed_controller_ready
-  wait_for "system DNS 127.0.0.53:53" /usr/bin/dig @127.0.0.53 -p 53 test.invalid A +time=1 +tries=1
-  wait_for "macOS PrimaryService DNS preferences" \
-    "$APP_SUPPORT/mihomo-agent" --config "$APP_SUPPORT/daemon.json" --check-system-dns
-  wait_for "effective macOS DNS" \
-    /bin/sh -c "/usr/sbin/scutil --dns | /usr/bin/grep -q '127\\.0\\.0\\.53'"
-  wait_for "fully managed network" managed_network_ready
+  if [[ "$provisioning_install" -eq 1 ]]; then
+    # The root daemon is available for authenticated profile activation, but
+    # it deliberately has not launched the agent or modified system networking.
+    wait_for "authenticated daemon XPC" "$APP_SUPPORT/mihomoboxctl" profiles --json
+  else
+    wait_for "authenticated Mihomo controller" managed_controller_ready
+    wait_for "system DNS 127.0.0.53:53" /usr/bin/dig @127.0.0.53 -p 53 test.invalid A +time=1 +tries=1
+    wait_for "macOS PrimaryService DNS preferences" \
+      "$APP_SUPPORT/mihomo-agent" --config "$APP_SUPPORT/daemon.json" --check-system-dns
+    wait_for "effective macOS DNS" \
+      /bin/sh -c "/usr/sbin/scutil --dns | /usr/bin/grep -q '127\\.0\\.0\\.53'"
+    wait_for "fully managed network" managed_network_ready
+  fi
   install_cli_entry
   trap - ERR
   if [[ -n "$ROLLBACK_DIR" ]]; then
     /bin/rm -rf "$ROLLBACK_DIR"
   fi
-  echo "installed $LABEL"
+  echo "installed $LABEL provisioning=$provisioning_install"
 }
 
 if [[ -n "$IMPORT_PROFILE" ]]; then

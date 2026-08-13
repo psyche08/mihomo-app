@@ -34,5 +34,4 @@ fi
 /bin/rm -rf "$OUTPUT"
 /bin/mkdir -p "$OUTPUT/THIRD_PARTY_LICENSES"
 /bin/cp -R "$CACHE/packages/ui/.output/public/." "$OUTPUT/"
-/usr/bin/install -m 0644 "$ROOT/assets/config.js" "$OUTPUT/config.js"
 /usr/bin/install -m 0644 "$CACHE/LICENSE" "$OUTPUT/THIRD_PARTY_LICENSES/MetaCubeXD.LICENSE"

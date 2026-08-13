@@ -35,10 +35,21 @@ public enum SanitizedProcessLogRedaction {
         // key=value and "key": "value" for anything credential-shaped. The
         // optional quote after the key is what makes the JSON form match.
         let keys = secretKeys.joined(separator: "|")
+        add(
+            "(?<![A-Za-z0-9_])((?:proxy-)?authorization|cookie|set-cookie)\\s*:\\s*"
+                + "(?:basic|bearer|digest)?\\s*[^\\s,;]+",
+            "$1: \(placeholder)"
+        )
+        add(
+            "(?<![A-Za-z0-9_])(\(keys))\"?\\s*[=:]\\s*\"?"
+                + "(?:basic|bearer|digest)\\s+[^\\s\"&,};]+\"?",
+            "$1=\(placeholder)"
+        )
         add("(?<![A-Za-z0-9_])(\(keys))\"?\\s*[=:]\\s*\"?[^\\s\"&,}]+\"?", "$1=\(placeholder)")
-        // Subscription URLs: any http(s) URL carrying a query string, which is
-        // how node lists are handed out. A bare URL keeps its path.
-        add("(https?://[^\\s?]+)\\?[^\\s]*", "$1?\(placeholder)")
+        // Subscription URLs may put access material in userinfo, path, query,
+        // or fragment. Keep only scheme and authority; diagnostics do not need
+        // a credential-bearing subscription path.
+        add("(https?://)(?:[^/@\\s]+@)?([^/\\s?#]+)(?:[/\\s?#][^\\s]*)?", "$1$2/\(placeholder)")
         // Long opaque tokens that survived the above.
         add("(?<![A-Za-z0-9+/=])[A-Za-z0-9+/=]{40,}(?![A-Za-z0-9+/=])", placeholder)
         return built

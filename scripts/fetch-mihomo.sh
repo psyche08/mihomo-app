@@ -3,8 +3,16 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION="v1.19.28"
-TRIPLE="${TARGET_TRIPLE:-$(rustc -vV | /usr/bin/sed -n 's/^host: //p')}"
-DEST="$ROOT/src-tauri/binaries/mihomo-$TRIPLE"
+if [[ -n "${TARGET_TRIPLE:-}" ]]; then
+  TRIPLE="$TARGET_TRIPLE"
+else
+  case "${TARGET_ARCH:-$(/usr/bin/uname -m)}" in
+    arm64) TRIPLE="aarch64-apple-darwin" ;;
+    x86_64) TRIPLE="x86_64-apple-darwin" ;;
+    *) echo "unsupported target architecture" >&2; exit 1 ;;
+  esac
+fi
+DEST="$ROOT/.build/staging/mihomo-$TRIPLE"
 CACHE="$ROOT/.cache/mihomo"
 
 case "$TRIPLE" in

@@ -31,6 +31,6 @@ proxy-groups:
   - name: PROXY
     type: select
     proxies:
-      - DIRECT
+      - REJECT
 rules:
   - MATCH,PROXY

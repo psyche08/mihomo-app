@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SOURCE="$ROOT/assets/Meta.png"
 EXPECTED_SHA256="0dc1c7df03c02ac34ea60b7b169020648abdc6e199627c2e1276d337249289c8"
-OUTPUT="$ROOT/src-tauri/icons"
+OUTPUT="$ROOT/Resources/AppIcon"
 
 verify() {
   local path="$1"

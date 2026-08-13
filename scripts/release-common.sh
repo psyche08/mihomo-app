@@ -26,29 +26,25 @@ release_write_notary_state() {
   local status="$6"
   local state_dir
   local temporary
+  local updated_at
   state_dir="$(/usr/bin/dirname "$state_file")"
   /bin/mkdir -p "$state_dir"
   temporary="$(/usr/bin/mktemp "$state_dir/.notary-state.XXXXXX")"
-  # shellcheck disable=SC2016
-  /usr/bin/env node -e '
-    const fs = require("fs");
-    const [path, target, sha256, submissionId, uploaded, status] =
-      process.argv.slice(1);
-    const state = {
-      schema_version: 1,
-      artifact: target,
-      artifact_sha256: sha256,
-      submission_id: submissionId || null,
-      upload_confirmed: uploaded === "true",
-      status,
-      updated_at: new Date().toISOString(),
-    };
-    fs.writeFileSync(path, `${JSON.stringify(state, null, 2)}\n`, {
-      encoding: "utf8",
-      mode: 0o600,
-    });
-  ' "$temporary" "$target" "$artifact_sha256" "$submission_id" \
-    "$uploaded" "$status"
+  case "$uploaded" in
+    true|false) ;;
+    *) echo "invalid upload confirmation state" >&2; return 1 ;;
+  esac
+  updated_at="$(/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  /usr/bin/plutil -create json "$temporary"
+  /usr/bin/plutil -insert schema_version -integer 1 "$temporary"
+  /usr/bin/plutil -insert artifact -string "$target" "$temporary"
+  /usr/bin/plutil -insert artifact_sha256 -string "$artifact_sha256" "$temporary"
+  if [[ -n "$submission_id" ]]; then
+    /usr/bin/plutil -insert submission_id -string "$submission_id" "$temporary"
+  fi
+  /usr/bin/plutil -insert upload_confirmed -bool "$uploaded" "$temporary"
+  /usr/bin/plutil -insert status -string "$status" "$temporary"
+  /usr/bin/plutil -insert updated_at -string "$updated_at" "$temporary"
   /bin/chmod 600 "$temporary"
   /bin/mv -f "$temporary" "$state_file"
 }
@@ -56,14 +52,9 @@ release_write_notary_state() {
 release_read_notary_state() {
   local state_file="$1"
   local key="$2"
-  /usr/bin/env node -e '
-    const fs = require("fs");
-    const [path, key] = process.argv.slice(1);
-    const state = JSON.parse(fs.readFileSync(path, "utf8"));
-    const value = state[key];
-    if (value === null || value === undefined) process.exit(0);
-    process.stdout.write(typeof value === "boolean" ? String(value) : value);
-  ' "$state_file" "$key"
+  if /usr/bin/plutil -type "$key" "$state_file" >/dev/null 2>&1; then
+    /usr/bin/plutil -extract "$key" raw -n -o - "$state_file"
+  fi
 }
 
 release_valid_submission_id() {

@@ -4,38 +4,43 @@
 
 | Component | Pin | Verification |
 |---|---|---|
-| Tauri | `2.11.x` Cargo/npm lockfiles | Cargo/npm integrity metadata |
+| Sparkle | `2.9.4` | SwiftPM exact version; binary artifact checksum `cb6fdbdc8884f15d62a616e79face92b08322410fd2d425edc6596ccbf4ba3b0` |
 | MetaCubeXD visual reference | tag `v1.271.0`, commit `c4622599d0a597378729a91c3b7f76c5d9803831` | exact revision check; MIT license copied |
 | Mihomo | release `v1.19.28` | architecture-specific SHA-256 |
-| App icon | upstream Mihomo `Meta.png` | bundled source SHA-256 |
+| App icon | upstream Mihomo `Meta.png` | source and derived-output SHA-256 |
 
-`scripts/prepare-metacubexd.sh` is an explicit reference-refresh tool. It builds
-the pinned upstream dashboard for visual comparison and does not participate
-in the App bundle. The shipped main window is native SwiftUI.
+`VERSION` is the sole product-version source. SwiftPM builds the user App,
+daemon, agent and operator CLI. `scripts/build-macos-app.sh` assembles those
+products, the pinned Mihomo binary, Sparkle.framework and checked-in resources
+into `build/MihomoBox.app`.
 
-`scripts/fetch-mihomo.sh` selects the target-triple asset, verifies the pinned
-archive checksum, and stages the executable using Tauri's required
-`name-<target-triple>` convention.
+The pinned MetaCubeXD checkout is a visual reference only. Its JavaScript is
+never linked, copied into the App, or executed at runtime.
 
-`scripts/prepare-binaries.sh` builds the Swift release daemon, agent, XPC client,
-and static `MihomoBoxUI` library, then stages the external executables. Cargo
-links the SwiftUI library into `mihomo-app`; Tauri places the executables in
-`Contents/MacOS` without the target suffix.
+## Operator-owned compilation
 
-SwiftPM and Cargo both cache absolute build paths. Their preparation scripts
-record the project root and clean only generated caches when the checkout moves.
+Compilation, tests, validation, signing, notarization, packaging and deployment
+must be run by the operator outside an agent sandbox. An agent may edit or
+statically inspect the commands, but must not execute them.
 
-`scripts/prepare-icons.sh` verifies the checked-in official Mihomo `Meta.png`
-and all derived PNG/ICNS outputs by SHA-256. Generated icons are committed;
-normal builds do not rewrite ICNS metadata.
-
-## Local Validation
+From the repository root, the operator runs:
 
 ```bash
 ./scripts/validate.sh
 ```
 
-The final bundle check must prove:
+For a production bundle, set either `SPARKLE_PUBLIC_ED_KEY` or
+`SPARKLE_PUBLIC_ED_KEY_FILE` to the base64 raw 32-byte public key. The file must
+be regular and non-symlink; the key must be one token with no embedded
+whitespace. With neither value, validation explicitly builds a development App
+whose feed and automatic updates are disabled, and release rejects that App.
+
+Validation resolves pinned Swift packages, refreshes the visual reference,
+runs Swift and shell tests, builds the bundle through
+`scripts/build-macos-app.sh`, and performs structural checks on the final App.
+It never installs the LaunchDaemon and never changes the current network.
+
+The bundle gate must find exactly these product executables:
 
 ```text
 MihomoBox.app/Contents/MacOS/mihomo-app
@@ -45,169 +50,196 @@ MihomoBox.app/Contents/MacOS/mihomo-agent
 MihomoBox.app/Contents/MacOS/mihomoboxctl
 ```
 
-For an explicit window smoke test without changing the default hidden startup:
+It must also verify `Sparkle.framework`, `@executable_path/../Frameworks`, the
+bundle identifier, `VERSION`, third-party licenses and the absence of WebView
+or Tauri runtime assets.
+
+For an explicit development-window smoke test:
 
 ```bash
-'src-tauri/target/release/bundle/macos/MihomoBox.app/Contents/MacOS/mihomo-app' \
-  --smoke-show-window
+'build/MihomoBox.app/Contents/MacOS/mihomo-app' --smoke-show-window
 ```
 
-Add `--native-ui-preview` as well to use bounded in-memory fixtures for visual
-QA without requiring a release-signed XPC peer. The environment variables
-`MIHOMO_APP_SMOKE_SHOW_WINDOW=1` and `MIHOMO_NATIVE_UI_PREVIEW=1` are equivalent
-for automation. Preview is honored only when the executable itself is running
-from this checkout's `.build` or `src-tauri/target` tree; installed Apps ignore
-it. Production code has no unsigned XPC bypass, and preview mode never opens a
-control session.
+Add `--native-ui-preview` to use bounded in-memory visual fixtures. Preview is
+honored only for development executables in this checkout; an installed App
+always uses authenticated XPC.
 
-The ad-hoc bundle produced by `validate.sh` proves native linkage, policy tests,
-request mapping and packaging only. It cannot prove the certificate-constrained
-Mach service handshake: ad-hoc processes are deliberately rejected, and local
-validation never installs or activates the privileged daemon.
+An ad-hoc validation bundle proves linkage, tests and packaging only. The Mach
+service deliberately rejects an ad-hoc peer, so a release-signed machine gate
+must still verify the real App-to-daemon IPC path.
 
-Before shipping, exercise the signed IPC path on an isolated macOS test machine:
+## Signed-machine acceptance
 
-1. build and sign the App and every bundled helper with the same Developer ID leaf;
-2. explicitly install the bundled LaunchDaemon and activate a test profile;
-3. run the signed `mihomoboxctl rpc version`, `rpc snapshot`, and
-   `rpc connections` read-only probes;
-4. open the SwiftUI window without preview mode and verify live proxy, rule,
-   connection, traffic, memory, and log data;
-5. exercise a proxy selection, rule toggle, connection close, and each safe
-   Core Config control, then verify controller readback in the window and
-   `rpc snapshot` where applicable.
+Before publication, use an isolated Mac with a release-signed App and an
+explicitly installed test LaunchDaemon:
 
-This signed-machine check is a release acceptance gate, not part of ordinary
-validation, because it requires an installed root service and changes test
-network/runtime state.
+1. verify all five executables share the App's Developer ID leaf;
+2. run signed, read-only `mihomoboxctl rpc version`, `rpc snapshot` and
+   `rpc connections` probes;
+3. open the SwiftUI window without preview and verify all live pages;
+4. verify tray TUN, mode, proxy and profile controls with authoritative XPC
+   readback;
+5. verify component synchronization, hidden login startup, window restoration,
+   DNS/TUN health and one daemon-owned Mihomo process;
+6. exercise both the legacy 0.7-to-0.8 updater and the Sparkle updater path.
 
-## Signing and Notarization
+This acceptance changes runtime state and is not part of normal validation.
 
-Unsigned local builds are acceptable for development only. Release builds use
-the Developer ID Application certificate whose team matches
-`NOTARY_TEAM_ID`. The app, daemon, agent, and CLI helper are signed with that
-same leaf certificate because the XPC boundary rejects a differently signed
-peer. Credentials are supplied only through:
+## Signing and notarization
+
+`scripts/release-macos.sh` never compiles. It accepts the already validated
+`build/MihomoBox.app`, verifies its version, build manifest, and the external
+`build/MihomoBox-X.Y.Z-unsigned-bundle.sha256` provenance tree, then signs from
+the inside out. The external tree records every unsigned bundle directory,
+regular file and safe relative symbolic link, including modes, file hashes and
+link-target hashes. Links whose normalized target escapes the App and all
+socket, device, FIFO or unknown entries are rejected. Release recomputes the
+whole tree byte-for-byte, so extra, missing or modified entries fail even if an
+in-bundle manifest is also changed. A non-default App path must supply the
+matching external manifest with `--provenance`. Sparkle helpers/framework,
+`mihomo-app`, `mihomo`, daemon, agent, CLI and the outer App must all use the
+same Developer ID Application leaf.
+Do not use `codesign --deep` to sign; use it only for final verification.
+
+The release environment supplies:
 
 ```text
 NOTARY_TEAM_ID
 NOTARY_APPLE_ID
 NOTARY_PASSWORD
+CODESIGN_IDENTITY_FINGERPRINT (optional when the team has exactly one identity)
+SPARKLE_DISTRIBUTION_ROOT
+SPARKLE_ED_KEY_PATH
+SPARKLE_GENERATE_APPCAST_SHA256
+SPARKLE_SIGN_UPDATE_SHA256
+SPARKLE_SIGNATURE_VERIFIER
+SPARKLE_SIGNATURE_VERIFIER_SHA256
+LEGACY_MINISIGN
+LEGACY_UPDATER_PRIVATE_KEY_FILE
 ```
 
-Run `scripts/release-macos.sh`; it selects the matching identity, builds and
-signs the Tauri bundle, submits the App archive with `notarytool`, staples the
-App, creates and signs the DMG, submits and staples the DMG, and verifies both
-artifacts with Gatekeeper. Never print credential values.
+`SPARKLE_DISTRIBUTION_ROOT` points at the complete Sparkle 2.9.4 binary
+distribution containing `Sparkle.framework`, `bin/generate_appcast` and
+`bin/sign_update`. `SPARKLE_ED_KEY_PATH` is a regular non-symlink file with
+mode `0400` or `0600`; it contains the base64 Sparkle Ed25519 private key and is
+never copied into the App. Because these two tools receive release material and
+the private key, their lower-case SHA-256 values must independently match the
+audited `SPARKLE_GENERATE_APPCAST_SHA256` and
+`SPARKLE_SIGN_UPDATE_SHA256` pins. Do not derive those expected values from the
+same untrusted directory during a release. If the requested team has more than one matching
+Developer ID Application identity, `CODESIGN_IDENTITY_FINGERPRINT` must be the
+exact 40-hex fingerprint. The script never silently selects the first identity.
+`LEGACY_MINISIGN` points at the external standard Minisign executable used only
+for the temporary 0.7 migration feed.
 
-The script does not gate the upload behind a network precheck. One was tried and
-removed: it probed the release endpoints over TLS and scanned the host's proxy
-log for recent network errors, and in practice it only ever produced false
-negatives — an unrelated OCSP timeout and a CDN host that answers `HEAD /` near
-the probe timeout each blocked a release whose network was healthy. Transient
-failures are handled where they actually occur instead, by the `notarytool`
-retry loop and the resume state below.
+`SPARKLE_SIGNATURE_VERIFIER` is a separately audited Ed25519 verifier, not a
+build command or a Keychain wrapper. It must be an executable regular
+non-symlink file whose lower-case SHA-256 exactly equals
+`SPARKLE_SIGNATURE_VERIFIER_SHA256`. Its stable command-line contract is:
 
-The release host's outbound policy is a separate, manual concern, and keeping it
-that way is deliberate: no script launches, reloads, configures, or sends a
-command to whatever proxy the host runs.
+```text
+verifier --public-key BASE64_RAW_32_BYTE_KEY \
+         --signature BASE64_RAW_64_BYTE_SIGNATURE \
+         --file EXACT_MESSAGE_FILE
+```
 
-Notarization progress is stored under `dist/.release-state/`, keyed by artifact
-SHA-256. The state contains no credentials and records the submission ID,
-whether upload completion was explicitly confirmed, and the last notarization
-phase. Each artifact is submitted exactly once. As soon as `notarytool` exposes
-one unambiguous submission ID, every retry and resumed run waits on that ID even
-if the submit process later crashes or never prints its final upload marker. A
-state or persistent submit log without one recoverable ID fails closed and must
-be reconciled manually; it is never treated as permission to submit again. An
-`Accepted` artifact proceeds directly to stapling. A changed artifact receives
-a new state file and is never confused with an older submission.
+`--help` must advertise all three options. Exit status zero means the signature
+is valid for the exact bytes of `EXACT_MESSAGE_FILE`; every malformed input,
+signature mismatch, read failure or unsupported format must return nonzero. It
+must not read a private key, contact a network service, access or unlock a
+Keychain, rewrite the input, or accept a digest in place of the file bytes.
+Before signing any release artifacts, the release script asks Sparkle 2.9.4
+`sign_update` to sign a fresh challenge with the private key file and verifies
+that challenge against the App's `SUPublicEDKey`. After `generate_appcast`, it
+extracts the signature from the single enclosure whose URL names the current
+DMG and verifies the exact DMG bytes with that same App public key. Thus a wrong
+private key, wrong App public key, stale enclosure or altered DMG fails closed.
 
-If a release process exits after creating the signed artifacts, resume the exact
-existing App/archive/DMG without rebuilding or re-signing:
+Private keys and credentials never enter the repository or logs. The release
+workflow must never invoke `security unlock-keychain`; keychain access is an
+operator-controlled prerequisite.
+
+Notarization state is stored under `dist/.release-state/`, keyed by the exact
+artifact SHA-256. Once one unambiguous submission ID has been observed, that ID
+is permanent for the state: retries only query or wait and never submit again.
+A missing or ambiguous ID after a submit attempt fails closed for manual
+reconciliation. Accepted artifacts proceed directly to stapling.
+
+One atomic `dist/.release-state/release.lock` covers signing through final feed
+generation. A live owner blocks a concurrent release; a stale lock is diagnosed
+but never removed automatically. Before fresh signing, all five executable
+SHA-256 values must match the bundle's `BuildManifest.plist`. Immediately after
+signing, an external state file binds the source commit, signing fingerprint,
+App CodeDirectory hash, `CodeResources` SHA-256 and all five signed executable
+hashes. `--resume` requires that complete binding to match the existing App and
+will not re-sign it. Any previous state for the same version makes a fresh run
+fail closed and require explicit `--resume`.
+
+Resume the exact existing artifact without rebuilding or re-signing:
 
 ```bash
-scripts/release-macos.sh --resume
+./scripts/release-macos.sh --resume
 ```
 
-Resume mode verifies the existing App version and signatures, reuses the exact
-artifact whose SHA-256 keys the saved state, and skips phases whose stapled
-ticket already validates. It refuses to resume when the App/archive needed by
-the current phase is missing or the source and bundle versions differ.
+Do not delete a state file to force another submission. A rejected artifact
+requires a new build; a transport failure with a known ID requires resuming the
+same state.
 
-When the build is current but notarization never happened — the upload failed
-before a submission was created, for example — skip the compile and go straight
-to signing and notarization:
+## Automatic-update migration
 
-```bash
-scripts/release-macos.sh --skip-build
-```
+The native 0.8 App uses Sparkle's signed `appcast.xml`, EdDSA enclosure
+signatures and Apple code signing. Sparkle performs update verification,
+permission handling, atomic replacement and relaunch. Its private EdDSA key is
+separate from the legacy updater key.
 
-`--skip-build` reuses the existing bundle but still re-signs it with the
-Developer ID identity and the hardened runtime, then builds the pre-staple
-archive from scratch. Re-signing is what makes the flag safe: `validate.sh`
-leaves a bundle at the same path signed ad-hoc (`codesign --sign -`), which
-notarization rejects. The App itself is the same either way — the release config
-only adds `createUpdaterArtifacts` — so re-signing is the whole difference.
-
-Use `--resume` instead whenever a notarization submission was already uploaded:
-it must not rebuild the pre-staple archive, because that archive's SHA-256 keys
-the saved submission state. The two flags are mutually exclusive.
-
-## Automatic Updates
-
-The signed App first synchronizes any changed root-owned `mihomo-daemon`,
-`mihomo-agent`, and `mihomo` binaries through authenticated XPC. The installed
-daemon accepts only the fixed component set, validates every replacement against
-its own leaf certificate, performs a rollback-capable atomic replacement, and
-lets launchd restart it when required. This does not replace or repair the
-LaunchDaemon plist or the installation layout; those remain explicit
-**Install / Repair Daemon** operations.
-
-Profile configuration lives inside `mihomo-agent`, reached through
-`--configure-profile`. It was previously a Python helper staged beside the
-daemon, which put it outside that component set: a release could ship a fix
-there and no existing installation would ever receive it, because only the
-three binaries are replaced. Anything that rewrites a profile therefore belongs
-in one of them.
-
-Thirty seconds after startup, the App checks the latest GitHub release manifest.
-A newer version is downloaded, verified with the updater public key, installed,
-and the App restarts. The restarted App then synchronizes its signed root
-components without another administrator prompt.
-
-The updater private key is not part of the repository. Local releases default
-to `~/.tauri/mihomobox.key`, or use `TAURI_SIGNING_PRIVATE_KEY` /
-`TAURI_UPDATER_KEY_PATH`. Losing or rotating this key prevents already-installed
-clients from accepting later updates.
-
-## GitHub Release Notes
-
-Every GitHub Release title and description must be written in English. This
-includes the summary, change list, validation notes, and any manually added
-upgrade instructions. Review all user-visible release text for this requirement
-before publishing or updating a Release; tag names and artifact filenames remain
-unchanged.
-
-Each GitHub release must publish these assets from `dist/` under tag `vX.Y.Z`:
+Existing 0.7 clients only understand the previous Minisign-compatible manifest.
+During the migration window every 0.8.x GitHub Release therefore carries both
+feeds:
 
 ```text
 MihomoBox-X.Y.Z-macos-arm64.app.tar.gz
 MihomoBox-X.Y.Z-macos-arm64.app.tar.gz.sig
 MihomoBox-X.Y.Z-macos-arm64.dmg
 latest.json
+appcast.xml
 ```
 
-`latest.json` points `darwin-aarch64` at the versioned updater archive. The
-archive is generated from the notarized and stapled App, then signed with the
-Tauri updater key. GitHub's `releases/latest/download/latest.json` endpoint is
-the stable update feed. Archive generation disables macOS AppleDouble metadata;
-otherwise a leading `._MihomoBox.app` entry prevents Tauri's Rust extractor
-from installing the update.
+`latest.json`, the tar archive and its signature exist only to move installed
+0.7 clients onto 0.8. The native App never parses that manifest. The archive is
+created with `COPYFILE_DISABLE=1`, starts with `MihomoBox.app/`, and contains no
+AppleDouble or `__MACOSX` entries. A standard external Minisign implementation
+must be proven byte-compatible with the existing public key by a real 0.7
+updater smoke test before publication.
 
-## License Outputs
+`appcast.xml` and the DMG serve 0.8 and later. Appcast generation must use the
+Sparkle tools from the exact resolved 2.9.4 package, a private key supplied by
+path, and a feed URL under the matching GitHub tag. `sign_update --verify` is
+not used on the XML feed: that mode verifies an update archive against an
+explicit signature. The release gate instead selects the exact DMG enclosure
+from the generated XML and verifies its Ed25519 signature over the DMG bytes
+with the pinned verifier and the public key embedded in the App.
 
-The project MIT license and `THIRD_PARTY_NOTICES.md` are bundled. The
-MetaCubeXD license is retained because its pinned interface and Sunset theme are
-the design reference for the native reimplementation. Mihomo binaries are
-unmodified official release artifacts.
+Keep the legacy feed for at least 180 days or two stable releases. Removal is a
+separate measured decision; repository cleanup alone is not evidence that all
+installed 0.7 clients have migrated.
+
+## GitHub Release assets
+
+Release titles and descriptions are English. The four artifacts plus both
+feeds are treated as one atomic release set: do not upload a subset while DMG
+notarization, Sparkle signing or legacy compatibility is incomplete.
+
+Before uploading, freeze SHA-256 values and verify:
+
+- App, updater archive and mounted DMG all report the same product version;
+- App and all five executables have the expected leaf certificate;
+- App and DMG pass code-sign, stapler, Gatekeeper and DMG verification;
+- `latest.json` URL, version and signature match the legacy archive;
+- `appcast.xml` enclosure URL, length, version and EdDSA signature match the DMG;
+- no asset, state or submission identifier from a previous release is reused.
+
+## License outputs
+
+The project MIT license, `THIRD_PARTY_NOTICES.md`, Mihomo, MetaCubeXD and Sparkle
+license texts are bundled. Mihomo remains an unmodified official release
+artifact; MetaCubeXD remains a non-shipped design reference.

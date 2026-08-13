@@ -1,13 +1,11 @@
 /.build/
+/build/
 /.swiftpm/
 /.cache/
 /node_modules/
 /.pnpm-store/
 /ui-dist/
 /dist/
-/src-tauri/target/
-/src-tauri/binaries/*
-!/src-tauri/binaries/.gitkeep
 __pycache__/
 *.pyc
 .DS_Store

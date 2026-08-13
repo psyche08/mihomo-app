@@ -1,8 +1,8 @@
 # AGENTS.md
 
-`mihomo-app` is an open-source macOS menu-bar application. Tauri owns the app
-lifecycle, tray, updater, and login startup; an in-process SwiftUI module owns
-the main window. The root `mihomo-daemon` owns the bundled Mihomo process,
+`mihomo-app` is an open-source macOS menu-bar application. A pure Swift/AppKit
+shell owns the app lifecycle, tray, Sparkle updater, and login startup; an
+in-process SwiftUI module owns the main window. The root `mihomo-daemon` owns the bundled Mihomo process,
 Enhanced TUN privilege, DHCP-aware DNS forwarding, and macOS Global DNS.
 
 ## Always On
@@ -23,14 +23,17 @@ Enhanced TUN privilege, DHCP-aware DNS forwarding, and macOS Global DNS.
    from them regardless (`SanitizedProcessLogRedaction`), and each window keeps
    only a bounded sample. Info stays counted only.
 5. Pin and checksum bundled upstream artifacts. Retain third-party licenses.
-6. Validate Swift, Rust, the pinned MetaCubeXD visual reference, installer
-   dry-run, and the final `.app` bundle before release.
+6. Validate Swift, the pinned Sparkle package and MetaCubeXD visual reference,
+   installer dry-run, and the final `.app` bundle before release.
 7. Compilation is operator-executed and must run outside the sandbox. Agents
    must not run commands that compile or rebuild code or application bundles,
    including tests, validation, or release commands that compile as a side
    effect. Provide the exact command for the operator to run and wait for its
    result. Authorization to commit, tag, sign, notarize, package, publish, or
    deploy never implies authorization to compile.
+8. Never execute `security unlock-keychain`, directly or indirectly. Keychain
+   availability is an operator-controlled prerequisite; scripts and agents
+   must fail closed instead of unlocking it.
 
 ## Progressive Disclosure
 

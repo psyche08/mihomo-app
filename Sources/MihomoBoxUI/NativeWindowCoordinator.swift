@@ -88,11 +88,11 @@ enum NativeWindowHosting {
   }
 }
 
-/// Owns the one native main window hosted inside Tauri's `NSApplication`.
+/// Owns the one native main window inside MihomoBox's AppKit application.
 ///
-/// Tauri remains responsible for the process event loop and accessory
-/// activation policy. This coordinator deliberately creates neither a second
-/// `NSApplication` nor a SwiftUI `App` scene.
+/// The application target owns the single `NSApplication` and its accessory
+/// event loop. This coordinator owns only the lazy SwiftUI window and never
+/// creates an application or a second process lifecycle.
 @MainActor
 final class NativeWindowCoordinator: NSObject, NSWindowDelegate {
   static let shared = NativeWindowCoordinator()
@@ -120,8 +120,8 @@ final class NativeWindowCoordinator: NSObject, NSWindowDelegate {
     }
     constrainFrameToVisibleScreens(window)
 
-    // Do not change NSApp.activationPolicy here. Tauri intentionally keeps
-    // MihomoBox as an accessory/menu-bar application.
+    // Do not change NSApp.activationPolicy here. The AppKit application shell
+    // intentionally keeps MihomoBox as an accessory/menu-bar application.
     window.makeKeyAndOrderFront(nil)
     NSApp.activate()
     return window.isVisible
@@ -233,25 +233,32 @@ final class NativeWindowCoordinator: NSObject, NSWindowDelegate {
   }
 }
 
-/// These C entry points are invoked only by Rust's `native_window` wrappers,
-/// which enqueue every call on Tauri's main event loop before crossing the ABI.
 @MainActor
-@_cdecl("mihomobox_ui_show")
-public func mihomoboxUIShow() -> Int32 {
-  dispatchPrecondition(condition: .onQueue(.main))
-  return NativeWindowCoordinator.shared.show() ? 1 : 0
+public protocol NativeWindowControlling: AnyObject {
+  @discardableResult func show() -> Bool
+  func hide()
+  func shutdown()
 }
 
+/// Typed in-process facade used by the AppKit shell. Keeping the coordinator
+/// itself private to this module prevents lifecycle code from reaching into
+/// the SwiftUI store or window internals.
 @MainActor
-@_cdecl("mihomobox_ui_hide")
-public func mihomoboxUIHide() {
-  dispatchPrecondition(condition: .onQueue(.main))
-  NativeWindowCoordinator.shared.hide()
-}
+public final class NativeWindowFacade: NativeWindowControlling {
+  public static let shared = NativeWindowFacade()
 
-@MainActor
-@_cdecl("mihomobox_ui_shutdown")
-public func mihomoboxUIShutdown() {
-  dispatchPrecondition(condition: .onQueue(.main))
-  NativeWindowCoordinator.shared.shutdown()
+  private init() {}
+
+  @discardableResult
+  public func show() -> Bool {
+    NativeWindowCoordinator.shared.show()
+  }
+
+  public func hide() {
+    NativeWindowCoordinator.shared.hide()
+  }
+
+  public func shutdown() {
+    NativeWindowCoordinator.shared.shutdown()
+  }
 }

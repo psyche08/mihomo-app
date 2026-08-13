@@ -132,21 +132,6 @@ final class DashboardStoreIPCTests: XCTestCase {
     )
   }
 
-  func testUnsafeGlobalAfterReloadStopsTheRuntimeWhenRepairFails() async {
-    let gateway = FakeDashboardGateway(
-      unsafeGlobalSnapshot: true,
-      failGlobalRepair: true
-    )
-    let store = DashboardStore(gateway: gateway)
-
-    await store.reloadConfiguration()
-
-    XCTAssertTrue(gateway.calls.contains("reloadActiveProfile"))
-    XCTAssertTrue(gateway.calls.contains("applyOutboundMode:global"))
-    XCTAssertTrue(gateway.calls.contains("stopAgentForUnsafeGlobal"))
-    XCTAssertTrue(store.actionError?.contains("was stopped") == true)
-  }
-
   private func eventually(
     timeout: TimeInterval = 2,
     condition: @MainActor () -> Bool
@@ -166,8 +151,6 @@ private final class FakeDashboardGateway: DashboardControlGateway, @unchecked Se
   private let lock = NSLock()
   private let failCloseConnection: Bool
   private let retainConnectionAfterClose: Bool
-  private let unsafeGlobalSnapshot: Bool
-  private let failGlobalRepair: Bool
   private var recordedCalls: [String] = []
   private var streamCancellationCount = 0
   private var selectedProxy = "Node A"
@@ -212,14 +195,10 @@ private final class FakeDashboardGateway: DashboardControlGateway, @unchecked Se
 
   init(
     failCloseConnection: Bool = false,
-    retainConnectionAfterClose: Bool = false,
-    unsafeGlobalSnapshot: Bool = false,
-    failGlobalRepair: Bool = false
+    retainConnectionAfterClose: Bool = false
   ) {
     self.failCloseConnection = failCloseConnection
     self.retainConnectionAfterClose = retainConnectionAfterClose
-    self.unsafeGlobalSnapshot = unsafeGlobalSnapshot
-    self.failGlobalRepair = failGlobalRepair
   }
 
   var calls: [String] {
@@ -237,7 +216,6 @@ private final class FakeDashboardGateway: DashboardControlGateway, @unchecked Se
 
   func fetchSnapshot() async throws -> ControllerSnapshot {
     record("fetchSnapshot")
-    if unsafeGlobalSnapshot { return unsafeGlobalControllerSnapshot() }
     return snapshot()
   }
 
@@ -304,13 +282,6 @@ private final class FakeDashboardGateway: DashboardControlGateway, @unchecked Se
 
   func applyOutboundMode(_ mode: ControllerOutboundMode) async throws -> ControllerSnapshot {
     record("applyOutboundMode:\(mode.rawValue)")
-    if mode == .global, failGlobalRepair {
-      throw NSError(
-        domain: "DashboardStoreIPCTests",
-        code: 2,
-        userInfo: [NSLocalizedDescriptionKey: "no safe Global proxy"]
-      )
-    }
     lock.withLock { config.mode = mode.rawValue }
     return snapshot()
   }
@@ -395,7 +366,6 @@ private final class FakeDashboardGateway: DashboardControlGateway, @unchecked Se
   func updateGeoData() async throws { record("updateGeoData") }
   func reloadActiveProfile() async throws { record("reloadActiveProfile") }
   func restartAgent() async throws { record("restartAgent") }
-  func stopAgentForUnsafeGlobal() async throws { record("stopAgentForUnsafeGlobal") }
 
   func connectionsStream() -> AsyncThrowingStream<ControllerConnectionsFrame, Error> {
     makeStream(name: "connections", value: lock.withLock { connections })
@@ -420,23 +390,6 @@ private final class FakeDashboardGateway: DashboardControlGateway, @unchecked Se
 
   private func snapshot() -> ControllerSnapshot {
     ControllerSnapshot(configs: lock.withLock { config }, proxies: proxyCatalog())
-  }
-
-  private func unsafeGlobalControllerSnapshot() -> ControllerSnapshot {
-    ControllerSnapshot(
-      configs: ControllerConfig(mode: "global"),
-      proxies: ControllerProxyCatalog(
-        proxies: [
-          "GLOBAL": ControllerProxy(
-            name: "GLOBAL",
-            type: "Selector",
-            all: ["DIRECT"],
-            now: "DIRECT"
-          ),
-          "DIRECT": ControllerProxy(name: "DIRECT", type: "Direct"),
-        ]
-      )
-    )
   }
 
   private func proxyCatalog() -> ControllerProxyCatalog {

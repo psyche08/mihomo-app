@@ -2,6 +2,31 @@ import Foundation
 import MihomoControl
 import MihomoDNSCore
 
+enum ControllerBrokerCriticalError: Error, LocalizedError {
+    case unsafeGlobalRuntime
+
+    var errorDescription: String? {
+        "the runtime could not prove a safe Global proxy route"
+    }
+}
+
+private final class LockedDelayCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+
+    func increment() {
+        lock.lock()
+        value += 1
+        lock.unlock()
+    }
+
+    func read() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+}
+
 final class ControllerBroker: @unchecked Sendable {
     private let configPath: String
     private let streamLock = NSLock()
@@ -23,6 +48,37 @@ final class ControllerBroker: @unchecked Sendable {
         }
         timer.resume()
         streamCleanupTimer = timer
+    }
+
+    /// Re-checks the daemon-owned route after any operation that launches or
+    /// reloads Mihomo. A running Global route is repaired when possible and is
+    /// otherwise rejected with the fail-closed sentinel consumed by the
+    /// dispatcher.
+    func ensureSafeGlobalRoute() throws {
+        let configuration = try ProxyConfiguration.load(path: configPath)
+        _ = try repairUnsafeGlobalIfNeeded(
+            configuration,
+            snapshot: routeSnapshot(configuration)
+        )
+    }
+
+    func waitForSafeGlobalRoute(attempts: Int = 30) throws {
+        let attempts = max(1, attempts)
+        var lastError: Error?
+        for attempt in 0..<attempts {
+            do {
+                try ensureSafeGlobalRoute()
+                return
+            } catch ControllerBrokerCriticalError.unsafeGlobalRuntime {
+                throw ControllerBrokerCriticalError.unsafeGlobalRuntime
+            } catch {
+                lastError = error
+                if attempt + 1 < attempts {
+                    Thread.sleep(forTimeInterval: 0.5)
+                }
+            }
+        }
+        throw lastError ?? ControllerBrokerCriticalError.unsafeGlobalRuntime
     }
 
     deinit {
@@ -69,56 +125,112 @@ final class ControllerBroker: @unchecked Sendable {
             ]
             return try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
         case .setTUN:
-            guard let value = request.arguments["enabled"], value == "true" || value == "false" else {
-                throw brokerError("invalid Enhanced TUN state")
-            }
-            let enabled = value == "true"
-            return try sendJSON(
+            let safeBeforeTUN = try repairUnsafeGlobalIfNeeded(
                 configuration,
-                method: "PATCH",
-                path: "/configs",
-                object: ["tun": ["enable": enabled]]
+                snapshot: routeSnapshot(configuration)
             )
+            guard request.arguments["enabled"] == "true" else {
+                throw brokerError("Enhanced TUN disable requires the agent stop operation")
+            }
+            do {
+                let response = try sendJSON(
+                    configuration,
+                    method: "PATCH",
+                    path: "/configs",
+                    object: ["tun": ["enable": true]]
+                )
+                let observed = try routeSnapshot(configuration)
+                guard try tunEnabled(configuration),
+                      observed.mode != "global" || observed.globalRoutesThroughProxy else {
+                    throw ControllerBrokerCriticalError.unsafeGlobalRuntime
+                }
+                _ = safeBeforeTUN
+                return response
+            } catch {
+                throw ControllerBrokerCriticalError.unsafeGlobalRuntime
+            }
         case .setOutboundMode:
+            let safeBeforeModeMutation = try repairUnsafeGlobalIfNeeded(
+                configuration,
+                snapshot: routeSnapshot(configuration)
+            )
             guard let mode = request.arguments["mode"], ["rule", "global", "direct"].contains(mode) else {
                 throw brokerError("invalid outbound mode")
             }
-            return try sendJSON(
+            return try setOutboundModeSafely(
                 configuration,
-                method: "PATCH",
-                path: "/configs",
-                object: ["mode": mode]
+                mode: mode,
+                before: safeBeforeModeMutation
             )
         case .selectProxy:
+            let safeBeforeSelection = try repairUnsafeGlobalIfNeeded(
+                configuration,
+                snapshot: routeSnapshot(configuration)
+            )
             guard let group = request.arguments["group"], let proxy = request.arguments["proxy"],
                   validControllerName(group), validControllerName(proxy) else {
                 throw brokerError("proxy group and node are required")
             }
-            return try sendJSON(
+            return try selectProxySafely(
+                configuration,
+                group: group,
+                proxy: proxy,
+                before: safeBeforeSelection
+            )
+        case .refreshProxyProvider:
+            let safeBeforeProviderRefresh = try repairUnsafeGlobalIfNeeded(
+                configuration,
+                snapshot: routeSnapshot(configuration)
+            )
+            guard let name = request.arguments["name"], validControllerName(name) else {
+                throw brokerError("proxy provider name is required")
+            }
+            guard safeBeforeProviderRefresh.mode != "global" else {
+                throw brokerError("switch out of Global mode before refreshing a proxy provider")
+            }
+            let response = try send(
                 configuration,
                 method: "PUT",
-                path: "/proxies/\(pathComponent(group))",
-                object: ["name": proxy]
+                path: "/providers/proxies/\(pathComponent(name))"
             )
+            let observed = try routeSnapshot(configuration)
+            guard observed.mode != "global" else {
+                throw ControllerBrokerCriticalError.unsafeGlobalRuntime
+            }
+            return response
         case .testDelay:
             guard let payload = request.payload, payload.count <= 1_048_576,
                   let names = try JSONSerialization.jsonObject(with: payload) as? [String],
                   names.allSatisfy(validControllerName) else {
                 throw brokerError("proxy node list is required")
             }
-            var succeeded = 0
+            let group = DispatchGroup()
+            let limiter = DispatchSemaphore(value: 8)
+            let deadline = Date().addingTimeInterval(8)
+            let succeeded = LockedDelayCounter()
             for name in names.prefix(512) {
-                let encoded = pathComponent(name)
-                let probe = "https%3A%2F%2Fcp.cloudflare.com%2Fgenerate_204"
-                if (try? send(
-                    configuration,
-                    method: "GET",
-                    path: "/proxies/\(encoded)/delay?timeout=5000&url=\(probe)"
-                )) != nil {
-                    succeeded += 1
+                group.enter()
+                DispatchQueue.global(qos: .utility).async { [self] in
+                    limiter.wait()
+                    defer {
+                        limiter.signal()
+                        group.leave()
+                    }
+                    guard Date() < deadline else { return }
+                    let encoded = pathComponent(name)
+                    let probe = "https%3A%2F%2Fcp.cloudflare.com%2Fgenerate_204"
+                    if (try? send(
+                        configuration,
+                        method: "GET",
+                        path: "/proxies/\(encoded)/delay?timeout=5000&url=\(probe)"
+                    )) != nil {
+                        succeeded.increment()
+                    }
                 }
             }
-            return try JSONSerialization.data(withJSONObject: ["succeeded": succeeded])
+            _ = group.wait(timeout: .now() + .seconds(10))
+            let completed = succeeded.read()
+            return try JSONSerialization.data(withJSONObject: ["succeeded": completed])
         case .controllerVersion:
             return try send(configuration, method: "GET", path: "/version")
         case .listRules:
@@ -173,6 +285,236 @@ final class ControllerBroker: @unchecked Sendable {
             body: JSONSerialization.data(withJSONObject: object)
         )
     }
+
+    /// Applies a mode transition, including the GLOBAL selector repair, inside
+    /// the daemon's single mutation transaction. No second signed client can
+    /// interleave between the before snapshot, mutation and authoritative
+    /// readback.
+    private func setOutboundModeSafely(
+        _ configuration: ProxyConfiguration,
+        mode: String,
+        before: ControllerRouteSnapshot
+    ) throws -> Data {
+        var mutationAttempted = false
+        do {
+            if mode == "global" {
+                guard let target = before.globalProxyTarget,
+                      let group = before.globalGroupName else {
+                    throw brokerError("Global mode has no route through a proxy")
+                }
+                if before.globalSelection != target {
+                    mutationAttempted = true
+                    _ = try sendJSON(
+                        configuration,
+                        method: "PUT",
+                        path: "/proxies/\(pathComponent(group))",
+                        object: ["name": target]
+                    )
+                }
+            }
+            mutationAttempted = true
+            let response = try sendJSON(
+                configuration,
+                method: "PATCH",
+                path: "/configs",
+                object: ["mode": mode]
+            )
+            let observed = try routeSnapshot(configuration)
+            guard observed.mode == mode,
+                  mode != "global" || observed.globalRoutesThroughProxy else {
+                throw brokerError("outbound mode readback did not match")
+            }
+            _ = response
+            return try snapshotPayload(configuration)
+        } catch {
+            guard mutationAttempted else { throw error }
+            guard restoreRoute(configuration, to: before) else {
+                throw ControllerBrokerCriticalError.unsafeGlobalRuntime
+            }
+            throw error
+        }
+    }
+
+    /// A proxy selection can alter a nested selector on GLOBAL's active route.
+    /// Validate the projected graph before touching Mihomo, then read it back.
+    private func selectProxySafely(
+        _ configuration: ProxyConfiguration,
+        group: String,
+        proxy: String,
+        before: ControllerRouteSnapshot
+    ) throws -> Data {
+        guard let previous = before.selection(for: group), !previous.isEmpty,
+              let proposed = before.selecting(group: group, proxy: proxy) else {
+            throw brokerError("proxy selection is not present in the controller catalog")
+        }
+        if before.mode == "global", !proposed.globalRoutesThroughProxy {
+            if !before.globalRoutesThroughProxy {
+                throw ControllerBrokerCriticalError.unsafeGlobalRuntime
+            }
+            throw brokerError("the proxy selection would break the active Global route")
+        }
+
+        do {
+            let response = try sendJSON(
+                configuration,
+                method: "PUT",
+                path: "/proxies/\(pathComponent(group))",
+                object: ["name": proxy]
+            )
+            let observed = try routeSnapshot(configuration)
+            guard observed.selection(for: group) == proxy,
+                  observed.mode != "global" || observed.globalRoutesThroughProxy else {
+                throw brokerError("proxy selection readback did not match")
+            }
+            _ = response
+            return try snapshotPayload(configuration)
+        } catch {
+            let restored = restoreSelection(
+                configuration,
+                group: group,
+                selection: previous,
+                prior: before
+            )
+            if !restored, before.mode == "global" {
+                throw ControllerBrokerCriticalError.unsafeGlobalRuntime
+            }
+            throw error
+        }
+    }
+
+    private func routeSnapshot(
+        _ configuration: ProxyConfiguration
+    ) throws -> ControllerRouteSnapshot {
+        try ControllerRouteSnapshot(
+            configsData: send(configuration, method: "GET", path: "/configs"),
+            proxiesData: send(configuration, method: "GET", path: "/proxies")
+        )
+    }
+
+    private func snapshotPayload(_ configuration: ProxyConfiguration) throws -> Data {
+        let configs = try send(configuration, method: "GET", path: "/configs")
+        let proxies = try send(configuration, method: "GET", path: "/proxies")
+        return try JSONSerialization.data(withJSONObject: [
+            "configs": try JSONSerialization.jsonObject(with: configs),
+            "proxies": try JSONSerialization.jsonObject(with: proxies),
+        ], options: [.sortedKeys])
+    }
+
+    private func tunEnabled(_ configuration: ProxyConfiguration) throws -> Bool {
+        let data = try send(configuration, method: "GET", path: "/configs")
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let tun = object["tun"] as? [String: Any],
+              let enabled = tun["enable"] as? Bool else {
+            throw brokerError("Enhanced TUN readback is unavailable")
+        }
+        return enabled
+    }
+
+    /// Never leave a request running on top of an already-unsafe Global route.
+    /// Repair is permitted only when the current catalog proves a real proxy
+    /// target. Any missing target or uncertain readback requires the dispatcher
+    /// to stop the daemon-owned agent and restore DNS.
+    private func repairUnsafeGlobalIfNeeded(
+        _ configuration: ProxyConfiguration,
+        snapshot: ControllerRouteSnapshot
+    ) throws -> ControllerRouteSnapshot {
+        guard snapshot.mode == "global", !snapshot.globalRoutesThroughProxy else {
+            return snapshot
+        }
+        guard let group = snapshot.globalGroupName,
+              let target = snapshot.globalProxyTarget else {
+            throw ControllerBrokerCriticalError.unsafeGlobalRuntime
+        }
+        do {
+            _ = try sendJSON(
+                configuration,
+                method: "PUT",
+                path: "/proxies/\(pathComponent(group))",
+                object: ["name": target]
+            )
+            let observed = try routeSnapshot(configuration)
+            guard observed.mode == "global", observed.globalRoutesThroughProxy else {
+                throw ControllerBrokerCriticalError.unsafeGlobalRuntime
+            }
+            return observed
+        } catch is ControllerBrokerCriticalError {
+            throw ControllerBrokerCriticalError.unsafeGlobalRuntime
+        } catch {
+            throw ControllerBrokerCriticalError.unsafeGlobalRuntime
+        }
+    }
+
+    private func restoreRoute(
+        _ configuration: ProxyConfiguration,
+        to prior: ControllerRouteSnapshot
+    ) -> Bool {
+        do {
+            let group = prior.globalGroupName
+            let selection = prior.globalSelection
+            if prior.mode == "global" {
+                if let group, let selection {
+                    _ = try sendJSON(
+                        configuration,
+                        method: "PUT",
+                        path: "/proxies/\(pathComponent(group))",
+                        object: ["name": selection]
+                    )
+                }
+                _ = try sendJSON(
+                    configuration,
+                    method: "PATCH",
+                    path: "/configs",
+                    object: ["mode": "global"]
+                )
+            } else {
+                _ = try sendJSON(
+                    configuration,
+                    method: "PATCH",
+                    path: "/configs",
+                    object: ["mode": prior.mode]
+                )
+                if let group, let selection {
+                    _ = try sendJSON(
+                        configuration,
+                        method: "PUT",
+                        path: "/proxies/\(pathComponent(group))",
+                        object: ["name": selection]
+                    )
+                }
+            }
+            let observed = try routeSnapshot(configuration)
+            guard observed.mode == prior.mode else { return false }
+            if let selection, observed.globalSelection != selection { return false }
+            return prior.mode != "global" || observed.globalRoutesThroughProxy
+        } catch {
+            return false
+        }
+    }
+
+    private func restoreSelection(
+        _ configuration: ProxyConfiguration,
+        group: String,
+        selection: String,
+        prior: ControllerRouteSnapshot
+    ) -> Bool {
+        do {
+            _ = try sendJSON(
+                configuration,
+                method: "PUT",
+                path: "/proxies/\(pathComponent(group))",
+                object: ["name": selection]
+            )
+            let observed = try routeSnapshot(configuration)
+            guard observed.mode == prior.mode,
+                  observed.selection(for: group) == selection else {
+                return false
+            }
+            return prior.mode != "global" || observed.globalRoutesThroughProxy
+        } catch {
+            return false
+        }
+    }
+
 
     private func send(
         _ configuration: ProxyConfiguration,

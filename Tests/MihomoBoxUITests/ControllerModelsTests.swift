@@ -333,6 +333,7 @@ final class ControllerModelsTests: XCTestCase {
     let redacted = DashboardLogRedaction.redact(
       "GET https://user:pass@example.com/sub?token=abc password=hunter2 "
         + "Authorization: Bearer short-secret auth=Basic dXNlcjpwYXNz "
+        + "Cookie: session=short-cookie https://only-token@example.com/sub/path-secret "
         + String(repeating: "a", count: 48)
     )
 
@@ -341,6 +342,9 @@ final class ControllerModelsTests: XCTestCase {
     XCTAssertFalse(redacted.contains("hunter2"))
     XCTAssertFalse(redacted.contains("short-secret"))
     XCTAssertFalse(redacted.contains("dXNlcjpwYXNz"))
+    XCTAssertFalse(redacted.contains("short-cookie"))
+    XCTAssertFalse(redacted.contains("only-token"))
+    XCTAssertFalse(redacted.contains("path-secret"))
     XCTAssertFalse(redacted.contains(String(repeating: "a", count: 48)))
     XCTAssertTrue(redacted.contains("<redacted>"))
   }
@@ -351,7 +355,10 @@ final class ControllerModelsTests: XCTestCase {
     XCTAssertTrue(
       DashboardStore.previewRequested(
         environment: enabled, arguments: [],
-        executableURL: URL(fileURLWithPath: "/work/mihomo-app/src-tauri/target/release/mihomo-app")
+        executableURL: URL(
+          fileURLWithPath: "/work/mihomo-app/build/MihomoBox.app/Contents/MacOS/mihomo-app"
+        ),
+        developmentUpdatesDisabled: true
       ))
     XCTAssertTrue(
       DashboardStore.previewRequested(
@@ -361,12 +368,21 @@ final class ControllerModelsTests: XCTestCase {
     XCTAssertFalse(
       DashboardStore.previewRequested(
         environment: enabled, arguments: [],
-        executableURL: URL(fileURLWithPath: "/Applications/MihomoBox.app/Contents/MacOS/mihomo-app")
+        executableURL: URL(fileURLWithPath: "/Applications/MihomoBox.app/Contents/MacOS/mihomo-app"),
+        developmentUpdatesDisabled: false
       ))
     XCTAssertFalse(
       DashboardStore.previewRequested(
         environment: [:],
         executableURL: URL(fileURLWithPath: "/work/mihomo-app/.build/debug/preview")
+      ))
+    XCTAssertFalse(
+      DashboardStore.previewRequested(
+        environment: enabled, arguments: [],
+        executableURL: URL(
+          fileURLWithPath: "/Applications/.build/MihomoBox.app/Contents/MacOS/mihomo-app"
+        ),
+        developmentUpdatesDisabled: false
       ))
   }
 

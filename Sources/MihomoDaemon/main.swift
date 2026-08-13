@@ -26,7 +26,11 @@ if let index = arguments.firstIndex(of: "--config"), arguments.indices.contains(
 do {
     signal(SIGPIPE, SIG_IGN)
     let agent = AgentSupervisor(configPath: configPath)
-    defer { agent.stop() }
+    defer {
+        if !agent.stopAndRestoreVerified() {
+            ServiceLog.error("event=daemon_shutdown result=restore_unconfirmed")
+        }
+    }
     let dispatcher = try ControlDispatcher(agent: agent, configPath: configPath)
     let server = try ControlServer(dispatcher: dispatcher)
 
@@ -44,8 +48,8 @@ do {
         sources.append(source)
     }
 
-    try agent.start()
     try server.start()
+    dispatcher.startInitialRuntime()
     stopped.wait()
     server.stop()
     ServiceLog.info("event=daemon_stopping")

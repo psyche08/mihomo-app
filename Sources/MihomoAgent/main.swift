@@ -48,6 +48,12 @@ var configPath = defaultConfigPath
 if let index = arguments.firstIndex(of: "--config"), arguments.indices.contains(index + 1) {
     configPath = arguments[index + 1]
 }
+let expectedParentPID: Int32? = {
+    guard let index = arguments.firstIndex(of: "--parent-pid"),
+          arguments.indices.contains(index + 1),
+          let value = Int32(arguments[index + 1]), value > 1 else { return nil }
+    return value
+}()
 
 if arguments.contains("--configure-profile") || arguments.contains("--restore-profile") {
     func option(_ name: String) -> String? {
@@ -119,6 +125,25 @@ do {
     let service = ProxyService(configuration: configuration)
     let signalQueue = DispatchQueue(label: "dev.linsheng.mihomo-app.agent.signal")
     let semaphore = DispatchSemaphore(value: 0)
+    var parentWatchdog: DispatchSourceTimer?
+    if let expectedParentPID {
+        guard getppid() == expectedParentPID else {
+            throw NSError(
+                domain: "MihomoAgent",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "daemon parent identity changed before startup"]
+            )
+        }
+        let timer = DispatchSource.makeTimerSource(queue: signalQueue)
+        timer.schedule(deadline: .now() + .seconds(1), repeating: .seconds(1))
+        timer.setEventHandler {
+            guard getppid() != expectedParentPID else { return }
+            ServiceLog.error("event=agent_parent_lost action=restore_and_stop")
+            semaphore.signal()
+        }
+        timer.resume()
+        parentWatchdog = timer
+    }
     var sources: [DispatchSourceSignal] = []
     for value in [SIGTERM, SIGINT] {
         signal(value, SIG_IGN)
@@ -133,6 +158,7 @@ do {
 
     try service.start()
     semaphore.wait()
+    parentWatchdog?.cancel()
     ServiceLog.info("event=agent_stopping")
     service.stop()
     _ = sources

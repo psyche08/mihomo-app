@@ -270,7 +270,8 @@ public final class SanitizedProcessLogAccumulator: @unchecked Sendable {
 
 public enum SanitizedProcessLogMigration {
     public static func prepare(logPath: String, retainedFiles: Int = 3) throws {
-        let markerPath = "\(logPath).sanitized-v1"
+        let markerPath = "\(logPath).sanitized-v2"
+        let legacyMarkerPath = "\(logPath).sanitized-v1"
         let manager = FileManager.default
         guard !manager.fileExists(atPath: markerPath) else { return }
 
@@ -286,9 +287,12 @@ public enum SanitizedProcessLogMigration {
                 try manager.removeItem(atPath: candidate)
             }
         }
+        if manager.fileExists(atPath: legacyMarkerPath) {
+            try manager.removeItem(atPath: legacyMarkerPath)
+        }
         guard manager.createFile(
             atPath: markerPath,
-            contents: Data("sanitized process logging enabled\n".utf8),
+            contents: Data("sanitized process logging v2 enabled\n".utf8),
             attributes: [.posixPermissions: 0o600]
         ) else {
             throw CocoaError(.fileWriteUnknown)

@@ -1,13 +1,22 @@
+import Darwin
 import Foundation
 import MihomoControl
 
 final class ProfileBroker: @unchecked Sendable {
     private let agent: AgentSupervisor
+    private let validateStartedRuntime: () throws -> Void
     private let root = URL(fileURLWithPath: "/Library/Application Support/Mihomo App", isDirectory: true)
     private let queue = DispatchQueue(label: "dev.linsheng.mihomo.daemon.profile")
 
-    init(agent: AgentSupervisor) {
+    var activationRequired: Bool {
+        queue.sync {
+            FileManager.default.fileExists(atPath: root.appendingPathComponent("provisioning").path)
+        }
+    }
+
+    init(agent: AgentSupervisor, validateStartedRuntime: @escaping () throws -> Void) {
         self.agent = agent
+        self.validateStartedRuntime = validateStartedRuntime
     }
 
     func list() throws -> Data {
@@ -28,13 +37,14 @@ final class ProfileBroker: @unchecked Sendable {
                 guard let name = request.arguments["name"] else {
                     throw profileError("profile name is required")
                 }
+                try validateName(name)
                 let source = root.appendingPathComponent("profiles").appendingPathComponent(name)
-                try activateProfile(name: name, data: Data(contentsOf: source))
+                try activateProfile(name: name, data: try readStoredProfile(source))
                 return try listUnlocked()
             case .reloadProfile:
                 let active = try activeProfileName()
                 let source = root.appendingPathComponent("profiles").appendingPathComponent(active)
-                try activateProfile(name: active, data: Data(contentsOf: source))
+                try activateProfile(name: active, data: try readStoredProfile(source))
                 return try listUnlocked()
             default:
                 throw profileError("operation is not a profile operation")
@@ -66,8 +76,9 @@ final class ProfileBroker: @unchecked Sendable {
 
         let protected = [
             "daemon.json", "controller.json", "controller-secret", "active-profile",
-            "mihomo-data/config.yaml",
+            "provisioning", "mihomo-data/config.yaml", "profiles/\(name)",
         ]
+        var backupDigests: [String: String] = [:]
         for relative in protected {
             let source = root.appendingPathComponent(relative)
             if FileManager.default.fileExists(atPath: source.path) {
@@ -77,6 +88,9 @@ final class ProfileBroker: @unchecked Sendable {
                     withIntermediateDirectories: true
                 )
                 try FileManager.default.copyItem(at: source, to: backup)
+                backupDigests[relative] = ComponentUpdatePackage.digest(
+                    try Data(contentsOf: backup, options: [.mappedIfSafe])
+                )
             }
         }
         let wasRunning = agent.isRunning
@@ -84,7 +98,9 @@ final class ProfileBroker: @unchecked Sendable {
             let configured = try preparedProfile(data: data, publishController: true)
             defer { try? FileManager.default.removeItem(at: configured.deletingLastPathComponent()) }
             try validateMihomo(path: configured)
-            agent.stop()
+            guard agent.stopAndRestoreVerified() else {
+                throw ControllerBrokerCriticalError.unsafeGlobalRuntime
+            }
             let activeConfig = root.appendingPathComponent("mihomo-data/config.yaml")
             try FileManager.default.createDirectory(
                 at: activeConfig.deletingLastPathComponent(),
@@ -93,23 +109,79 @@ final class ProfileBroker: @unchecked Sendable {
             try replace(configured, activeConfig, permissions: 0o600)
             try storeRawProfile(name: name, data: data)
             try writePrivate(Data("\(name)\n".utf8), to: root.appendingPathComponent("active-profile"), permissions: 0o644)
+            let provisioning = root.appendingPathComponent("provisioning")
+            if FileManager.default.fileExists(atPath: provisioning.path) {
+                try FileManager.default.removeItem(at: provisioning)
+            }
             try agent.start()
+            try validateStartedRuntime()
         } catch {
-            agent.stop()
-            for relative in protected {
-                let destination = root.appendingPathComponent(relative)
-                let backup = transaction.appendingPathComponent("backup").appendingPathComponent(relative)
-                try? FileManager.default.removeItem(at: destination)
-                if FileManager.default.fileExists(atPath: backup.path) {
-                    try? FileManager.default.createDirectory(
-                        at: destination.deletingLastPathComponent(),
-                        withIntermediateDirectories: true
-                    )
-                    try? FileManager.default.copyItem(at: backup, to: destination)
+            let activationError = error
+            _ = agent.stopAndRestoreVerified()
+            do {
+                try restoreProtected(
+                    protected,
+                    transaction: transaction,
+                    backupDigests: backupDigests
+                )
+            } catch {
+                _ = agent.stopAndRestoreVerified()
+                throw ControllerBrokerCriticalError.unsafeGlobalRuntime
+            }
+            if wasRunning {
+                do {
+                    try agent.start()
+                    try validateStartedRuntime()
+                } catch {
+                    _ = agent.stopAndRestoreVerified()
+                    throw ControllerBrokerCriticalError.unsafeGlobalRuntime
                 }
             }
-            if wasRunning { try? agent.start() }
-            throw error
+            if activationError is ControllerBrokerCriticalError {
+                throw profileError("profile activation failed and the previous profile was restored")
+            }
+            throw activationError
+        }
+    }
+
+    private func restoreProtected(
+        _ protected: [String],
+        transaction: URL,
+        backupDigests: [String: String]
+    ) throws {
+        for relative in protected {
+            let destination = root.appendingPathComponent(relative)
+            let backup = transaction.appendingPathComponent("backup").appendingPathComponent(relative)
+            guard let expectedDigest = backupDigests[relative] else {
+                if FileManager.default.fileExists(atPath: destination.path) {
+                    try FileManager.default.removeItem(at: destination)
+                }
+                continue
+            }
+            guard FileManager.default.fileExists(atPath: backup.path),
+                  ComponentUpdatePackage.digest(
+                      try Data(contentsOf: backup, options: [.mappedIfSafe])
+                  ) == expectedDigest else {
+                throw profileError("profile rollback backup is incomplete")
+            }
+            try FileManager.default.createDirectory(
+                at: destination.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            let staged = destination.deletingLastPathComponent()
+                .appendingPathComponent(".profile-restore-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: staged) }
+            try FileManager.default.copyItem(at: backup, to: staged)
+            if FileManager.default.fileExists(atPath: destination.path) {
+                _ = try FileManager.default.replaceItemAt(destination, withItemAt: staged)
+            } else {
+                try FileManager.default.moveItem(at: staged, to: destination)
+            }
+            guard ComponentUpdatePackage.digest(
+                try Data(contentsOf: destination, options: [.mappedIfSafe])
+            ) == expectedDigest else {
+                throw profileError("profile rollback verification failed")
+            }
         }
     }
 
@@ -183,6 +255,26 @@ final class ProfileBroker: @unchecked Sendable {
         }
     }
 
+    private func readStoredProfile(_ url: URL) throws -> Data {
+        let descriptor = Darwin.open(url.path, O_RDONLY | O_NOFOLLOW)
+        guard descriptor >= 0 else {
+            throw profileError("stored profile is missing or unsafe")
+        }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        defer { try? handle.close() }
+        var status = stat()
+        guard fstat(descriptor, &status) == 0,
+              (status.st_mode & S_IFMT) == S_IFREG,
+              status.st_size > 0, status.st_size <= 16 * 1_024 * 1_024 else {
+            throw profileError("stored profile changed while opening")
+        }
+        guard let data = try handle.read(upToCount: 16 * 1_024 * 1_024 + 1),
+              !data.isEmpty, data.count <= 16 * 1_024 * 1_024 else {
+            throw profileError("stored profile exceeds the size limit")
+        }
+        return data
+    }
+
     private func listUnlocked() throws -> Data {
         let profiles = root.appendingPathComponent("profiles", isDirectory: true)
         let names = ((try? FileManager.default.contentsOfDirectory(atPath: profiles.path)) ?? [])
@@ -232,7 +324,27 @@ final class ProfileBroker: @unchecked Sendable {
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try process.run()
-        process.waitUntilExit()
+        let deadline = Date().addingTimeInterval(15)
+        while process.isRunning, Date() < deadline {
+            usleep(50_000)
+        }
+        if process.isRunning {
+            process.terminate()
+            let terminateDeadline = Date().addingTimeInterval(1)
+            while process.isRunning, Date() < terminateDeadline {
+                usleep(50_000)
+            }
+        }
+        if process.isRunning {
+            kill(process.processIdentifier, SIGKILL)
+            let killDeadline = Date().addingTimeInterval(1)
+            while process.isRunning, Date() < killDeadline {
+                usleep(50_000)
+            }
+        }
+        guard !process.isRunning else {
+            throw profileError("profile validator did not stop")
+        }
         return process.terminationStatus
     }
 

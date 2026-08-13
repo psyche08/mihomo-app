@@ -4,13 +4,31 @@
 
 Use `Install / Repair Daemon…` from the tray. The App invokes the bundled
 installer through the standard macOS administrator authorization dialog.
+If no previously authenticated active profile exists, installation stages a
+REJECT-only provisioning profile and starts only the authenticated XPC daemon;
+the agent, TUN, and managed DNS remain stopped. The selected user profile is
+then activated over typed XPC. Only a full-health readback starts networking
+and clears provisioning; a failed activation leaves real system DNS intact.
 
-For a remote Mac, invoke the detached installer entry point from an authenticated
-SSH session with `sudo`. It is embedded at
-`Contents/Resources/scripts/install-daemon-remote.sh`, starts the real installer
-under `nohup`, and prints a root-only log path. Migration therefore continues if
-the TUN handoff interrupts SSH. Launchd never executes from the movable App
-bundle.
+For a remote Mac, first transfer a release App through an authenticated channel
+and verify the complete bundle, then invoke the detached entry point **without**
+`sudo` from the authenticated SSH session:
+
+```bash
+APP=/Applications/MihomoBox.app
+/usr/bin/codesign --verify --deep --strict --all-architectures "$APP"
+/usr/sbin/spctl --assess --type execute "$APP"
+"$APP/Contents/Resources/scripts/install-daemon-remote.sh"
+```
+
+The wrapper itself is deliberately unprivileged and refuses root execution. It
+hands control to the signed `mihomoboxctl install --detached` entry point, which
+requests `sudo` and constructs the fixed snapshot-verification bootstrap. After
+root has copied and verified the App, the verified installer runs under `nohup`
+and the CLI prints a root-only log path. Migration therefore continues if the
+TUN handoff interrupts SSH. A checkout, an App from an unauthenticated transfer,
+or a standalone copy of the wrapper is not a trusted remote installation source.
+Launchd never executes from the movable App bundle.
 
 The visible bundle is `MihomoBox.app`. Existing
 `/Library/Application Support/Mihomo App` and `/Library/Logs/Mihomo App` paths
@@ -42,8 +60,15 @@ Only an installed copy under `/Applications` or `~/Applications` applies this
 default. That login item is not privileged and never owns a Mihomo process.
 Turning it off later in macOS System Settings is respected.
 
-It also installs `/usr/local/bin/mihomoboxctl` as a symlink to the signed App
-bundle. An unrelated existing file or symlink at that path is preserved.
+It copies the signed CLI out of the verified snapshot into root-owned
+Application Support, then makes `/usr/local/bin/mihomoboxctl` a user-executed
+symlink to that stable copy. The link never points into the movable App, and
+root never executes through it. A mode-`0600`, root-owned target record lets
+repair or uninstall distinguish its exact link; an unrelated existing file or
+symlink at the global CLI path is preserved. The standalone global CLI handles
+typed XPC operations only. Install or uninstall must be launched from the tray
+or the CLI inside the signed App so the running Mach-O can bind the exact App
+snapshot before elevation.
 
 Upgrades migrate the former `dev.linsheng.mihomo-app.daemon` label to
 `dev.linsheng.mihomo.daemon`. The old job is stopped and its plist removed
@@ -54,19 +79,28 @@ do not require another administrator dialog. On launch, the App compares the
 bundled and installed daemon/agent/Mihomo digests. Changed binaries cross the
 authenticated XPC channel, are independently validated against the same leaf
 certificate, atomically replaced with rollback, and restarted by the daemon or
-launchd. Plist, path-layout, or signing-certificate
+launchd. Daemon replacement remains `update_pending` across launchd restart
+until the new set passes full network health; App and CLI report success only
+after that commit. Plist, path-layout, or signing-certificate
 migrations still require **Install / Repair Daemon**.
 
-The App checks for updates thirty seconds after launch and every six hours after
-a successful check. Network or feed failures retry with exponential delays from
-thirty seconds to thirty minutes. The updater logs only error categories and
-retry counters, never endpoint URLs.
+Sparkle performs automatic signed update checks from the Swift user process.
+It verifies the signed appcast, the enclosure's EdDSA signature, Apple code
+signature, and notarization chain before atomically replacing the App and
+relaunching. System profiling is disabled. The updater never changes the root
+LaunchDaemon directly; the relaunched App performs the existing authenticated
+three-component synchronization. Updater diagnostics must not include proxy or
+subscription configuration.
 
 Inspect without changes:
 
 ```bash
-sudo scripts/install-daemon.sh --dry-run
+scripts/install-daemon.sh --app-bundle /Applications/MihomoBox.app --dry-run
 ```
+
+Dry-run is intentionally unprivileged and is not signature or release proof.
+Real root execution of `install-daemon.sh` accepts only the private snapshot
+created and verified by the signed Swift bootstrap.
 
 ## Restore
 
@@ -74,17 +108,19 @@ Stop the service and restore normal networking while preserving profiles and
 installation files:
 
 ```bash
-sudo scripts/install-daemon.sh --restore-network
+mihomoboxctl stop
 ```
 
 The tray exposes the same operation through authenticated XPC.
 It restores system DNS, removes the managed alias, flushes system/Mihomo DNS
 caches, stops TUN, and removes its routes.
 
-To remove the installed service and files entirely:
+To remove the installed service and files entirely, invoke the CLI inside the
+signed App (the standalone root-owned CLI deliberately cannot authorize an App
+snapshot):
 
 ```bash
-sudo scripts/install-daemon.sh --restore
+/Applications/MihomoBox.app/Contents/MacOS/mihomoboxctl uninstall
 ```
 
 Restore stops the daemon, agent, and Mihomo child, restores the backed-up service/global DNS,
@@ -103,12 +139,12 @@ mihomoboxctl profile import-url URL [--name profile.yaml] [--activate]
   [--username USER] [--header NAME] [--secret-stdin]
 mihomoboxctl profile switch profile.yaml
 mihomoboxctl profile reload
-mihomoboxctl install
+mihomoboxctl install [--detached]
 mihomoboxctl start
 mihomoboxctl restart
 mihomoboxctl stop
 mihomoboxctl components update
-mihomoboxctl uninstall
+/Applications/MihomoBox.app/Contents/MacOS/mihomoboxctl uninstall
 ```
 
 Only `install` and `uninstall` invoke the administrator-authorized installer.
@@ -158,9 +194,11 @@ importing or refreshing requires supplying them again.
 /Library/Application Support/Mihomo App/daemon.json
 /Library/Application Support/Mihomo App/controller.json
 /Library/Application Support/Mihomo App/controller-secret
+/Library/Application Support/Mihomo App/component-version
 /Library/Application Support/Mihomo App/mihomo
 /Library/Application Support/Mihomo App/mihomo-daemon
 /Library/Application Support/Mihomo App/mihomo-agent
+/Library/Application Support/Mihomo App/mihomoboxctl
 /Library/Application Support/Mihomo App/mihomo-data/config.yaml
 /Library/Application Support/Mihomo App/profiles/
 /Library/Application Support/Mihomo App/active-profile
@@ -182,10 +220,14 @@ Mihomo lines. The crash logs are independent of normal rotation so a panic or
 fatal-signal record survives even when the main log rolls. The tray's `Tools >
 Open Diagnostic Logs…` command opens both user and daemon log folders.
 
-The user paths stage local tray imports before daemon installation. The signed
-installer validates the selected staged profile, copies it into the root-owned
-profile directory, makes it active, and starts the managed service in the same
-administrator-authorized transaction.
+The user paths stage local tray imports before daemon installation. When a
+profile accompanies first installation, the unprivileged App freezes its
+bounded bytes before authorization; root never reopens that user-writable path.
+After the verified installer brings up the daemon, the App sends those bytes
+through the typed XPC profile transaction for validation and activation. If
+that first-install activation fails, it stops the agent and confirms TUN and
+system DNS restoration before returning the error, rather than leaving the
+minimal direct profile active.
 
 ## Diagnosis
 

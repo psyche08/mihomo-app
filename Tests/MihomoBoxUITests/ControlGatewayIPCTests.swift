@@ -99,17 +99,7 @@ final class ControlGatewayIPCTests: XCTestCase {
     XCTAssertTrue(unused.recordedRequests.isEmpty)
   }
 
-  func testProxySelectionUsesTypedMutationAndControllerReadback() async throws {
-    let before = """
-      {
-        "configs":{"mode":"rule"},
-        "proxies":{"proxies":{
-          "Auto":{"type":"Selector","now":"Node A","all":["Node A","Node B"]},
-          "Node A":{"type":"VLESS"},
-          "Node B":{"type":"VLESS"}
-        }}
-      }
-      """
+  func testProxySelectionDecodesDaemonAuthoritativeTransactionResult() async throws {
     let after = """
       {
         "configs":{"mode":"rule"},
@@ -120,44 +110,59 @@ final class ControlGatewayIPCTests: XCTestCase {
         }}
       }
       """
-    let session = ScriptedControlSession(steps: [
-      .success(json: before),
-      .success(),
-      .success(json: after),
-    ])
+    let session = ScriptedControlSession(steps: [.success(json: after)])
     let factory = ControlSessionFactoryBox(sessions: [session])
     let gateway = ControlGateway(makeSession: { try factory.makeSession() })
 
     try await gateway.selectProxy(group: "Auto", proxy: "Node B")
 
     let requests = session.recordedRequests
-    XCTAssertEqual(requests.count, 3)
-    assertRequest(requests[0], operation: .snapshot)
+    XCTAssertEqual(requests.count, 1)
     assertRequest(
-      requests[1],
+      requests[0],
       operation: .selectProxy,
       arguments: ["group": "Auto", "proxy": "Node B"]
     )
-    assertRequest(requests[2], operation: .snapshot)
   }
 
-  func testRouteMutationsRemainWholeTransactionsUnderControlledInterleaving() async throws {
-    let firstSnapshotEntered = expectation(description: "first route snapshot entered")
-    let session = InterleavingRouteControlSession {
-      firstSnapshotEntered.fulfill()
-    }
+  func testProxyProviderRefreshUsesTypedDaemonMutationAfterNonGlobalReadback() async throws {
+    let session = ScriptedControlSession(steps: [
+      .success(json: routeSnapshot(mode: "rule", globalNow: "Auto")),
+      .success(),
+    ])
     let factory = ControlSessionFactoryBox(sessions: [session])
     let gateway = ControlGateway(makeSession: { try factory.makeSession() })
 
-    let modeTask = Task { try await gateway.applyOutboundMode(.global) }
-    await fulfillment(of: [firstSnapshotEntered], timeout: 2)
+    try await gateway.refreshProxyProvider("Subscription")
+
+    XCTAssertEqual(session.recordedRequests.map(\.operation), [
+      .snapshot, .refreshProxyProvider,
+    ])
+    assertRequest(
+      session.recordedRequests[1],
+      operation: .refreshProxyProvider,
+      arguments: ["name": "Subscription"]
+    )
+  }
+
+  func testRouteMutationsRemainWholeTransactionsAcrossGatewayInstances() async throws {
+    let firstMutationEntered = expectation(description: "first route mutation entered")
+    let session = InterleavingRouteControlSession {
+      firstMutationEntered.fulfill()
+    }
+    let factory = ControlSessionFactoryBox(sessions: [session, session])
+    let trayGateway = ControlGateway(makeSession: { try factory.makeSession() })
+    let dashboardGateway = ControlGateway(makeSession: { try factory.makeSession() })
+
+    let modeTask = Task { try await trayGateway.applyOutboundMode(.global) }
+    await fulfillment(of: [firstMutationEntered], timeout: 2)
 
     let selectionTask = Task {
-      try await gateway.selectProxy(group: "Auto", proxy: "Node B")
+      try await dashboardGateway.selectProxy(group: "Auto", proxy: "Node B")
     }
     let providerTask = Task { () -> String in
       do {
-        try await gateway.refreshProxyProvider("Subscription")
+        try await dashboardGateway.refreshProxyProvider("Subscription")
         return "success"
       } catch let error as ControlGatewayError {
         return String(describing: error)
@@ -166,11 +171,11 @@ final class ControlGatewayIPCTests: XCTestCase {
       }
     }
 
-    // The first synchronous XPC send is deliberately blocked. This gives both
-    // competing tasks time to reach the high-level gate; without that gate
-    // their snapshot requests queue ahead of the mode transaction's mutation.
+    // The first typed XPC mutation is deliberately blocked. Competing App
+    // entry points must stay behind the process gate, while the daemon owns the
+    // complete route transaction represented by that single request.
     try await Task.sleep(nanoseconds: 50_000_000)
-    session.releaseFirstSnapshot()
+    session.releaseFirstMutation()
 
     let modeSnapshot = try await modeTask.value
     try await selectionTask.value
@@ -187,85 +192,31 @@ final class ControlGatewayIPCTests: XCTestCase {
     XCTAssertGreaterThanOrEqual(operations.count, 3)
     XCTAssertEqual(
       Array(operations.prefix(3)),
-      [.snapshot, .setOutboundMode, .snapshot],
+      [.setOutboundMode, .selectProxy, .snapshot],
       "a competing selector or provider transaction interleaved with Global mode"
     )
-    XCTAssertEqual(factory.makeCount, 1)
+    XCTAssertEqual(factory.makeCount, 2)
   }
 
-  func testUnsafeGlobalReadbackRestoresPriorModeAndSelectorBeforeFailing() async throws {
-    let session = ScriptedControlSession(
-      steps: unsafeGlobalTransitionSteps(
-        restorationReadback: routeSnapshot(mode: "rule", globalNow: "DIRECT")
-      ))
+  func testUnsafeGlobalFailureIsOwnedByDaemonWithoutClientRollbackOrStop() async throws {
+    let session = ScriptedControlSession(steps: [
+      .failure(.rejected("the unsafe Global runtime was stopped"))
+    ])
     let factory = ControlSessionFactoryBox(sessions: [session])
     let gateway = ControlGateway(makeSession: { try factory.makeSession() })
 
     do {
       _ = try await gateway.applyOutboundMode(.global)
-      XCTFail("an unsafe Global readback must not be accepted")
-    } catch let error as ControlGatewayError {
-      XCTAssertEqual(error, .outboundModeReadbackMismatch)
+      XCTFail("an unsafe Global result must be rejected by the daemon")
+    } catch let error as ControlError {
+      guard case let .rejected(message) = error else {
+        return XCTFail("unexpected control error: \(error)")
+      }
+      XCTAssertEqual(message, "the unsafe Global runtime was stopped")
     }
 
-    let requests = session.recordedRequests
-    XCTAssertEqual(
-      requests.map(\.operation),
-      [
-        .snapshot, .snapshot, .selectProxy, .snapshot,
-        .setOutboundMode, .snapshot,
-        .setOutboundMode, .selectProxy, .snapshot,
-      ]
-    )
-    XCTAssertEqual(requests[6].arguments, ["mode": "rule"])
-    XCTAssertEqual(requests[7].arguments, ["group": "GLOBAL", "proxy": "DIRECT"])
-    XCTAssertFalse(requests.contains { $0.operation == .stopAgent })
-  }
-
-  func testUnsafeGlobalReadbackStopsAgentWhenRestorationCannotBeConfirmed() async throws {
-    var steps = unsafeGlobalTransitionSteps(
-      restorationReadback: routeSnapshot(mode: "global", globalNow: "DIRECT")
-    )
-    steps.append(.success())
-    let session = ScriptedControlSession(steps: steps)
-    let factory = ControlSessionFactoryBox(sessions: [session])
-    let gateway = ControlGateway(makeSession: { try factory.makeSession() })
-
-    do {
-      _ = try await gateway.applyOutboundMode(.global)
-      XCTFail("an unconfirmed recovery must stop the runtime")
-    } catch let error as ControlGatewayError {
-      XCTAssertEqual(error, .unsafeGlobalRuntimeStopped)
-    }
-
-    let requests = session.recordedRequests
-    XCTAssertEqual(requests.last?.operation, .stopAgent)
-    XCTAssertEqual(requests.filter { $0.operation == .stopAgent }.count, 1)
-    XCTAssertEqual(requests[6].arguments, ["mode": "rule"])
-    XCTAssertEqual(requests[7].arguments, ["group": "GLOBAL", "proxy": "DIRECT"])
-  }
-
-  func testUnsafeGlobalReadbackReportsWhenFailClosedStopFails() async throws {
-    var steps = unsafeGlobalTransitionSteps(
-      restorationReadback: routeSnapshot(mode: "global", globalNow: "DIRECT")
-    )
-    steps.append(.failure(.connectionFailed))
-    let session = ScriptedControlSession(steps: steps)
-    let factory = ControlSessionFactoryBox(sessions: [session])
-    let gateway = ControlGateway(makeSession: { try factory.makeSession() })
-
-    do {
-      _ = try await gateway.applyOutboundMode(.global)
-      XCTFail("a failed fail-closed stop must be surfaced")
-    } catch let error as ControlGatewayError {
-      XCTAssertEqual(error, .unsafeGlobalFailClosedStopFailed)
-    } catch {
-      XCTFail("unexpected error: \(error)")
-    }
-
-    XCTAssertEqual(session.recordedRequests.last?.operation, .stopAgent)
-    XCTAssertEqual(session.recordedRequests.filter { $0.operation == .stopAgent }.count, 1)
-    XCTAssertEqual(factory.makeCount, 1, "a mutation must not reconnect and replay stopAgent")
+    XCTAssertEqual(session.recordedRequests.map(\.operation), [.setOutboundMode])
+    XCTAssertEqual(factory.makeCount, 1, "a rejected mutation must not be replayed")
   }
 
   func testStreamUsesIndependentSessionAndClosesItOnCancellation() async throws {
@@ -334,25 +285,6 @@ final class ControlGatewayIPCTests: XCTestCase {
     } else {
       XCTAssertNil(request.payload, file: file, line: line)
     }
-  }
-
-  private func unsafeGlobalTransitionSteps(
-    restorationReadback: String
-  ) -> [ScriptedControlSession.Step] {
-    let prior = routeSnapshot(mode: "rule", globalNow: "DIRECT")
-    let selected = routeSnapshot(mode: "rule", globalNow: "Node A")
-    let unsafe = routeSnapshot(mode: "global", globalNow: "DIRECT")
-    return [
-      .success(json: prior),
-      .success(json: prior),
-      .success(),
-      .success(json: selected),
-      .success(),
-      .success(json: unsafe),
-      .success(),
-      .success(),
-      .success(json: restorationReadback),
-    ]
   }
 
   private func routeSnapshot(mode: String, globalNow: String) -> String {
@@ -467,15 +399,15 @@ private final class BlockingStreamControlSession: ControlSessionProtocol, @unche
 
 private final class InterleavingRouteControlSession: ControlSessionProtocol, @unchecked Sendable {
   private let condition = NSCondition()
-  private let onFirstSnapshot: () -> Void
+  private let onFirstMutation: () -> Void
   private var requests: [ControlRequest] = []
-  private var firstSnapshotReleased = false
-  private var snapshotCount = 0
+  private var firstMutationReleased = false
+  private var firstMutationObserved = false
   private var mode = "rule"
   private var autoSelection = "Node A"
 
-  init(onFirstSnapshot: @escaping () -> Void) {
-    self.onFirstSnapshot = onFirstSnapshot
+  init(onFirstMutation: @escaping () -> Void) {
+    self.onFirstMutation = onFirstMutation
   }
 
   var recordedRequests: [ControlRequest] {
@@ -484,9 +416,9 @@ private final class InterleavingRouteControlSession: ControlSessionProtocol, @un
     return requests
   }
 
-  func releaseFirstSnapshot() {
+  func releaseFirstMutation() {
     condition.lock()
-    firstSnapshotReleased = true
+    firstMutationReleased = true
     condition.broadcast()
     condition.unlock()
   }
@@ -496,13 +428,6 @@ private final class InterleavingRouteControlSession: ControlSessionProtocol, @un
     requests.append(request)
     switch request.operation {
     case .snapshot:
-      snapshotCount += 1
-      if snapshotCount == 1 {
-        onFirstSnapshot()
-        while !firstSnapshotReleased {
-          condition.wait()
-        }
-      }
       let snapshotMode = mode
       let snapshotAutoSelection = autoSelection
       condition.unlock()
@@ -513,9 +438,19 @@ private final class InterleavingRouteControlSession: ControlSessionProtocol, @un
         condition.unlock()
         throw ControlError.invalidReply
       }
+      if !firstMutationObserved {
+        firstMutationObserved = true
+        onFirstMutation()
+        while !firstMutationReleased { condition.wait() }
+      }
       mode = requested
+      let snapshotMode = mode
+      let snapshotAutoSelection = autoSelection
       condition.unlock()
-      return ControlResponse(success: true)
+      return ControlResponse(
+        success: true,
+        payload: try snapshotPayload(mode: snapshotMode, autoSelection: snapshotAutoSelection)
+      )
     case .selectProxy:
       guard request.arguments["group"] == "Auto",
         let proxy = request.arguments["proxy"]
@@ -524,14 +459,15 @@ private final class InterleavingRouteControlSession: ControlSessionProtocol, @un
         throw ControlError.invalidReply
       }
       autoSelection = proxy
+      let snapshotMode = mode
+      let snapshotAutoSelection = autoSelection
       condition.unlock()
-      return ControlResponse(success: true)
-    case .controllerRequest:
-      guard
-        request.arguments == [
-          "method": "PUT", "target": "/providers/proxies/Subscription",
-        ]
-      else {
+      return ControlResponse(
+        success: true,
+        payload: try snapshotPayload(mode: snapshotMode, autoSelection: snapshotAutoSelection)
+      )
+    case .refreshProxyProvider:
+      guard request.arguments == ["name": "Subscription"] else {
         condition.unlock()
         throw ControlError.invalidReply
       }

@@ -4,7 +4,10 @@ import Security
 import XPC
 
 public let mihomoControlServiceName = "dev.linsheng.mihomo.daemon.control"
-public let mihomoControlProtocolVersion = 1
+/// 0.8.0 intentionally breaks compatibility with the pre-native shell. An
+/// existing 0.7 daemon must be replaced through the verified installer rather
+/// than through its older, non-transactional self-update path.
+public let mihomoControlProtocolVersion = 2
 public let mihomoControlMaximumPayloadBytes = 256 * 1_024 * 1_024
 
 public enum ControlOperation: String, Codable, Sendable {
@@ -20,6 +23,7 @@ public enum ControlOperation: String, Codable, Sendable {
     case setTUN = "runtime.set-tun"
     case setOutboundMode = "runtime.set-outbound-mode"
     case selectProxy = "runtime.select-proxy"
+    case refreshProxyProvider = "runtime.refresh-proxy-provider"
     case testDelay = "proxy.test-delay"
     case controllerVersion = "dashboard.version"
     case listRules = "dashboard.rules"
@@ -74,9 +78,23 @@ public struct ComponentUpdatePackage: Codable, Sendable {
 
 public struct ComponentStatus: Codable, Sendable {
     public var components: [String: String]
+    public var installedVersion: String?
+    public var updatePending: Bool
 
-    public init(components: [String: String]) {
+    public init(
+        components: [String: String],
+        installedVersion: String? = nil,
+        updatePending: Bool = false
+    ) {
         self.components = components
+        self.installedVersion = installedVersion
+        self.updatePending = updatePending
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case components
+        case installedVersion = "installed_version"
+        case updatePending = "update_pending"
     }
 }
 
@@ -202,6 +220,53 @@ public enum SigningCertificateRequirement {
         guard SecStaticCodeCheckValidity(staticCode, flags, parsed) == errSecSuccess else {
             throw ControlError.invalidComponentSignature
         }
+    }
+
+    /// Freezes one exact signed artifact, not merely its certificate family.
+    ///
+    /// The CDHash binds the sealed App resources (including the privileged
+    /// installer) and prevents a source-path race from substituting another
+    /// valid old build signed by the same certificate and identifier.
+    public static func exactStaticCodeRequirement(
+        at url: URL,
+        leafRequirement: String
+    ) throws -> String {
+        var staticCode: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(url as CFURL, [], &staticCode) == errSecSuccess,
+              let staticCode else {
+            throw ControlError.invalidComponentSignature
+        }
+        var designated: SecRequirement?
+        guard SecCodeCopyDesignatedRequirement(staticCode, [], &designated) == errSecSuccess,
+              let designated else {
+            throw ControlError.invalidRequirement
+        }
+        var designatedText: CFString?
+        guard SecRequirementCopyString(designated, [], &designatedText) == errSecSuccess,
+              let designatedText else {
+            throw ControlError.invalidRequirement
+        }
+        var information: CFDictionary?
+        guard SecCodeCopySigningInformation(
+            staticCode,
+            SecCSFlags(rawValue: kSecCSSigningInformation),
+            &information
+        ) == errSecSuccess,
+            let values = information as? [String: Any],
+            let unique = values[kSecCodeInfoUnique as String] as? Data,
+            !unique.isEmpty else {
+            throw ControlError.invalidSigningInformation
+        }
+        let cdhash = unique.map { String(format: "%02x", $0) }.joined()
+        let exact = "(\(designatedText as String)) and (\(leafRequirement)) " +
+            "and cdhash H\"\(cdhash)\""
+        var parsed: SecRequirement?
+        guard SecRequirementCreateWithString(exact as CFString, [], &parsed) == errSecSuccess,
+              parsed != nil else {
+            throw ControlError.invalidRequirement
+        }
+        try validateStaticCode(at: url, requirement: exact)
+        return exact
     }
 }
 

@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import MihomoControl
+import Security
 
 private let appSupport = URL(fileURLWithPath: "/Library/Application Support/Mihomo App")
 private let daemonPath = appSupport.appendingPathComponent("mihomo-daemon")
@@ -45,42 +46,232 @@ private func runInteractive(_ executable: String, _ arguments: [String]) throws 
 }
 
 private func appBundleURL() throws -> URL {
-    let executable = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
+    guard let executable = currentExecutableURL()?.resolvingSymlinksInPath().standardizedFileURL else {
+        throw CLIError(message: "无法确定当前 mihomoboxctl 的签名路径。", exitCode: 1)
+    }
     var cursor = executable.deletingLastPathComponent()
     while cursor.path != "/" {
+        let caller = cursor.appendingPathComponent("Contents/MacOS/mihomoboxctl")
+        let installer = cursor.appendingPathComponent("Contents/Resources/scripts/install-daemon.sh")
         if cursor.pathExtension == "app",
-           FileManager.default.fileExists(
-               atPath: cursor.appendingPathComponent("Contents/Resources/scripts/install-daemon.sh").path
-           ) {
+           isDirectoryNonSymlink(cursor),
+           caller.resolvingSymlinksInPath().standardizedFileURL == executable,
+           isRegularExecutable(caller),
+           isRegularExecutable(installer) {
             return cursor
         }
         cursor.deleteLastPathComponent()
     }
-
-    let installed = URL(fileURLWithPath: "/Applications/MihomoBox.app")
-    if FileManager.default.fileExists(
-        atPath: installed.appendingPathComponent("Contents/Resources/scripts/install-daemon.sh").path
-    ) {
-        return installed
-    }
-    throw CLIError(message: "找不到 MihomoBox.app；请从 App 内运行 CLI，或将 App 安装到 /Applications。")
+    throw CLIError(message: "找不到当前已签名 mihomoboxctl 所属的 MihomoBox.app。", exitCode: 1)
 }
 
-private func installerCommand(_ arguments: [String]) throws -> (URL, URL, [String]) {
+private struct InstallerSigningRequirements {
+    let app: String
+    let caller: String
+}
+
+private enum InstallerBootstrap {
+    static let callerRelativeExecutable = "Contents/MacOS/mihomoboxctl"
+
+    static func exactSigningRequirements(bundle: URL) throws -> InstallerSigningRequirements {
+        let caller = bundle.appendingPathComponent(callerRelativeExecutable)
+        guard isDirectoryNonSymlink(bundle), isRegularExecutable(caller),
+              currentExecutableURL()?.resolvingSymlinksInPath().standardizedFileURL
+                == caller.resolvingSymlinksInPath().standardizedFileURL else {
+            throw CLIError(message: "当前 CLI 不属于所选 App bundle。", exitCode: 1)
+        }
+        let leaf: String
+        do {
+            leaf = try SigningCertificateRequirement.currentProcess()
+            try SigningCertificateRequirement.validateStaticCode(at: bundle, requirement: leaf)
+        } catch {
+            throw CLIError(message: "MihomoBox 签名身份无效，拒绝管理员授权。", exitCode: 1)
+        }
+        let callerRequirement = try currentProcessExactRequirement(leafRequirement: leaf)
+        do {
+            try SigningCertificateRequirement.validateStaticCode(
+                at: caller,
+                requirement: callerRequirement
+            )
+        } catch {
+            throw CLIError(message: "当前 CLI 已被另一个磁盘文件替换。", exitCode: 1)
+        }
+        let appRequirement = try SigningCertificateRequirement.exactStaticCodeRequirement(
+            at: bundle,
+            leafRequirement: leaf
+        )
+        do {
+            try SigningCertificateRequirement.validateStaticCode(
+                at: bundle,
+                requirement: appRequirement
+            )
+            try SigningCertificateRequirement.validateStaticCode(
+                at: caller,
+                requirement: callerRequirement
+            )
+        } catch {
+            throw CLIError(message: "MihomoBox designated requirement 无效。", exitCode: 1)
+        }
+        return InstallerSigningRequirements(app: appRequirement, caller: callerRequirement)
+    }
+
+    private static func currentProcessExactRequirement(
+        leafRequirement: String
+    ) throws -> String {
+        var dynamicCode: SecCode?
+        guard SecCodeCopySelf([], &dynamicCode) == errSecSuccess,
+              let dynamicCode else {
+            throw CLIError(message: "无法读取当前 CLI 的运行时签名。", exitCode: 1)
+        }
+        var staticCode: SecStaticCode?
+        guard SecCodeCopyStaticCode(dynamicCode, [], &staticCode) == errSecSuccess,
+              let staticCode else {
+            throw CLIError(message: "无法冻结当前 CLI 的运行时签名。", exitCode: 1)
+        }
+        var designated: SecRequirement?
+        guard SecCodeCopyDesignatedRequirement(staticCode, [], &designated) == errSecSuccess,
+              let designated else {
+            throw CLIError(message: "无法读取当前 CLI 的 designated requirement。", exitCode: 1)
+        }
+        var designatedText: CFString?
+        guard SecRequirementCopyString(designated, [], &designatedText) == errSecSuccess,
+              let designatedText else {
+            throw CLIError(message: "无法序列化当前 CLI 的 designated requirement。", exitCode: 1)
+        }
+        var information: CFDictionary?
+        guard SecCodeCopySigningInformation(
+            staticCode,
+            SecCSFlags(rawValue: kSecCSSigningInformation),
+            &information
+        ) == errSecSuccess,
+            let values = information as? [String: Any],
+            let unique = values[kSecCodeInfoUnique as String] as? Data,
+            !unique.isEmpty else {
+            throw CLIError(message: "无法读取当前 CLI 的 Code Directory hash。", exitCode: 1)
+        }
+        let cdhash = unique.map { String(format: "%02x", $0) }.joined()
+        let exact = "(\(designatedText as String)) and (\(leafRequirement)) "
+            + "and cdhash H\"\(cdhash)\""
+        var parsed: SecRequirement?
+        guard SecRequirementCreateWithString(exact as CFString, [], &parsed) == errSecSuccess,
+              parsed != nil else {
+            throw CLIError(message: "当前 CLI 的精确签名 requirement 无效。", exitCode: 1)
+        }
+        return exact
+    }
+
+    static func command(
+        sourceBundlePath: String,
+        requirements: InstallerSigningRequirements,
+        installerArguments: [String],
+        detached: Bool
+    ) -> String {
+        let source = shellQuote(sourceBundlePath)
+        let appRequirement = shellQuote("=\(requirements.app)")
+        let callerRequirement = shellQuote("=\(requirements.caller)")
+        let forwarded = installerArguments.map(shellQuote).joined(separator: " ")
+        let invocation = """
+        /bin/bash "$installer" --verified-app-snapshot "$snapshot"\(forwarded.isEmpty ? "" : " \(forwarded)")
+        """
+
+        var body = """
+        set -eu
+        PATH=/usr/bin:/bin:/usr/sbin:/sbin
+        export PATH
+        umask 077
+        stage=$(/usr/bin/mktemp -d /private/tmp/mihomobox-bootstrap.XXXXXX)
+        case "$stage" in
+          /private/tmp/mihomobox-bootstrap.*) ;;
+          *) exit 1 ;;
+        esac
+        /bin/chmod 0700 "$stage"
+        [ "$('/usr/bin/stat' -f '%u:%Lp' "$stage")" = "0:700" ]
+        cleanup() { /bin/rm -rf -- "$stage"; }
+        trap cleanup EXIT HUP INT TERM
+        snapshot="$stage/MihomoBox.app"
+        /usr/bin/ditto \(source) "$snapshot"
+        /usr/bin/codesign --verify --deep --strict --all-architectures \
+          -R \(appRequirement) "$snapshot"
+        caller="$snapshot/\(callerRelativeExecutable)"
+        [ -f "$caller" ] && [ ! -L "$caller" ] && [ -x "$caller" ]
+        /usr/bin/codesign --verify --strict --all-architectures \
+          -R \(callerRequirement) "$caller"
+        installer="$snapshot/Contents/Resources/scripts/install-daemon.sh"
+        [ -f "$installer" ] && [ ! -L "$installer" ] && [ -x "$installer" ]
+        """
+
+        if detached {
+            let worker = """
+            set -eu
+            stage=$1
+            shift
+            trap '/bin/rm -rf -- "$stage/MihomoBox.app"' EXIT HUP INT TERM
+            "$@"
+            """
+            body += """
+
+            log="$stage/install.log"
+            pid_file="$stage/install.pid"
+            /usr/bin/nohup /bin/sh -c \(shellQuote(worker)) mihomobox-installer \
+              "$stage" \(invocation) >"$log" 2>&1 </dev/null &
+            install_pid=$!
+            /usr/bin/printf '%s\n' "$install_pid" >"$pid_file"
+            /bin/chmod 0600 "$log" "$pid_file"
+            trap - EXIT HUP INT TERM
+            /bin/echo "MihomoBox daemon installation started"
+            /bin/echo "pid: $install_pid"
+            /bin/echo "log: $log"
+            """
+        } else {
+            body += "\n\(invocation)"
+        }
+        return "/bin/sh -c \(shellQuote(body))"
+    }
+
+}
+
+private func runInstaller(_ arguments: [String], detached: Bool = false) throws -> Int32 {
     let bundle = try appBundleURL()
-    let installer = bundle.appendingPathComponent("Contents/Resources/scripts/install-daemon.sh")
-    var command = [installer.path, "--app-bundle", bundle.path]
-    command.append(contentsOf: arguments)
-    return (bundle, installer, command)
+    let requirements = try InstallerBootstrap.exactSigningRequirements(bundle: bundle)
+    let command = InstallerBootstrap.command(
+        sourceBundlePath: bundle.standardizedFileURL.path,
+        requirements: requirements,
+        installerArguments: arguments,
+        detached: detached
+    )
+    if geteuid() == 0 {
+        return try runInteractive("/bin/sh", ["-c", command])
+    } else {
+        return try runInteractive("/usr/bin/sudo", ["/bin/sh", "-c", command])
+    }
 }
 
-private func runInstaller(_ arguments: [String]) throws -> Int32 {
-    let (_, _, command) = try installerCommand(arguments)
-    if geteuid() == 0 {
-        return try runInteractive("/bin/bash", command)
-    } else {
-        return try runInteractive("/usr/bin/sudo", ["/bin/bash"] + command)
+private func currentExecutableURL() -> URL? {
+    var size: UInt32 = 0
+    _ = _NSGetExecutablePath(nil, &size)
+    guard size > 1 else { return nil }
+    var buffer = [CChar](repeating: 0, count: Int(size))
+    let status = buffer.withUnsafeMutableBufferPointer {
+        _NSGetExecutablePath($0.baseAddress, &size)
     }
+    guard status == 0 else { return nil }
+    return URL(fileURLWithPath: String(cString: buffer))
+}
+
+private func shellQuote(_ value: String) -> String {
+    "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
+}
+
+private func isRegularExecutable(_ url: URL) -> Bool {
+    var metadata = stat()
+    return lstat(url.path, &metadata) == 0
+        && metadata.st_mode & S_IFMT == S_IFREG
+        && metadata.st_mode & 0o111 != 0
+}
+
+private func isDirectoryNonSymlink(_ url: URL) -> Bool {
+    var metadata = stat()
+    return lstat(url.path, &metadata) == 0 && metadata.st_mode & S_IFMT == S_IFDIR
 }
 
 private enum SubscriptionAuthentication {
@@ -546,7 +737,7 @@ private func updateManagedComponents() throws -> Int32 {
             changed = true
         }
     }
-    guard changed else {
+    guard changed || status.updatePending || status.installedVersion != appVersion else {
         print("managed components are current")
         return 0
     }
@@ -570,22 +761,54 @@ private func updateManagedComponents() throws -> Int32 {
         response = try sendControl(.upgradeComponents, payload: package)
     } catch let error as ControlError {
         guard daemonWillRestart, error.isDisconnection else { throw error }
-        print("replaced the daemon; launchd is restarting it")
-        return 0
+        response = nil
     }
     guard let response,
           let result = try JSONSerialization.jsonObject(with: response) as? [String: Any],
           let updated = result["updated"] as? [String] else {
-        // Same reasoning: a self-replacing daemon can drop the connection
-        // without producing a decodable reply.
-        if daemonWillRestart {
-            print("replaced the daemon; launchd is restarting it")
-            return 0
+        guard daemonWillRestart else {
+            throw CLIError(message: "the daemon returned an invalid component update result", exitCode: 1)
         }
-        throw CLIError(message: "the daemon returned an invalid component update result", exitCode: 1)
+        return try waitForCommittedComponents(
+            appVersion: appVersion,
+            components: components,
+            updated: ManagedComponent.allCases.map(\.rawValue)
+        )
+    }
+    if daemonWillRestart {
+        return try waitForCommittedComponents(
+            appVersion: appVersion,
+            components: components,
+            updated: updated
+        )
     }
     print("updated managed components: \(updated.sorted().joined(separator: ", "))")
     return 0
+}
+
+private func waitForCommittedComponents(
+    appVersion: String,
+    components: [String: Data],
+    updated: [String]
+) throws -> Int32 {
+    let expected = Dictionary(uniqueKeysWithValues: components.map {
+        ($0.key, ComponentUpdatePackage.digest($0.value))
+    })
+    for attempt in 0..<40 {
+        if let data = try? sendControl(.componentStatus),
+           let status = try? JSONDecoder().decode(ComponentStatus.self, from: data),
+           !status.updatePending,
+           status.installedVersion == appVersion,
+           status.components == expected {
+            print("updated managed components: \(updated.sorted().joined(separator: ", "))")
+            return 0
+        }
+        if attempt < 39 { usleep(500_000) }
+    }
+    throw CLIError(
+        message: "the daemon did not commit the component update",
+        exitCode: 1
+    )
 }
 
 private func serviceLoaded() -> Bool {
@@ -680,16 +903,19 @@ private func usage() {
                                       Download, validate, and import HTTP(S) YAML
       profile switch NAME             Transactionally activate a profile
       profile reload                  Reload the active profile
-      install                         Install or repair the LaunchDaemon
+      install [--detached]            Install or repair (App-contained CLI only)
       start                           Start the agent over authenticated XPC
       restart                         Restart the agent over authenticated XPC
       stop                            Stop the agent and restore real system DNS
       components update              Upgrade signed root components over XPC
-      uninstall                       Restore networking and remove installed files
+      uninstall                       Remove installation (App-contained CLI only)
 
     Authentication secrets are read from a hidden prompt unless --secret-stdin
     is used. Secrets and subscription URLs are never passed to the root installer.
-    Installation and removal request administrator authorization through sudo.
+    Installation and removal request administrator authorization through sudo
+    and fail closed unless this process is running inside the signed App.
+    --detached is intended for an authenticated remote shell and prints a
+    root-only log path after the signed App snapshot has been verified.
     Runtime and profile commands use certificate-authenticated XPC.
     """)
 }
@@ -721,8 +947,8 @@ private func performRPC(_ arguments: [String]) throws -> Int32 {
         try requireNoExtraArguments(values)
         payload = try sendControl(.snapshot)
     case "set-tun":
-        guard values.count == 1, values[0] == "true" || values[0] == "false" else {
-            throw CLIError(message: "usage: mihomoboxctl rpc set-tun true|false")
+        guard values == ["true"] else {
+            throw CLIError(message: "usage: mihomoboxctl rpc set-tun true; use stop to disable TUN and restore DNS")
         }
         payload = try sendControl(.setTUN, arguments: ["enabled": values[0]])
     case "set-mode":
@@ -833,8 +1059,10 @@ private func main() throws -> Int32 {
             throw CLIError(message: "unknown profile operation: \(operation)")
         }
     case "install":
-        try requireNoExtraArguments(arguments)
-        return try runInstaller([])
+        guard arguments.isEmpty || arguments == ["--detached"] else {
+            throw CLIError(message: "usage: mihomoboxctl install [--detached]")
+        }
+        return try runInstaller([], detached: arguments == ["--detached"])
     case "start":
         try requireNoExtraArguments(arguments)
         _ = try sendControl(.startAgent)

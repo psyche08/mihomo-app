@@ -1,7 +1,8 @@
 # Tray and Controller Contract
 
-The main window is native SwiftUI and hidden at startup. Tauri keeps the macOS
-accessory activation policy, event loop, updater, and tray; an in-process
+The main window is native SwiftUI and hidden at startup. A pure Swift
+`NSApplicationDelegate` keeps the macOS accessory activation policy and event
+loop, `NSStatusItem` owns the tray, Sparkle owns App updates, and an in-process
 `NSHostingController` owns the dashboard window.
 
 ## Menu
@@ -30,6 +31,8 @@ Reload Profiles
 ───────────────
 Tools ›
   Install / Repair Daemon…
+  Open Diagnostic Logs…
+  Check for Updates…
 ───────────────
 Exit
 ```
@@ -52,14 +55,16 @@ Outbound mode semantics are user-facing rather than selector-facing:
 - `Direct` sends all traffic directly.
 
 Mihomo internally implements Global mode through its built-in `GLOBAL`
-selector, but that selector is not a separate user choice. Before enabling
-Global mode, the tray resolves the selector chain and ensures it ends at a real
+selector, but that selector is not a separate user choice. The root daemon
+resolves the selector chain and ensures it ends at a real
 proxy rather than `DIRECT`, `REJECT`, `PASS`, an empty group, or a selector
 cycle. It prefers the already selected proxy chain, then a valid user proxy
-group, and only then a raw proxy node. The change is accepted only after a
-successful `PATCH /configs` and a subsequent controller readback confirms both
-the requested mode and the proxy route. Failure is shown as an action error;
-the check mark remains controller-owned.
+group, and only then a raw proxy node. Mode and selector changes are one
+daemon-serialized transaction: before-state, mutation, authoritative readback,
+and rollback cannot be interleaved by another signed client. If rollback or
+network restoration cannot be proved, the daemon stops the agent and restores
+DNS. The App sends one typed XPC request and renders the returned snapshot; it
+does not repeat rollback or stop decisions outside the privilege boundary.
 
 Managed system DNS requires Enhanced TUN. This item is also the service
 lifecycle entry point: without a selected profile it first tells the user to
@@ -80,8 +85,8 @@ reaches healthy runtime state cannot register anything, and MihomoBox does not
 re-add the login item after the user later turns it off in System Settings.
 Only an App under `/Applications` or `~/Applications` can apply the default, so
 a DMG, App Translocation, Downloads copy, or development smoke build cannot
-persist a temporary path. The Rust shell writes and validates the user-level
-LaunchAgent atomically; the SwiftUI module receives no LaunchAgent write API. The login
+persist a temporary path. The AppKit shell writes and validates the user-level
+LaunchAgent atomically; SwiftUI views receive no LaunchAgent write API. The login
 item starts the hidden menu-bar App after login and does not directly launch
 Mihomo or execute a privileged operation.
 
@@ -89,7 +94,7 @@ The tray has exactly two administrator-authorized entry points: the first TUN
 enable when the daemon is not installed, and explicit `Install / Repair
 Daemon…`. Once installed, TUN enable/disable, service start/stop/restart,
 profile import/switch/reload, outbound mode, proxy selection, and delay tests
-all use the signed CLI transport and authenticated XPC. None of those paths
+all use the native typed client and authenticated XPC. None of those paths
 reinvoke the installer or request another administrator dialog.
 
 ## XPC Control Mapping
@@ -101,6 +106,7 @@ reinvoke the installer or request another administrator dialog.
 | Enable Enhanced TUN | `runtime.set-tun` |
 | Select rule/global/direct | `runtime.set-outbound-mode` |
 | Select proxy | `runtime.select-proxy` |
+| Refresh proxy provider | `runtime.refresh-proxy-provider` |
 | Reload active profile | `profile.reload` |
 | Import/switch profile | `profile.import` / `profile.switch` |
 | Start/stop/restart proxy runtime | `agent.start` / `agent.stop` / `agent.restart` |
@@ -134,10 +140,11 @@ method/path/body and injects the root-owned controller credential. The public
 Swift gateway exposes fixed actions and safe runtime patches only; controller
 identity, DNS recursion-boundary keys, and every TUN field remain
 unrepresentable. Profile reload maps to `profile.reload`, runtime restart maps
-to `agent.restart`. After either restart, the window waits for controller
-readiness and revalidates the Global selector chain. If it cannot repair an
-unsafe Global route through a real proxy, it stops the agent and restores the
-managed network instead of leaving traffic on `DIRECT`. Backend/UI self-upgrade
+to `agent.restart`. The daemon accepts either restart only after a bounded,
+fresh read proves controller, TUN, Fake-IP mode and route, both DNS bridges,
+system DNS ownership, network consistency, and a safe Global selector chain.
+Failure rolls the profile back when possible and otherwise stops the runtime;
+the window only waits for the resulting authoritative snapshot. Backend/UI self-upgrade
 remains blocked because bundled artifacts must stay pinned, checksummed, and
 signed.
 
@@ -177,5 +184,6 @@ root-owned; Desktop and CLI receive typed state/results rather than the secret.
   a currently visible display and the dashboard's minimum content size.
 - Window close: hide rather than terminate.
 - Window hide/minimize: cancel live streams; showing restarts them idempotently.
-- `Exit`: tear down the SwiftUI host, then terminate only the Tauri user process;
+- `Exit`: cancel user-process tasks, tear down the SwiftUI host, remove the
+  status item, then terminate only the Swift user process;
   launchd keeps networking alive.

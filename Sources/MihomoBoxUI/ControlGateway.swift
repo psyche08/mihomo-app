@@ -7,13 +7,7 @@ public enum ControlGatewayError: Error, Equatable, LocalizedError, Sendable {
   case missingPayload
   case invalidStreamSession
   case streamFrameTooLarge(Int)
-  case noGlobalProxy
-  case outboundModeReadbackMismatch
-  case invalidProxySelection
-  case proxySelectionReadbackMismatch
   case proxyProviderRefreshRequiresNonGlobalMode
-  case unsafeGlobalRuntimeStopped
-  case unsafeGlobalFailClosedStopFailed
 
   public var errorDescription: String? {
     switch self {
@@ -27,20 +21,8 @@ public enum ControlGatewayError: Error, Equatable, LocalizedError, Sendable {
       return "the daemon returned an invalid controller stream session"
     case .streamFrameTooLarge(let length):
       return "the controller stream frame exceeds 16 MiB (\(length) bytes)"
-    case .noGlobalProxy:
-      return "Global mode has no route through a proxy"
-    case .outboundModeReadbackMismatch:
-      return "the controller did not apply the requested outbound mode safely"
-    case .invalidProxySelection:
-      return "the proxy selection would break the active Global route"
-    case .proxySelectionReadbackMismatch:
-      return "the controller did not apply the proxy selection safely"
     case .proxyProviderRefreshRequiresNonGlobalMode:
       return "switch out of Global mode before refreshing a proxy provider"
-    case .unsafeGlobalRuntimeStopped:
-      return "the runtime had no safe Global proxy route and was stopped"
-    case .unsafeGlobalFailClosedStopFailed:
-      return "the runtime had no safe Global proxy route and could not be stopped"
     }
   }
 }
@@ -114,41 +96,6 @@ protocol ControlSessionProtocol: AnyObject, Sendable {
 extension MihomoControlSession: ControlSessionProtocol {}
 
 typealias ControlSessionFactory = @Sendable () throws -> any ControlSessionProtocol
-
-/// Serializes controller mutations whose safety depends on a before/after
-/// snapshot. The actor itself may re-enter while an operation is suspended,
-/// so `held` and the FIFO continuations form the actual non-reentrant gate.
-private actor ControllerMutationGate {
-  private var held = false
-  private var waiters: [CheckedContinuation<Void, Never>] = []
-
-  func withLock<Value: Sendable>(
-    _ operation: @Sendable () async throws -> Value
-  ) async throws -> Value {
-    await acquire()
-    defer { release() }
-    try Task.checkCancellation()
-    return try await operation()
-  }
-
-  private func acquire() async {
-    if !held {
-      held = true
-      return
-    }
-    await withCheckedContinuation { continuation in
-      waiters.append(continuation)
-    }
-  }
-
-  private func release() {
-    guard !waiters.isEmpty else {
-      held = false
-      return
-    }
-    waiters.removeFirst().resume()
-  }
-}
 
 private final class RetainedControlChannel: @unchecked Sendable {
   private let queue = DispatchQueue(label: "dev.linsheng.mihomo-app.native-controller")
@@ -349,10 +296,13 @@ private final class ControllerStreamWorker<Element: Decodable & Sendable>: @unch
 /// the controller credential and validating the fixed native UI allowlist.
 public final class ControlGateway: @unchecked Sendable {
   private static let maximumControllerNameBytes = 1_024
+  /// The tray and dashboard use separate gateway instances but share one
+  /// process and one controller safety invariant. Their before/mutate/readback
+  /// transactions must therefore never interleave.
+  private static let mutationGate = AppMutationCoordinator.shared
 
   private let makeSession: ControlSessionFactory
   private let channel: RetainedControlChannel
-  private let mutationGate = ControllerMutationGate()
 
   public init() {
     let factory: ControlSessionFactory = { try MihomoControlSession() }
@@ -425,154 +375,66 @@ public final class ControlGateway: @unchecked Sendable {
   /// Global mode first ensures the built-in GLOBAL selector resolves through
   /// a real proxy rather than DIRECT/REJECT/PASS or a selector cycle.
   public func applyOutboundMode(_ mode: ControllerOutboundMode) async throws -> ControllerSnapshot {
-    try await mutationGate.withLock { [self] in
+    try await Self.mutationGate.withLock { [self] in
       try await applyOutboundModeLocked(mode)
     }
+  }
+
+  /// App-shell entry used only while `AppMutationCoordinator.shared` is
+  /// already held. Keeping this internal prevents a second acquisition of the
+  /// same non-reentrant gate while preserving the complete safety transaction.
+  public func applyOutboundModeWhileHoldingAppMutation(
+    _ mode: ControllerOutboundMode
+  ) async throws -> ControllerSnapshot {
+    try await applyOutboundModeLocked(mode)
   }
 
   private func applyOutboundModeLocked(
     _ mode: ControllerOutboundMode
   ) async throws -> ControllerSnapshot {
-    let before = mode == .global ? try await fetchSnapshot() : nil
-    if let before {
-      guard let target = before.globalProxyTarget else {
-        throw ControlGatewayError.noGlobalProxy
-      }
-      if before.globalGroup?.now != target {
-        try await selectProxyLocked(group: "GLOBAL", proxy: target)
-      }
-    }
-
-    try await setOutboundModeUnchecked(mode)
-    let observed = try await fetchSnapshot()
-    guard observed.configs.mode.caseInsensitiveCompare(mode.rawValue) == .orderedSame,
-      mode != .global || observed.globalRoutesThroughProxy
-    else {
-      if mode == .global, let before {
-        try await restorePriorRouteOrStop(before)
-      }
-      throw ControlGatewayError.outboundModeReadbackMismatch
-    }
-    return observed
-  }
-
-  private func setOutboundModeUnchecked(_ mode: ControllerOutboundMode) async throws {
-    try await sendMutation(
-      ControlRequest(
+    try await decode(
+      ControllerSnapshot.self,
+      request: ControlRequest(
         operation: .setOutboundMode,
         arguments: ["mode": mode.rawValue]
-      ))
-  }
-
-  /// Restores the complete route that preceded a failed Global transition.
-  /// A non-Global mode is restored before its selector because that makes even
-  /// a DIRECT prior selector safe. A prior Global route restores its known-good
-  /// selector first. The readback is mandatory; inability to confirm recovery
-  /// stops the daemon-owned runtime rather than leaving Global on DIRECT.
-  private func restorePriorRouteOrStop(_ prior: ControllerSnapshot) async throws {
-    if await restorePriorRoute(prior) {
-      return
-    }
-    do {
-      try await sendMutation(ControlRequest(operation: .stopAgent))
-    } catch {
-      throw ControlGatewayError.unsafeGlobalFailClosedStopFailed
-    }
-    throw ControlGatewayError.unsafeGlobalRuntimeStopped
-  }
-
-  private func restorePriorRoute(_ prior: ControllerSnapshot) async -> Bool {
-    guard
-      let priorMode = ControllerOutboundMode(rawValue: prior.configs.mode.lowercased()),
-      priorMode != .global || prior.globalRoutesThroughProxy
-    else {
-      return false
-    }
-
-    let priorGlobalGroup = prior.globalGroup
-    let priorGlobalSelection = priorGlobalGroup?.now ?? ""
-    let priorGlobalGroupName =
-      priorGlobalGroup?.name.isEmpty == false
-      ? priorGlobalGroup?.name ?? "GLOBAL" : "GLOBAL"
-
-    do {
-      if priorMode != .global {
-        try await setOutboundModeUnchecked(priorMode)
-      }
-      if !priorGlobalSelection.isEmpty {
-        try await sendMutation(
-          ControlRequest(
-            operation: .selectProxy,
-            arguments: ["group": priorGlobalGroupName, "proxy": priorGlobalSelection]
-          ))
-      }
-      if priorMode == .global {
-        try await setOutboundModeUnchecked(.global)
-      }
-
-      let restored = try await fetchSnapshot()
-      guard restored.configs.mode.caseInsensitiveCompare(priorMode.rawValue) == .orderedSame else {
-        return false
-      }
-      if !priorGlobalSelection.isEmpty,
-        restored.globalGroup?.now != priorGlobalSelection
-      {
-        return false
-      }
-      return priorMode != .global || restored.globalRoutesThroughProxy
-    } catch {
-      return false
-    }
-  }
-
-  public func patchConfig(_ patch: RuntimeConfigPatch) async throws {
-    try await controllerMutation(
-      method: "PATCH",
-      target: "/configs",
-      body: try patch.encodedPayload()
+      ),
+      retryReadOnDisconnect: false
     )
   }
 
+  public func patchConfig(_ patch: RuntimeConfigPatch) async throws {
+    try await Self.mutationGate.withLock { [self] in
+      try await controllerMutation(
+        method: "PATCH",
+        target: "/configs",
+        body: try patch.encodedPayload()
+      )
+    }
+  }
+
   public func selectProxy(group: String, proxy: String) async throws {
-    try await mutationGate.withLock { [self] in
+    try await Self.mutationGate.withLock { [self] in
       try await selectProxyLocked(group: group, proxy: proxy)
     }
+  }
+
+  /// App-shell counterpart to ``selectProxy(group:proxy:)`` for an existing
+  /// process-wide mutation transaction.
+  public func selectProxyWhileHoldingAppMutation(group: String, proxy: String) async throws {
+    try await selectProxyLocked(group: group, proxy: proxy)
   }
 
   private func selectProxyLocked(group: String, proxy: String) async throws {
     try validateName(group)
     try validateName(proxy)
-    let before = try await fetchSnapshot()
-    guard let proposed = before.selecting(group: group, proxy: proxy),
-      before.configs.mode.caseInsensitiveCompare("global") != .orderedSame
-        || proposed.globalRoutesThroughProxy
-    else {
-      throw ControlGatewayError.invalidProxySelection
-    }
-
-    try await sendMutation(
-      ControlRequest(
+    _ = try await decode(
+      ControllerSnapshot.self,
+      request: ControlRequest(
         operation: .selectProxy,
         arguments: ["group": group, "proxy": proxy]
-      ))
-    let observed = try await fetchSnapshot()
-    guard observed.proxy(named: group)?.now == proxy,
-      observed.configs.mode.caseInsensitiveCompare("global") != .orderedSame
-        || observed.globalRoutesThroughProxy
-    else {
-      if observed.configs.mode.caseInsensitiveCompare("global") == .orderedSame,
-        !observed.globalRoutesThroughProxy
-      {
-        try await restorePriorRouteOrStop(before)
-      } else if let previous = before.proxy(named: group)?.now, !previous.isEmpty {
-        try? await sendMutation(
-          ControlRequest(
-            operation: .selectProxy,
-            arguments: ["group": group, "proxy": previous]
-          ))
-      }
-      throw ControlGatewayError.proxySelectionReadbackMismatch
-    }
+      ),
+      retryReadOnDisconnect: false
+    )
   }
 
   public func testProxyDelay(
@@ -605,13 +467,17 @@ public final class ControlGateway: @unchecked Sendable {
   }
 
   public func refreshProxyProvider(_ name: String) async throws {
-    let name = try encodedName(name)
-    try await mutationGate.withLock { [self] in
+    try validateName(name)
+    try await Self.mutationGate.withLock { [self] in
+      // Fast local feedback only. The daemon repeats this check inside the
+      // atomic typed operation and remains the security authority.
       let before = try await fetchSnapshot()
       guard before.configs.mode.caseInsensitiveCompare("global") != .orderedSame else {
         throw ControlGatewayError.proxyProviderRefreshRequiresNonGlobalMode
       }
-      try await controllerMutation(method: "PUT", target: "/providers/proxies/\(name)")
+      try await sendMutation(
+        ControlRequest(operation: .refreshProxyProvider, arguments: ["name": name])
+      )
     }
   }
 
@@ -628,7 +494,9 @@ public final class ControlGateway: @unchecked Sendable {
 
   public func refreshRuleProvider(_ name: String) async throws {
     let name = try encodedName(name)
-    try await controllerMutation(method: "PUT", target: "/providers/rules/\(name)")
+    try await Self.mutationGate.withLock { [self] in
+      try await controllerMutation(method: "PUT", target: "/providers/rules/\(name)")
+    }
   }
 
   public func setRuleDisabled(index: Int, disabled: Bool) async throws {
@@ -637,40 +505,52 @@ public final class ControlGateway: @unchecked Sendable {
       withJSONObject: [String(index): disabled],
       options: [.sortedKeys]
     )
-    try await controllerMutation(method: "PATCH", target: "/rules/disable", body: body)
+    try await Self.mutationGate.withLock { [self] in
+      try await controllerMutation(method: "PATCH", target: "/rules/disable", body: body)
+    }
   }
 
   public func closeConnection(id: String) async throws {
     let id = try encodedName(id)
-    try await controllerMutation(method: "DELETE", target: "/connections/\(id)")
+    try await Self.mutationGate.withLock { [self] in
+      try await controllerMutation(method: "DELETE", target: "/connections/\(id)")
+    }
   }
 
   public func closeAllConnections() async throws {
-    try await sendMutation(ControlRequest(operation: .closeAllConnections))
+    try await Self.mutationGate.withLock { [self] in
+      try await sendMutation(ControlRequest(operation: .closeAllConnections))
+    }
   }
 
   public func flushFakeIPCache() async throws {
-    try await controllerMutation(method: "POST", target: "/cache/fakeip/flush")
+    try await Self.mutationGate.withLock { [self] in
+      try await controllerMutation(method: "POST", target: "/cache/fakeip/flush")
+    }
   }
 
   public func flushDNSCache() async throws {
-    try await controllerMutation(method: "POST", target: "/cache/dns/flush")
+    try await Self.mutationGate.withLock { [self] in
+      try await controllerMutation(method: "POST", target: "/cache/dns/flush")
+    }
   }
 
   public func updateGeoData() async throws {
-    try await controllerMutation(method: "POST", target: "/configs/geo")
+    try await Self.mutationGate.withLock { [self] in
+      try await controllerMutation(method: "POST", target: "/configs/geo")
+    }
   }
 
   public func reloadActiveProfile() async throws {
-    try await sendMutation(ControlRequest(operation: .reloadProfile))
+    try await Self.mutationGate.withLock { [self] in
+      try await sendMutation(ControlRequest(operation: .reloadProfile))
+    }
   }
 
   public func restartAgent() async throws {
-    try await sendMutation(ControlRequest(operation: .restartAgent))
-  }
-
-  func stopAgentForUnsafeGlobal() async throws {
-    try await sendMutation(ControlRequest(operation: .stopAgent))
+    try await Self.mutationGate.withLock { [self] in
+      try await sendMutation(ControlRequest(operation: .restartAgent))
+    }
   }
 
   public func connectionsStream() -> AsyncThrowingStream<ControllerConnectionsFrame, Error> {

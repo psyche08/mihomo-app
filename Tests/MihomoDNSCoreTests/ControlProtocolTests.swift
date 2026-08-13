@@ -111,7 +111,8 @@ extension ControlProtocolTests {
     }
 
     func testParameterisedRoutesAcceptOneSegmentOnly() {
-        XCTAssertTrue(ControllerRequestPolicy.allows(method: "PUT", path: "/proxies/Node"))
+        XCTAssertFalse(ControllerRequestPolicy.allows(method: "PUT", path: "/proxies/Node"))
+        XCTAssertFalse(ControllerRequestPolicy.allows(method: "DELETE", path: "/proxies/Node"))
         XCTAssertTrue(ControllerRequestPolicy.allows(method: "GET", path: "/proxies/Node/delay"))
         XCTAssertTrue(ControllerRequestPolicy.allows(method: "DELETE", path: "/connections/abc"))
         // An empty or multi-segment name must not slip through.
@@ -130,7 +131,10 @@ extension ControlProtocolTests {
         ))
         XCTAssertTrue(ControllerRequestPolicy.allows(
             method: "PUT",
-            path: "/providers/proxies/%E6%97%A5%E6%9C%AC"
+            path: "/providers/rules/%E6%97%A5%E6%9C%AC"
+        ))
+        XCTAssertFalse(ControllerRequestPolicy.allows(
+            method: "PUT", path: "/providers/proxies/%E6%97%A5%E6%9C%AC"
         ))
         XCTAssertFalse(ControllerRequestPolicy.allows(
             method: "DELETE",
@@ -140,7 +144,7 @@ extension ControlProtocolTests {
             method: "DELETE",
             path: "/proxies/%2e"
         ))
-        XCTAssertTrue(ControllerRequestPolicy.allows(
+        XCTAssertFalse(ControllerRequestPolicy.allows(
             method: "DELETE",
             path: "/proxies/Node..01"
         ))
@@ -212,6 +216,7 @@ extension ControlProtocolTests {
             ["allow-lan": 1],
             ["log-level": "trace"],
             ["find-process-mode": "unknown"],
+            ["mode": "direct"],
         ]
         for object in refused {
             XCTAssertFalse(ControllerRequestPolicy.allows(
@@ -226,7 +231,7 @@ extension ControlProtocolTests {
     }
 
     func testCompleteRequestValidatesMutationBodies() throws {
-        XCTAssertTrue(ControllerRequestPolicy.allows(
+        XCTAssertFalse(ControllerRequestPolicy.allows(
             method: "PUT", target: "/proxies/Auto", body: try json(["name": "Node A"])
         ))
         XCTAssertFalse(ControllerRequestPolicy.allows(
@@ -259,5 +264,65 @@ extension ControlProtocolTests {
 
     private func json(_ object: [String: Any]) throws -> Data {
         try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+    }
+}
+
+extension ControlProtocolTests {
+    func testDaemonRouteSnapshotFindsSafeGlobalTargetsAndRejectsUnsafeSelections() throws {
+        let snapshot = try ControllerRouteSnapshot(
+            configsData: Data(#"{"mode":"global"}"#.utf8),
+            proxiesData: Data(#"""
+            {"proxies":{
+              "GLOBAL":{"name":"GLOBAL","now":"DIRECT","all":["DIRECT","Auto","A"]},
+              "Auto":{"name":"Auto","now":"Node","all":["Node","DIRECT"]},
+              "Node":{"name":"Node","type":"VLESS"},
+              "A":{"name":"A","type":"VLESS"},
+              "DIRECT":{"name":"DIRECT","type":"Direct"}
+            }}
+            """#.utf8)
+        )
+
+        XCTAssertFalse(snapshot.globalRoutesThroughProxy)
+        XCTAssertEqual(snapshot.globalProxyTarget, "Auto")
+        let throughAuto = try XCTUnwrap(snapshot.selecting(group: "GLOBAL", proxy: "Auto"))
+        XCTAssertTrue(throughAuto.globalRoutesThroughProxy)
+        let throughNode = try XCTUnwrap(throughAuto.selecting(group: "Auto", proxy: "Node"))
+        XCTAssertTrue(throughNode.globalRoutesThroughProxy)
+        XCTAssertFalse(
+            throughAuto.selecting(group: "Auto", proxy: "DIRECT")!.globalRoutesThroughProxy
+        )
+        XCTAssertNil(snapshot.selecting(group: "Auto", proxy: "Missing"))
+    }
+
+    func testDaemonRouteSnapshotIsCaseSensitiveAndMissingTargetsFailClosed() throws {
+        let snapshot = ControllerRouteSnapshot(mode: "global", proxies: [
+            "GLOBAL": .init(name: "GLOBAL", now: "a", all: ["a", "A", "Missing"]),
+            "a": .init(name: "a", type: "Selector", now: "DIRECT", all: ["DIRECT"]),
+            "A": .init(name: "A", type: "VLESS"),
+        ])
+
+        XCTAssertFalse(snapshot.globalRoutesThroughProxy)
+        XCTAssertEqual(snapshot.globalProxyTarget, "A")
+        XCTAssertNil(snapshot.selecting(group: "a", proxy: "Missing"))
+    }
+
+    func testDaemonRouteSnapshotRejectsRenamedBuiltinsUnknownLeavesAndWrongGlobalCase() {
+        for type in ["Direct", "Reject", "Compatible", "Pass", ""] {
+            let snapshot = ControllerRouteSnapshot(mode: "global", proxies: [
+                "GLOBAL": .init(
+                    name: "GLOBAL", type: "Selector", now: "Friendly", all: ["Friendly"]
+                ),
+                "Friendly": .init(name: "Friendly", type: type),
+            ])
+            XCTAssertFalse(snapshot.globalRoutesThroughProxy, "type=\(type)")
+            XCTAssertNil(snapshot.globalProxyTarget, "type=\(type)")
+        }
+
+        let wrongCase = ControllerRouteSnapshot(mode: "global", proxies: [
+            "global": .init(name: "global", type: "Selector", now: "Node", all: ["Node"]),
+            "Node": .init(name: "Node", type: "VLESS"),
+        ])
+        XCTAssertFalse(wrongCase.globalRoutesThroughProxy)
+        XCTAssertNil(wrongCase.globalProxyTarget)
     }
 }

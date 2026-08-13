@@ -19,20 +19,56 @@
 - The in-process SwiftUI module has no shell, installer, root filesystem, raw
   controller endpoint, or direct privileged capability. Its public gateway is
   typed, and every control mutation crosses the authenticated XPC boundary.
-- The native Rust shell may create the current user's MihomoBox LaunchAgent
+- The native AppKit shell may create the current user's MihomoBox LaunchAgent
   after a healthy Enhanced TUN activation. SwiftUI cannot write login items,
-  and that LaunchAgent starts only the unprivileged Tauri App.
+  and that LaunchAgent starts only the unprivileged Swift App.
 - Bootstrap/repair installation is explicit and uses the macOS administrator
-  dialog. Subsequent lifecycle, profile reload, TUN, outbound-mode, and proxy
-  operations do not elevate interactively.
+  dialog. Before elevation, the currently executing signed App or CLI derives
+  its exact Apple-issued leaf-certificate and designated requirements plus the
+  current Code Directory hash. Signed Swift code gives root only a fixed
+  system-tool bootstrap:
+  root creates a mode-`0700` private directory, copies the complete App with
+  `ditto`, then runs `codesign --verify --deep --strict` against the combined
+  exact requirement. The copied caller Mach-O is checked against its own exact
+  designated requirement as well. Only after both checks pass may root execute
+  the snapshot's regular, non-symlink installer resource. The Code Directory
+  hash also prevents swapping in an older App signed with the same identity.
+  Root never extracts a
+  requirement from, or executes a script in, the original movable App path.
+  Source-path replacement and arbitrary self-signed requirement tautologies
+  therefore fail closed. An optional first profile is snapshotted into bounded
+  bytes by the unprivileged App before authorization; root never reopens its
+  user-writable path, and activation happens afterward through typed XPC.
+  When no root-owned active-profile marker exists, the installer always stages
+  the bundled REJECT-only provisioning profile and never reuses an unowned
+  legacy config. The LaunchDaemon exposes authenticated XPC but does not start
+  the agent, TUN, or managed DNS in this state. The App activates the selected
+  profile through typed XPC; only its full-health transaction clears the
+  provisioning marker and starts networking. A failed first activation keeps
+  real system DNS and cannot silently direct or block traffic.
+  Subsequent lifecycle, profile reload, TUN,
+  outbound-mode, and proxy operations do not elevate interactively.
 - Post-bootstrap binary synchronization is a typed XPC operation, not an
   installer. It accepts exactly daemon, agent, and Mihomo bytes, caps their
   sizes, verifies every staged executable against the current daemon's exact
-  leaf certificate, and rolls back on replacement or health-check failure.
+  leaf certificate, rejects versions below the root-owned installation floor,
+  and rolls back on replacement or health-check failure. A successful verified
+  bootstrap atomically records that semantic version in mode-`0600`
+  `component-version`; user-controlled App state cannot lower it.
+  Daemon replacement is a two-boot transaction: a mode-`0600` pending record
+  binds old/new digests and a root-only backup; the new daemon must prove full
+  network health before clearing it. Power loss or failed health restores the
+  complete prior signed set with same-filesystem atomic replacement. While
+  recovery is incomplete, runtime mutations fail closed.
 - The privileged root LaunchDaemon executes stable root-owned copies, never
   files in a user-writable Git checkout or movable App bundle. The separate
   current-user LaunchAgent may execute only an installed App under
   `/Applications` or `~/Applications` and has no privileged capability.
+- The optional `/usr/local/bin/mihomoboxctl` entry points only to the signed CLI
+  copied from the verified snapshot into root-owned Application Support. It
+  never points back into the movable App. That standalone entry may perform
+  typed XPC operations, but install and uninstall fail closed unless invoked by
+  a caller currently executing inside the signed App snapshot source.
 
 Release XPC intentionally fails closed for unsigned and ad-hoc development
 builds because they have no Apple-issued leaf signing certificate. XPC
@@ -56,11 +92,14 @@ the network data plane.
 - MetaCubeXD uses a pinned tag as the native UI's design reference; no upstream
   JavaScript executes in the App.
 - Mihomo uses a pinned release and SHA-256.
-- Cargo/npm/pnpm lockfiles pin package dependency graphs.
+- SwiftPM lockfiles pin the native dependency graph. The pinned Sparkle binary
+  artifact is additionally protected by SwiftPM's recorded checksum.
 - Daemon, agent, CLI, Desktop, and DMG use one Developer ID certificate.
-- Automatic App updates require both the pinned updater public key and the
-  Developer ID/notarized release chain. The updater private key never ships in
-  the App or repository.
+- Automatic App updates require Sparkle EdDSA verification and the Developer
+  ID/notarized release chain. Signed appcasts prevent feed-field substitution.
+  The Sparkle private key never ships in the App or repository. During the 0.7
+  migration window, the release-only legacy archive is separately signed with
+  the existing minisign-compatible key; that key also never ships.
 - Root component updates add a second check at the privilege boundary: each
   executable must satisfy the already-installed daemon's certificate
   requirement before it can replace a root-owned binary.
@@ -108,5 +147,9 @@ bytes to the daemon through XPC.
 - A stale PID is terminated only after executable-path verification.
 - Profile reload is serialized by the daemon and rolls back configuration and
   agent state together on failure.
+- The daemon writes an exact-path-verified `mihomo-agent.pid`; a restarted
+  daemon harvests an orphan before launching another agent, and each agent also
+  watches its daemon parent PID so a daemon crash triggers DNS restoration and
+  self-termination.
 - Repeated child failures use bounded exponential backoff and open a circuit
   after six short-lived failures instead of looping indefinitely.
