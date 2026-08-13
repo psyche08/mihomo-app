@@ -6,8 +6,18 @@ cd "$ROOT"
 
 VERSION="$(/usr/bin/env node -p "require('./src-tauri/tauri.conf.json').version")"
 test "$VERSION" = "$(/usr/bin/env node -p "require('./package.json').version")"
+test "$VERSION" = "$(/usr/bin/env node -p "require('./package-lock.json').version")"
+test "$VERSION" = "$(/usr/bin/env node -p "require('./package-lock.json').packages[''].version")"
 test "$VERSION" = "$(/usr/bin/sed -n 's/^version = "\([^"]*\)"/\1/p' \
   src-tauri/Cargo.toml | /usr/bin/head -1)"
+test "$VERSION" = "$(/usr/bin/env node -e '
+  const source = require("fs").readFileSync("src-tauri/Cargo.lock", "utf8")
+  const versions = [...source.matchAll(
+    /\[\[package\]\]\nname = "mihomo-app"\nversion = "([^"]+)"/g
+  )].map((match) => match[1])
+  if (versions.length !== 1) process.exit(1)
+  process.stdout.write(versions[0])
+')"
 /usr/bin/env node -e \
   'for (const path of process.argv.slice(1)) JSON.parse(require("fs").readFileSync(path, "utf8"))' \
   src-tauri/tauri.conf.json src-tauri/tauri.release.conf.json
@@ -73,6 +83,10 @@ fi
 
 APP="$ROOT/src-tauri/target/release/bundle/macos/MihomoBox.app"
 test -x "$APP/Contents/MacOS/mihomo-app"
+test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
+  "$APP/Contents/Info.plist")" = "$VERSION"
+test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' \
+  "$APP/Contents/Info.plist")" = "$VERSION"
 test -x "$APP/Contents/MacOS/mihomo"
 test -x "$APP/Contents/MacOS/mihomo-daemon"
 test -x "$APP/Contents/MacOS/mihomo-agent"

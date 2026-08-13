@@ -31,7 +31,12 @@ public struct RootView: View {
       }
       .animation(.easeInOut(duration: 0.18), value: compactSidebar)
     }
-    .frame(minWidth: 900, minHeight: 600)
+    .frame(
+      minWidth: 900,
+      maxWidth: .infinity,
+      minHeight: 600,
+      maxHeight: .infinity
+    )
     .background(DashboardTheme.background)
     .preferredColorScheme(.dark)
     .onChange(of: selection) { _, page in
@@ -108,32 +113,13 @@ public struct RootView: View {
       .accessibilityElement(children: .combine)
 
       ForEach(DashboardPage.allCases) { page in
-        Button {
+        DashboardSidebarNavigationButton(
+          page: page,
+          isSelected: selection == page,
+          compact: compact
+        ) {
           selection = page
-        } label: {
-          HStack(spacing: 11) {
-            Image(systemName: page.symbol)
-              .font(.system(size: 15, weight: .semibold))
-              .frame(width: 22)
-            if !compact {
-              Text(page.title)
-                .font(.system(size: 13, weight: .semibold))
-              Spacer(minLength: 0)
-            }
-          }
-          .foregroundStyle(selection == page ? DashboardTheme.primary : DashboardTheme.muted)
-          .padding(.horizontal, compact ? 12 : 13)
-          .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
-          .background(
-            selection == page ? DashboardTheme.primary.opacity(0.12) : Color.clear,
-            in: RoundedRectangle(cornerRadius: 10)
-          )
         }
-        .buttonStyle(.plain)
-        .keyboardShortcut(page.shortcut, modifiers: .command)
-        .accessibilityLabel(page.title)
-        .accessibilityHint("Open \(page.title), Command \(page.shortcutLabel)")
-        .help("\(page.title) (⌘\(page.shortcutLabel))")
       }
 
       Spacer(minLength: 12)
@@ -175,5 +161,41 @@ public struct RootView: View {
     case .config:
       ConfigView(store: store)
     }
+  }
+}
+
+@MainActor
+struct DashboardSidebarNavigationButton: View {
+  let page: DashboardPage
+  let isSelected: Bool
+  let compact: Bool
+  let action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      HStack(spacing: 11) {
+        Image(systemName: page.symbol)
+          .font(.system(size: 15, weight: .semibold))
+          .frame(width: 22)
+        if !compact {
+          Text(page.title)
+            .font(.system(size: 13, weight: .semibold))
+          Spacer(minLength: 0)
+        }
+      }
+      .foregroundStyle(isSelected ? DashboardTheme.primary : DashboardTheme.muted)
+      .padding(.horizontal, compact ? 12 : 13)
+      .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+      .background(
+        isSelected ? DashboardTheme.primary.opacity(0.12) : Color.clear,
+        in: RoundedRectangle(cornerRadius: 10)
+      )
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .keyboardShortcut(page.shortcut, modifiers: .command)
+    .accessibilityLabel(page.title)
+    .accessibilityHint("Open \(page.title), Command \(page.shortcutLabel)")
+    .help("\(page.title) (⌘\(page.shortcutLabel))")
   }
 }

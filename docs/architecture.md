@@ -101,6 +101,9 @@ filesystem, arbitrary request bodies, or arbitrary network endpoints.
 9. Tauri checks the signed App update feed. The main `NSWindow` is still absent;
    selecting `Show Main Window` creates one `NSHostingController`, starts the
    bounded SwiftUI controller streams, and reuses that window until App exit.
+   The hosting controller follows AppKit's resizable content bounds. The last
+   non-full-screen frame is restored on the next process launch and constrained
+   to a connected display before presentation.
 
 If the agent exits unexpectedly, the daemon restores the single-agent
 invariant before relaunch. Requested stop/uninstall paths suppress restart and

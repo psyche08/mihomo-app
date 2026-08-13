@@ -170,6 +170,11 @@ root-owned; Desktop and CLI receive typed state/results rather than the secret.
   and starts four independent bounded streams. If the daemon/controller is
   unavailable, the window stays visible with a reconnectable offline state;
   it never receives Mihomo's root-owned controller secret.
+- Window resize: AppKit owns the resizable window bounds and SwiftUI fills the
+  current content area instead of driving the window back to its ideal size.
+  MihomoBox persists the last non-full-screen frame after a live resize, hide,
+  or exit, restores it on the next process launch, and clamps stale geometry to
+  a currently visible display and the dashboard's minimum content size.
 - Window close: hide rather than terminate.
 - Window hide/minimize: cancel live streams; showing restarts them idempotently.
 - `Exit`: tear down the SwiftUI host, then terminate only the Tauri user process;
