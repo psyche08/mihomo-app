@@ -25,6 +25,12 @@ Enhanced TUN privilege, DHCP-aware DNS forwarding, and macOS Global DNS.
 5. Pin and checksum bundled upstream artifacts. Retain third-party licenses.
 6. Validate Swift, Rust, the pinned MetaCubeXD visual reference, installer
    dry-run, and the final `.app` bundle before release.
+7. Compilation is operator-executed and must run outside the sandbox. Agents
+   must not run commands that compile or rebuild code or application bundles,
+   including tests, validation, or release commands that compile as a side
+   effect. Provide the exact command for the operator to run and wait for its
+   result. Authorization to commit, tag, sign, notarize, package, publish, or
+   deploy never implies authorization to compile.
 
 ## Progressive Disclosure
 
