@@ -19,6 +19,7 @@ release_write_notary_state \
   "$state_file" "$artifact" "$artifact_sha256" \
   "11111111-2222-4333-8444-555555555555" true submitted
 
+/usr/bin/grep -Eq '^[[:space:]]*\{' "$state_file"
 test "$(release_read_notary_state "$state_file" artifact_sha256)" = \
   "$artifact_sha256"
 test "$(release_read_notary_state "$state_file" submission_id)" = \

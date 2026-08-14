@@ -499,7 +499,10 @@ write_signed_app_state() {
   cdhash="$(release_app_cdhash)"
   code_resources_sha256="$(release_sha256 "$APP/Contents/_CodeSignature/CodeResources")"
   temporary="$(/usr/bin/mktemp "$RELEASE_STATE_DIR/.signed-app-state.XXXXXX")"
-  /usr/bin/plutil -create json "$temporary"
+  # Use XML while incrementally inserting values. On macOS 26, an empty JSON
+  # dictionary is ambiguous with OpenStep syntax and plutil refuses the first
+  # mutation. The persisted binding remains JSON after the explicit convert.
+  /usr/bin/plutil -create xml1 - > "$temporary"
   /usr/bin/plutil -insert schema_version -integer 1 "$temporary"
   /usr/bin/plutil -insert version -string "$VERSION" "$temporary"
   /usr/bin/plutil -insert app -string "$APP" "$temporary"
@@ -521,6 +524,7 @@ write_signed_app_state() {
     /usr/bin/plutil -insert "executables.$key" -string \
       "$(release_sha256 "$APP/Contents/MacOS/$executable")" "$temporary"
   done
+  /usr/bin/plutil -convert json "$temporary"
   /bin/chmod 0600 "$temporary"
   /bin/mv -f "$temporary" "$SIGNED_APP_STATE"
 }
@@ -918,7 +922,7 @@ fi
   -x "$UPDATE_AUDIT/emitted.minisig" -p "$LEGACY_PUBLIC_KEY_FILE"
 PUBLISH_DATE="$(/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')"
 LATEST_JSON_TEMP="$(/usr/bin/mktemp "$DIST/.latest.XXXXXX")"
-/usr/bin/plutil -create json "$LATEST_JSON_TEMP"
+/usr/bin/plutil -create xml1 - > "$LATEST_JSON_TEMP"
 /usr/bin/plutil -insert version -string "$VERSION" "$LATEST_JSON_TEMP"
 /usr/bin/plutil -insert notes -string "MihomoBox $VERSION" "$LATEST_JSON_TEMP"
 /usr/bin/plutil -insert pub_date -string "$PUBLISH_DATE" "$LATEST_JSON_TEMP"
@@ -929,6 +933,7 @@ LATEST_JSON_TEMP="$(/usr/bin/mktemp "$DIST/.latest.XXXXXX")"
 /usr/bin/plutil -insert platforms.darwin-aarch64.url -string \
   "https://github.com/psyche08/mihomo-app/releases/download/v$VERSION/$(/usr/bin/basename "$UPDATE_ARCHIVE")" \
   "$LATEST_JSON_TEMP"
+/usr/bin/plutil -convert json "$LATEST_JSON_TEMP"
 /bin/chmod 0644 "$LATEST_JSON_TEMP"
 /bin/mv -f "$LATEST_JSON_TEMP" "$LATEST_JSON"
 /usr/bin/plutil -lint "$LATEST_JSON" >/dev/null

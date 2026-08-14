@@ -35,7 +35,10 @@ release_write_notary_state() {
     *) echo "invalid upload confirmation state" >&2; return 1 ;;
   esac
   updated_at="$(/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')"
-  /usr/bin/plutil -create json "$temporary"
+  # macOS 26's Swift-mode plutil can parse an empty JSON dictionary as an
+  # OpenStep plist, then refuse to write the first inserted value back. Build
+  # an unambiguous XML plist first and convert the completed document to JSON.
+  /usr/bin/plutil -create xml1 - > "$temporary"
   /usr/bin/plutil -insert schema_version -integer 1 "$temporary"
   /usr/bin/plutil -insert artifact -string "$target" "$temporary"
   /usr/bin/plutil -insert artifact_sha256 -string "$artifact_sha256" "$temporary"
@@ -45,6 +48,7 @@ release_write_notary_state() {
   /usr/bin/plutil -insert upload_confirmed -bool "$uploaded" "$temporary"
   /usr/bin/plutil -insert status -string "$status" "$temporary"
   /usr/bin/plutil -insert updated_at -string "$updated_at" "$temporary"
+  /usr/bin/plutil -convert json "$temporary"
   /bin/chmod 600 "$temporary"
   /bin/mv -f "$temporary" "$state_file"
 }
