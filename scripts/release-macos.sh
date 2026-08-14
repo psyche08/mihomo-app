@@ -936,7 +936,10 @@ LATEST_JSON_TEMP="$(/usr/bin/mktemp "$DIST/.latest.XXXXXX")"
 /usr/bin/plutil -convert json "$LATEST_JSON_TEMP"
 /bin/chmod 0644 "$LATEST_JSON_TEMP"
 /bin/mv -f "$LATEST_JSON_TEMP" "$LATEST_JSON"
-/usr/bin/plutil -lint "$LATEST_JSON" >/dev/null
+# macOS 26's Swift-mode plutil rejects JSON in lint mode even though its
+# conversion and extraction paths parse the same document correctly. Convert
+# to a discarded output to retain a full-document JSON parse gate.
+/usr/bin/plutil -convert json -o /dev/null "$LATEST_JSON"
 if [[ "$(/usr/bin/plutil -extract platforms.darwin-aarch64.signature raw -n -o - "$LATEST_JSON")" != \
   "$(/usr/bin/tr -d '\r\n' < "$UPDATE_ARCHIVE.sig")" ]]; then
   echo "latest.json signature does not match the published legacy signature asset" >&2
