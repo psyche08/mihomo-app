@@ -52,4 +52,23 @@ if release_submission_id_from_log "$submission_log" >/dev/null; then
   exit 1
 fi
 
+release_script="$ROOT/scripts/release-macos.sh"
+/usr/bin/grep -Fq \
+  'PUBLISHED_070_ARCHIVE_SHA256="37a5ea188e7c95ef2e45768193c11c6a2cdd40f672135b613f51230f91efeb0e"' \
+  "$release_script"
+/usr/bin/grep -Fq \
+  'PUBLISHED_070_DEVELOPER_ID_LEAF_SHA1="2E1EF531C972A15F5B5C58855001FA6FA1186383"' \
+  "$release_script"
+/usr/bin/grep -Fq \
+  'PUBLISHED_080_ARCHIVE_SHA256="d04c8b432e39df1f2f66ed547f828c95fb490f7ff03c8719bbcbbcff25309c9b"' \
+  "$release_script"
+/usr/bin/grep -Fq \
+  'PUBLISHED_080_SPARKLE_PUBLIC_ED_KEY="CL5i36xBB93GX8INJAcBAVFreeVys28Vu94mgAgTA00="' \
+  "$release_script"
+/usr/bin/grep -Fq 'verify_published_legacy_archive' "$release_script"
+/usr/bin/grep -Fq 'selected Developer ID leaf does not match the leaf used for published 0.7.0' \
+  "$release_script"
+/usr/bin/grep -Fq 'prebuilt App Sparkle public key does not match published 0.8.0' \
+  "$release_script"
+
 echo "release common tests passed"

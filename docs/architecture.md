@@ -28,14 +28,15 @@ MihomoBox.app (current user)
     └── observes DHCP, interface, route, and split-DNS changes
 ```
 
-The App bundle is the signed installation source. Bootstrap installation is the
-only operation that uses the macOS administrator dialog. It copies the daemon,
-agent, Mihomo, configuration helper, and XPC client to stable root-owned paths
-and registers the daemon's Mach service. After bootstrap, Desktop and CLI
-operations never invoke `sudo`, AppleScript elevation, or the installer again;
-they use authenticated XPC. Later App releases synchronize the fixed
-`mihomo-daemon`, `mihomo-agent`, and `mihomo` component set through that XPC
-boundary without modifying the LaunchDaemon plist.
+The App bundle is the signed installation source. Initial bootstrap and an
+explicit repair across an incompatible protocol, plist layout, or certificate
+boundary are the only operations that use the macOS administrator dialog. They
+copy the daemon, agent, Mihomo, configuration helper, and XPC client to stable
+root-owned paths and register the daemon's Mach service. After a compatible
+bootstrap, routine Desktop and CLI operations never invoke `sudo`, AppleScript
+elevation, or the installer; they use authenticated XPC. Later App releases
+synchronize the fixed `mihomo-daemon`, `mihomo-agent`, and `mihomo` component
+set through that XPC boundary without modifying the LaunchDaemon plist.
 
 An install without an existing root-owned active-profile marker stages the
 bundled REJECT provisioning profile, but the LaunchDaemon starts only its XPC
@@ -99,6 +100,16 @@ DNS, or controller-identity mutations. A fail-closed stop is successful only
 after an uncached inspection proves the agent/controller/TUN are gone, system
 DNS is unmanaged, and the remaining network state is consistent.
 
+Protocol negotiation also fails closed. A native App that receives an
+authenticated version-1 response from a pre-native daemon marks that daemon as
+reachable but incompatible, disables every runtime/profile mutation, and
+offers an explicit verified `Install / Repair Daemon` action. It never retries
+the request as version 1 and never sends the older non-transactional component
+update operation. A response from a protocol newer than the App instead
+requires an App update and disables repair so an older App cannot downgrade a
+newer root service. Administrator authorization is therefore user initiated,
+not a background consequence of polling or update checks.
+
 ## Startup Sequence
 
 1. launchd starts `mihomo-daemon` and registers its Mach service before login.
@@ -110,7 +121,9 @@ DNS is unmanaged, and the remaining network state is consistent.
 6. After controller, TUN, fake-IP route, and DNS validation, the agent backs up
    and applies DNS to the active PrimaryService.
 7. The Swift `NSApplication` starts with accessory activation policy, compares bundled and installed
-   component digests through XPC, and synchronizes signed changes.
+   component digests through XPC, and synchronizes signed changes when the
+   daemon protocol is compatible. A legacy version-1 reply enters the explicit
+   verified repair state described above before any component mutation.
 8. The AppKit tray polls runtime state through XPC. The first healthy Enhanced TUN state
    observed from an App in `/Applications` or `~/Applications` applies a
    one-time user-level default to start MihomoBox hidden at login. The root
@@ -147,7 +160,8 @@ commits only after full route/TUN/DNS health validation. A failed or interrupted
 boot atomically restores the old set and restarts again; the App/CLI sees
 `update_pending` until commit and cannot report transient new hashes as
 success. Agent or Mihomo-only changes validate before deleting their backup.
-No administrator dialog is involved after the initial LaunchDaemon installation.
+Routine compatible component synchronization never opens an administrator
+dialog; only the explicit repair boundaries described above do.
 
 ## Runtime Endpoints
 

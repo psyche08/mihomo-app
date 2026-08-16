@@ -42,6 +42,56 @@ final class AppServicePolicyTests: XCTestCase {
     )
   }
 
+  func testProtocolMismatchClassificationOnlyRepairsExactLegacyV1() {
+    XCTAssertEqual(
+      TrayStateCoordinator.protocolCompatibility(expected: 2, received: 1),
+      .legacyRepairRequired(peerVersion: 1)
+    )
+    XCTAssertEqual(
+      TrayStateCoordinator.protocolCompatibility(expected: 2, received: 3),
+      .appUpdateRequired(peerVersion: 3)
+    )
+    XCTAssertEqual(
+      TrayStateCoordinator.protocolCompatibility(expected: 3, received: 1),
+      .incompatible(peerVersion: 1)
+    )
+  }
+
+  func testAnyManagedInstallationArtifactPreservesTheRootProfile() throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("mihomobox-install-artifacts-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let absent = root.appendingPathComponent("absent").path
+    XCTAssertFalse(
+      TrayStateCoordinator.hasManagedInstallationArtifact(
+        at: [absent],
+        fileManager: .default
+      )
+    )
+
+    let appSupport = root.appendingPathComponent("Mihomo App", isDirectory: true)
+    try FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
+    XCTAssertTrue(
+      TrayStateCoordinator.hasManagedInstallationArtifact(
+        at: [appSupport.path],
+        fileManager: .default
+      )
+    )
+
+    let dangling = root.appendingPathComponent("renamed-daemon.plist")
+    try FileManager.default.createSymbolicLink(
+      at: dangling,
+      withDestinationURL: root.appendingPathComponent("missing-target")
+    )
+    XCTAssertTrue(
+      TrayStateCoordinator.hasManagedInstallationArtifact(
+        at: [dangling.path],
+        fileManager: .default
+      )
+    )
+  }
+
   func testTrayControlPollDecodesRuntimeAndFlattensOnlyLeafNodes() throws {
     let payload = Data(
       #"""
@@ -274,6 +324,93 @@ final class AppServicePolicyTests: XCTestCase {
     XCTAssertFalse(config.contains("      - DIRECT\n"))
   }
 
+  func testProvisioningRequiresPersistentAndDynamicDNSRestorationReadback() throws {
+    let repository = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+    let proxyService = try String(
+      contentsOf: repository.appendingPathComponent("Sources/MihomoDNSCore/ProxyService.swift"),
+      encoding: .utf8
+    )
+    let agent = try String(
+      contentsOf: repository.appendingPathComponent("Sources/MihomoAgent/main.swift"),
+      encoding: .utf8
+    )
+    let supervisor = try String(
+      contentsOf: repository.appendingPathComponent("Sources/MihomoDaemon/AgentSupervisor.swift"),
+      encoding: .utf8
+    )
+    let installer = try String(
+      contentsOf: repository.appendingPathComponent("scripts/install-daemon.sh"),
+      encoding: .utf8
+    )
+
+    XCTAssertTrue(proxyService.contains("isSystemDNSRestored"))
+    XCTAssertTrue(
+      proxyService.contains(
+        "let persistentlyPresent = try preferences.containsManagedServerPersistently()"
+      )
+    )
+    XCTAssertTrue(
+      proxyService.contains(
+        "let dynamicallyPresent = try preferences.containsManagedServerEffectively()"
+      )
+    )
+    XCTAssertTrue(proxyService.contains("return !persistentlyPresent && !dynamicallyPresent"))
+    XCTAssertTrue(
+      supervisor.contains("ProxyService.isSystemDNSRestored(configuration: configuration)")
+    )
+    XCTAssertTrue(supervisor.contains("observed.tunInterface == nil"))
+    XCTAssertTrue(supervisor.contains("!observed.fakeIPRouteReady"))
+    XCTAssertTrue(supervisor.contains("!observed.dnsBridgeReady"))
+    XCTAssertTrue(supervisor.contains("!observed.mihomoDNSReady"))
+    XCTAssertTrue(agent.contains("--check-system-dns-restored"))
+    XCTAssertTrue(installer.contains("--check-system-dns-restored >/dev/null 2>&1"))
+    XCTAssertTrue(installer.contains("managed_mihomo_pids"))
+  }
+
+  func testInstallerAndDaemonMutationsShareTheRootTransactionLock() throws {
+    let repository = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+    let updater = try String(
+      contentsOf: repository.appendingPathComponent("Sources/MihomoDaemon/ComponentUpdater.swift"),
+      encoding: .utf8
+    )
+    let server = try String(
+      contentsOf: repository.appendingPathComponent("Sources/MihomoDaemon/ControlServer.swift"),
+      encoding: .utf8
+    )
+
+    let lockPath = "/Library/Application Support/.mihomobox-install.lock"
+    XCTAssertTrue(updater.contains(lockPath))
+    XCTAssertTrue(updater.contains("O_EXLOCK | O_NONBLOCK"))
+    XCTAssertTrue(
+      updater.contains(
+        "O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW | O_EXLOCK | O_NONBLOCK"
+      )
+    )
+    XCTAssertTrue(updater.contains("let fileLock = try mutationLockForTransaction()"))
+    XCTAssertTrue(updater.contains("pendingBootValidationLock = fileLock"))
+    XCTAssertTrue(updater.contains("var previousVersion: String?"))
+    XCTAssertTrue(updater.contains("0.8.0 did not encode previousVersion"))
+    XCTAssertTrue(updater.contains("pending.previousVersion = previousVersion"))
+    XCTAssertTrue(updater.contains("new pending component update is missing its previous version"))
+    XCTAssertTrue(updater.contains("try writeInstalledVersion(rollbackVersion)"))
+    XCTAssertTrue(updater.contains("installed component version state is missing or invalid"))
+    XCTAssertTrue(updater.contains("O_RDONLY | O_CLOEXEC | O_NOFOLLOW"))
+    XCTAssertTrue(updater.contains("metadata.st_mode & 0o7777 == 0o600"))
+    XCTAssertTrue(updater.contains("private func semanticVersion(_ value: String) -> [String]?"))
+    XCTAssertTrue(updater.contains("semanticVersionPrecedes"))
+    XCTAssertFalse(updater.contains("let number = Int(field)"))
+    XCTAssertTrue(server.contains("request.operation != .upgradeComponents"))
+    XCTAssertTrue(server.contains("components.ownsPendingMutationFileLock"))
+    XCTAssertTrue(server.contains("externalMutationFileLock = try ComponentMutationFileLock()"))
+    XCTAssertTrue(server.contains("another privileged MihomoBox mutation is running"))
+  }
+
   func testShellEntrypointsCannotRunOriginalBundleScriptAsRoot() throws {
     let repository = URL(fileURLWithPath: #filePath)
       .deletingLastPathComponent()
@@ -296,10 +433,58 @@ final class AppServicePolicyTests: XCTestCase {
     XCTAssertTrue(installer.contains("CFBundleShortVersionString raw"))
     XCTAssertTrue(installer.contains("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"))
     XCTAssertTrue(installer.contains("$APP_SUPPORT/.component-version.XXXXXX"))
+    XCTAssertTrue(installer.contains("enforce_component_version_floor"))
+    XCTAssertTrue(installer.contains("semantic_version_precedes"))
+    XCTAssertTrue(installer.contains("refusing to downgrade installed components"))
+    XCTAssertTrue(installer.contains("__installer-probe-daemon-protocol"))
+    XCTAssertTrue(installer.contains("probe_status\" -eq 10"))
+    XCTAssertTrue(installer.contains("installed component version state is unsafe"))
+    XCTAssertTrue(installer.contains("read_exact_semantic_version_file"))
+    XCTAssertTrue(installer.contains("$(( ${#value} + 1 ))"))
+    XCTAssertTrue(installer.contains("UNVERSIONED_INSTALLATION_AUTHORIZED"))
+    XCTAssertTrue(installer.contains("for artifact in \\\n    \"$APP_SUPPORT\""))
+    XCTAssertTrue(installer.contains("\"$RENAMED_PLIST\"; do"))
+    XCTAssertTrue(
+      installer.contains("INSTALL_LOCK=\"/Library/Application Support/.mihomobox-install.lock\""))
+    XCTAssertTrue(installer.contains("acquire_install_lock"))
+    XCTAssertTrue(installer.contains("/usr/bin/lockf -s -t 0 9"))
+    XCTAssertTrue(installer.contains("exec 9<>\"$INSTALL_LOCK\""))
+    XCTAssertTrue(
+      installer.contains("COMPONENT_PENDING=\"$APP_SUPPORT/component-update-pending.plist\""))
+    XCTAssertTrue(
+      installer.contains("component update recovery must finish before installer repair"))
     XCTAssertTrue(installer.contains("/bin/chmod 0600 \"$staged\""))
     XCTAssertTrue(installer.contains("/bin/mv -f \"$staged\" \"$COMPONENT_VERSION\""))
     XCTAssertTrue(installer.contains("PROVISIONING_STATE=\"$APP_SUPPORT/provisioning\""))
     XCTAssertTrue(installer.contains("authenticated daemon XPC"))
+    XCTAssertTrue(installer.contains("verified stopped network after provisioning"))
+    XCTAssertTrue(installer.contains("managed_network_restored"))
+    XCTAssertTrue(installer.contains("managed_mihomo_pids"))
+    XCTAssertTrue(installer.contains("--check-system-dns-restored"))
+    XCTAssertTrue(installer.contains("'\"fake_ip_route_ready\":false'"))
+    XCTAssertTrue(installer.contains("'\"dns_bridge_ready\":false'"))
+    XCTAssertTrue(installer.contains("'\"mihomo_dns_ready\":false'"))
+    XCTAssertTrue(
+      installer.contains(
+        "LEGACY_PLIST=\"/Library/LaunchDaemons/homebrew.mxcl.mihomo.plist\""
+      ))
+    XCTAssertTrue(installer.contains("LEGACY_PLIST_BACKUP"))
+    XCTAssertTrue(installer.contains("snapshot_previous_launchd_definitions"))
+    XCTAssertTrue(installer.contains("if [[ -e \"$PLIST\" || -L \"$PLIST\" ]]"))
+    XCTAssertTrue(
+      installer.contains("if [[ -e \"$RENAMED_PLIST\" || -L \"$RENAMED_PLIST\" ]]")
+    )
+    XCTAssertTrue(installer.contains("restart_launchd_job"))
+    XCTAssertTrue(installer.contains("wait_for_job_present"))
+    XCTAssertTrue(installer.contains("state = running"))
+    XCTAssertTrue(installer.contains("PREVIOUS_MANAGED_RUNTIME_RUNNING"))
+    XCTAssertTrue(installer.contains("restored managed MihomoBox network"))
+    XCTAssertTrue(installer.contains("recovery_required: rollback snapshot preserved at"))
+    XCTAssertTrue(installer.contains("restore_saved_legacy_installation"))
+    XCTAssertFalse(
+      installer.contains(
+        "/bin/launchctl kickstart -k \"system/$LEGACY_LABEL\" >/dev/null 2>&1 || true"
+      ))
     XCTAssertTrue(installer.contains("provisioning=$provisioning_install"))
     let versionCommit = installer.range(of: "write_component_version", options: .backwards)
     let daemonBootstrap = versionCommit.flatMap {
@@ -313,6 +498,57 @@ final class AppServicePolicyTests: XCTestCase {
     if let versionCommit, let daemonBootstrap {
       XCTAssertLessThan(versionCommit.lowerBound, daemonBootstrap.lowerBound)
     }
+    let installBody = try XCTUnwrap(
+      installer.range(of: "install_daemon() {", options: .backwards)
+    )
+    let stopped = try XCTUnwrap(
+      installer.range(
+        of: "wait_for_managed_process_absent",
+        range: installBody.lowerBound..<installer.endIndex
+      )
+    )
+    let stableSnapshot = try XCTUnwrap(
+      installer.range(
+        of: "snapshot_installation",
+        range: stopped.upperBound..<installer.endIndex
+      )
+    )
+    let firstReplacement = try XCTUnwrap(
+      installer.range(
+        of: "run /usr/bin/install -o root -g wheel -m 0755 \"$DAEMON_SOURCE\"",
+        range: stableSnapshot.upperBound..<installer.endIndex
+      )
+    )
+    XCTAssertLessThan(stopped.lowerBound, stableSnapshot.lowerBound)
+    XCTAssertLessThan(stableSnapshot.lowerBound, firstReplacement.lowerBound)
+    let launchdSnapshot = try XCTUnwrap(
+      installer.range(
+        of: "snapshot_previous_launchd_definitions",
+        range: installBody.lowerBound..<stopped.lowerBound
+      )
+    )
+    let legacyBootout = try XCTUnwrap(
+      installer.range(
+        of: "/bin/launchctl bootout \"system/$LEGACY_LABEL\"",
+        range: launchdSnapshot.upperBound..<stopped.lowerBound
+      )
+    )
+    XCTAssertLessThan(launchdSnapshot.lowerBound, legacyBootout.lowerBound)
+    let dispatcher = try XCTUnwrap(
+      installer.range(of: "if [[ -n \"$IMPORT_PROFILE\" ]]", options: .backwards)
+    )
+    let globalLock = try XCTUnwrap(
+      installer.range(
+        of: "acquire_install_lock",
+        options: .backwards,
+        range: installBody.lowerBound..<dispatcher.lowerBound
+      )
+    )
+    XCTAssertLessThan(globalLock.lowerBound, dispatcher.lowerBound)
+    XCTAssertFalse(
+      installer[installBody.lowerBound..<globalLock.lowerBound]
+        .contains("acquire_install_lock")
+    )
     XCTAssertTrue(installer.contains("local managed_target=\"$APP_SUPPORT/mihomoboxctl\""))
     XCTAssertTrue(
       installer.contains(
@@ -328,15 +564,20 @@ final class AppServicePolicyTests: XCTestCase {
         "\"$(/usr/bin/readlink \"$CLI_ENTRY\")\" == \"$installed_target\""
       ))
     XCTAssertFalse(installer.contains("*/MihomoBox.app/Contents/MacOS/mihomoboxctl"))
-    XCTAssertFalse(installer.contains("--client-app-bundle"))
-    XCTAssertFalse(installer.contains("--initial-profile"))
-    XCTAssertTrue(installer.contains("CLI_TARGET_METADATA=\"$APP_SUPPORT/cli-target\""))
-    XCTAssertTrue(installer.contains("existing_target\" != \"$recorded_target"))
 
     let cli = try String(
       contentsOf: repository.appendingPathComponent("Sources/MihomoBoxCLI/main.swift"),
       encoding: .utf8
     )
+    XCTAssertTrue(cli.contains("case \"__installer-probe-daemon-protocol\""))
+    XCTAssertTrue(cli.contains("protocolVersionMismatch(let expected, let received)"))
+    XCTAssertTrue(cli.contains("InstallerProtocolProbeExit.legacy.rawValue"))
+    XCTAssertFalse(cli.contains("ControlRequest(version: 1"))
+    XCTAssertFalse(installer.contains("--client-app-bundle"))
+    XCTAssertFalse(installer.contains("--initial-profile"))
+    XCTAssertTrue(installer.contains("CLI_TARGET_METADATA=\"$APP_SUPPORT/cli-target\""))
+    XCTAssertTrue(installer.contains("existing_target\" != \"$recorded_target"))
+
     XCTAssertTrue(cli.contains("SecCodeCopySelf([], &dynamicCode)"))
     XCTAssertTrue(cli.contains("and cdhash H\\\"\\(cdhash)\\\""))
     XCTAssertTrue(cli.contains("/usr/bin/ditto \\(source) \"$snapshot\""))

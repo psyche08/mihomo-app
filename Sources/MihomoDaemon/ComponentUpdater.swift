@@ -1,6 +1,117 @@
+import Darwin
 import Foundation
 import MihomoControl
 import MihomoDNSCore
+
+private let componentMutationLockPath = "/Library/Application Support/.mihomobox-install.lock"
+
+enum ComponentMutationLockError: LocalizedError {
+    case busy
+    case unsafe
+    case unavailable
+
+    var errorDescription: String? {
+        switch self {
+        case .busy:
+            "another privileged MihomoBox mutation is running"
+        case .unsafe:
+            "privileged mutation lock is unsafe"
+        case .unavailable:
+            "privileged mutation lock could not be opened"
+        }
+    }
+}
+
+final class ComponentMutationFileLock {
+    private let descriptor: Int32
+
+    init() throws {
+        descriptor = try Self.openVerifiedDescriptor()
+    }
+
+    deinit {
+        Darwin.close(descriptor)
+    }
+
+    private static func openVerifiedDescriptor() throws -> Int32 {
+        for attempt in 0..<3 {
+            var pathMetadata = stat()
+            if lstat(componentMutationLockPath, &pathMetadata) == 0 {
+                guard isSafeLockMetadata(pathMetadata) else {
+                    throw ComponentMutationLockError.unsafe
+                }
+                let descriptor = Darwin.open(
+                    componentMutationLockPath,
+                    O_RDWR | O_CLOEXEC | O_NOFOLLOW | O_EXLOCK | O_NONBLOCK
+                )
+                if descriptor < 0 {
+                    let openError = errno
+                    if openError == ENOENT, attempt < 2 { continue }
+                    if openError == EWOULDBLOCK || openError == EAGAIN {
+                        throw ComponentMutationLockError.busy
+                    }
+                    throw ComponentMutationLockError.unavailable
+                }
+                do {
+                    try validateOpenDescriptor(descriptor)
+                    return descriptor
+                } catch {
+                    Darwin.close(descriptor)
+                    throw error
+                }
+            }
+
+            guard errno == ENOENT else {
+                throw ComponentMutationLockError.unavailable
+            }
+            let descriptor = Darwin.open(
+                componentMutationLockPath,
+                O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW | O_EXLOCK | O_NONBLOCK,
+                mode_t(0o600)
+            )
+            if descriptor < 0 {
+                let openError = errno
+                if openError == EEXIST, attempt < 2 { continue }
+                if openError == EWOULDBLOCK || openError == EAGAIN {
+                    throw ComponentMutationLockError.busy
+                }
+                throw ComponentMutationLockError.unavailable
+            }
+            do {
+                guard fchown(descriptor, 0, 0) == 0,
+                      fchmod(descriptor, mode_t(0o600)) == 0 else {
+                    throw ComponentMutationLockError.unavailable
+                }
+                try validateOpenDescriptor(descriptor)
+                return descriptor
+            } catch {
+                Darwin.close(descriptor)
+                throw error
+            }
+        }
+        throw ComponentMutationLockError.unavailable
+    }
+
+    private static func validateOpenDescriptor(_ descriptor: Int32) throws {
+        var descriptorMetadata = stat()
+        var pathMetadata = stat()
+        guard fstat(descriptor, &descriptorMetadata) == 0,
+              lstat(componentMutationLockPath, &pathMetadata) == 0,
+              isSafeLockMetadata(descriptorMetadata),
+              isSafeLockMetadata(pathMetadata),
+              descriptorMetadata.st_dev == pathMetadata.st_dev,
+              descriptorMetadata.st_ino == pathMetadata.st_ino else {
+            throw ComponentMutationLockError.unsafe
+        }
+    }
+
+    private static func isSafeLockMetadata(_ metadata: stat) -> Bool {
+        metadata.st_mode & S_IFMT == S_IFREG
+            && metadata.st_mode & 0o7777 == 0o600
+            && metadata.st_uid == 0
+            && metadata.st_gid == 0
+    }
+}
 
 struct ComponentUpdateResult: Sendable {
     let updated: [String]
@@ -16,6 +127,10 @@ private struct PendingComponentUpdate: Codable {
     var phase: Phase
     var transactionName: String
     var appVersion: String
+    // Optional only for decoding an in-flight 0.8.0 transaction. Every 0.8.1+
+    // writer records it; an old-schema rollback derives it from the still
+    // uncommitted, strictly validated component-version marker.
+    var previousVersion: String?
     var changed: [String]
     var previousDigests: [String: String]
     var replacementDigests: [String: String]
@@ -28,6 +143,7 @@ final class ComponentUpdater: @unchecked Sendable {
     private let validateStartedRuntime: () throws -> Void
     private let pendingURL: URL
     private let versionURL: URL
+    private var pendingBootValidationLock: ComponentMutationFileLock?
     private(set) var requiresDaemonRestart = false
     private(set) var recoveryRequired = false
     private let queue = DispatchQueue(label: "dev.linsheng.mihomo.daemon.components")
@@ -53,6 +169,12 @@ final class ComponentUpdater: @unchecked Sendable {
         requirement = try SigningCertificateRequirement.currentProcess()
         do {
             try recoverInterruptedReplacementIfNeeded()
+        } catch ComponentMutationLockError.busy {
+            // A competing installer/update owns the transaction boundary.
+            // Keep networking stopped and let ControlDispatcher perform its
+            // existing controlled restart so launchd retries after unlock.
+            requiresDaemonRestart = true
+            ServiceLog.error("event=component_update result=recovery_deferred_busy")
         } catch {
             recoveryRequired = true
             ServiceLog.error("event=component_update result=recovery_required")
@@ -96,14 +218,33 @@ final class ComponentUpdater: @unchecked Sendable {
         }
     }
 
+    var ownsPendingMutationFileLock: Bool {
+        queue.sync { pendingBootValidationLock != nil }
+    }
+
     func commitPendingBootValidation() throws {
         try queue.sync {
+            guard try readPending()?.phase == .awaitingBootValidation else {
+                pendingBootValidationLock = nil
+                return
+            }
+            let fileLock: ComponentMutationFileLock
+            do {
+                fileLock = try mutationLockForTransaction()
+            } catch ComponentMutationLockError.busy {
+                requiresDaemonRestart = true
+                ServiceLog.error("event=component_update result=commit_deferred_busy")
+                throw ComponentMutationLockError.busy
+            }
+            defer { withExtendedLifetime(fileLock) {} }
             guard let pending = try readPending(), pending.phase == .awaitingBootValidation else {
+                pendingBootValidationLock = nil
                 return
             }
             try verifyCurrentComponents(pending.replacementDigests)
             try writeInstalledVersion(pending.appVersion)
             try clearPending(pending)
+            pendingBootValidationLock = nil
             ServiceLog.info("event=component_update result=committed")
         }
     }
@@ -111,14 +252,31 @@ final class ComponentUpdater: @unchecked Sendable {
     func rollbackPendingBootValidation() -> Bool {
         queue.sync {
             do {
+                guard try readPending()?.phase == .awaitingBootValidation else {
+                    pendingBootValidationLock = nil
+                    return true
+                }
+                let fileLock = try mutationLockForTransaction()
+                defer { withExtendedLifetime(fileLock) {} }
                 guard let pending = try readPending(), pending.phase == .awaitingBootValidation else {
+                    pendingBootValidationLock = nil
                     return true
                 }
                 try restore(pending)
                 try clearPending(pending)
+                pendingBootValidationLock = nil
                 ServiceLog.error("event=component_update result=rolled_back")
                 return true
+            } catch ComponentMutationLockError.busy {
+                pendingBootValidationLock = nil
+                requiresDaemonRestart = true
+                ServiceLog.error("event=component_update result=rollback_deferred_busy")
+                // Both startup callers interpret true as safe to perform their
+                // existing controlled daemon restart. No rollback is claimed
+                // complete on disk; the pending record remains the authority.
+                return true
             } catch {
+                pendingBootValidationLock = nil
                 recoveryRequired = true
                 ServiceLog.error("event=component_update result=rollback_failed")
                 return false
@@ -128,6 +286,8 @@ final class ComponentUpdater: @unchecked Sendable {
 
     func perform(_ payload: Data) throws -> ComponentUpdateResult {
         try queue.sync {
+            let fileLock = try mutationLockForTransaction()
+            defer { withExtendedLifetime(fileLock) {} }
             guard (try readPending()) == nil else {
                 throw updateError("a component update is already awaiting recovery")
             }
@@ -135,7 +295,7 @@ final class ComponentUpdater: @unchecked Sendable {
                 throw updateError("component update payload exceeds the size limit")
             }
             let package = try ComponentUpdatePackage.decode(payload)
-            try validate(package)
+            let previousVersion = try validate(package)
 
             let transaction = root.appendingPathComponent(
                 ".component-update-\(UUID().uuidString)",
@@ -203,6 +363,7 @@ final class ComponentUpdater: @unchecked Sendable {
                 phase: .replacing,
                 transactionName: transaction.lastPathComponent,
                 appVersion: package.appVersion,
+                previousVersion: previousVersion,
                 changed: changed.map(\.rawValue).sorted(),
                 previousDigests: previousDigests,
                 replacementDigests: replacementDigests
@@ -233,6 +394,10 @@ final class ComponentUpdater: @unchecked Sendable {
                     pending.phase = .awaitingBootValidation
                     try writePending(pending)
                     preserveTransactionForRestart = true
+                    // Keep the flock until this daemon exits. The replacement
+                    // daemon reacquires it during startup and holds it through
+                    // boot health validation plus commit or rollback.
+                    pendingBootValidationLock = fileLock
                 } else {
                     if wasRunning {
                         try agent.start()
@@ -279,18 +444,16 @@ final class ComponentUpdater: @unchecked Sendable {
         [.mihomo, .agent, .daemon]
     }
 
-    private func validate(_ package: ComponentUpdatePackage) throws {
+    private func validate(_ package: ComponentUpdatePackage) throws -> String {
         guard package.formatVersion == ComponentUpdatePackage.currentFormatVersion,
               let proposed = semanticVersion(package.appVersion) else {
             throw updateError("invalid component update package version")
         }
-        if FileManager.default.fileExists(atPath: versionURL.path) {
-            guard let installed = installedVersion(), let current = semanticVersion(installed) else {
-                throw updateError("installed component version state is invalid")
-            }
-            if proposed.lexicographicallyPrecedes(current) {
-                throw updateError("component downgrade requires an explicit signed repair")
-            }
+        guard let installed = installedVersion(), let current = semanticVersion(installed) else {
+            throw updateError("installed component version state is missing or invalid")
+        }
+        if semanticVersionPrecedes(proposed, current) {
+            throw updateError("component downgrade requires an explicit signed repair")
         }
         let expected = Set(ManagedComponent.allCases.map(\.rawValue))
         guard Set(package.components.keys) == expected else {
@@ -303,10 +466,18 @@ final class ComponentUpdater: @unchecked Sendable {
                 throw updateError("managed component size is invalid")
             }
         }
+        return installed
     }
 
     private func recoverInterruptedReplacementIfNeeded() throws {
-        guard let pending = try readPending() else { return }
+        // A clean daemon launched by the signed installer must be able to start
+        // while that installer holds the lock for its own end-to-end health
+        // transaction. Only an actual pending component transaction requires
+        // startup recovery and therefore lock participation.
+        guard (try readPending()) != nil else { return }
+        let fileLock = try ComponentMutationFileLock()
+        defer { withExtendedLifetime(fileLock) {} }
+        guard var pending = try readPending() else { return }
         switch pending.phase {
         case .replacing:
             try restore(pending)
@@ -314,8 +485,29 @@ final class ComponentUpdater: @unchecked Sendable {
             requiresDaemonRestart = true
             ServiceLog.error("event=component_update result=recovered_interrupted_replacement")
         case .awaitingBootValidation:
-            break
+            if pending.previousVersion == nil {
+                // A daemon replaced by 0.8.0 can leave the old pending schema.
+                // Freeze its still-uncommitted marker before boot validation:
+                // commit writes the new marker before clearing pending, so a
+                // later crash must never reinterpret that new value as the
+                // rollback version.
+                guard let previousVersion = installedVersion() else {
+                    throw updateError("legacy pending component version state is unsafe")
+                }
+                pending.previousVersion = previousVersion
+                try writePending(pending)
+            }
+            // Retaining the descriptor avoids a reentrant acquire when
+            // ControlDispatcher later commits or rolls back after health.
+            pendingBootValidationLock = fileLock
         }
+    }
+
+    private func mutationLockForTransaction() throws -> ComponentMutationFileLock {
+        if let pendingBootValidationLock {
+            return pendingBootValidationLock
+        }
+        return try ComponentMutationFileLock()
     }
 
     private func readPending() throws -> PendingComponentUpdate? {
@@ -335,9 +527,28 @@ final class ComponentUpdater: @unchecked Sendable {
 
     private func validatePending(_ pending: PendingComponentUpdate) throws {
         let expectedNames = Set(ManagedComponent.allCases.map(\.rawValue))
+        guard let proposedVersion = semanticVersion(pending.appVersion) else {
+            throw updateError("pending component update version is invalid")
+        }
+        let rollbackVersion: [String]
+        if let previousVersion = pending.previousVersion {
+            guard let parsed = semanticVersion(previousVersion) else {
+                throw updateError("pending previous component version is invalid")
+            }
+            rollbackVersion = parsed
+        } else {
+            // 0.8.0 did not encode previousVersion. It never committed the new
+            // version before boot validation, so the current strict marker is
+            // the authoritative rollback floor for that old schema.
+            guard let installed = installedVersion(),
+                  let parsed = semanticVersion(installed) else {
+                throw updateError("legacy pending component version state is unsafe")
+            }
+            rollbackVersion = parsed
+        }
         guard pending.transactionName.hasPrefix(".component-update-"),
               !pending.transactionName.contains("/"),
-              semanticVersion(pending.appVersion) != nil,
+              !semanticVersionPrecedes(proposedVersion, rollbackVersion),
               !pending.changed.isEmpty,
               Set(pending.changed).isSubset(of: expectedNames),
               Set(pending.previousDigests.keys) == Set(pending.changed),
@@ -349,6 +560,9 @@ final class ComponentUpdater: @unchecked Sendable {
     }
 
     private func writePending(_ pending: PendingComponentUpdate) throws {
+        guard pending.previousVersion != nil else {
+            throw updateError("new pending component update is missing its previous version")
+        }
         try validatePending(pending)
         let encoder = PropertyListEncoder()
         encoder.outputFormat = .binary
@@ -400,6 +614,16 @@ final class ComponentUpdater: @unchecked Sendable {
                 throw updateError("installed rollback component digest did not match")
             }
         }
+        let rollbackVersion: String
+        if let previousVersion = pending.previousVersion {
+            rollbackVersion = previousVersion
+        } else {
+            guard let installed = installedVersion() else {
+                throw updateError("legacy pending component version state is unsafe")
+            }
+            rollbackVersion = installed
+        }
+        try writeInstalledVersion(rollbackVersion)
     }
 
     private func verifyCurrentComponents(_ expected: [String: String]) throws {
@@ -435,39 +659,126 @@ final class ComponentUpdater: @unchecked Sendable {
     }
 
     private func installedVersion() -> String? {
-        guard let values = try? versionURL.resourceValues(forKeys: [
-            .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey,
-        ]), values.isRegularFile == true, values.isSymbolicLink != true,
-              let size = values.fileSize, size > 0, size <= 64,
-              let value = try? String(contentsOf: versionURL, encoding: .utf8)
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-              semanticVersion(value) != nil else {
+        let descriptor = Darwin.open(versionURL.path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
+        guard descriptor >= 0 else { return nil }
+        defer { Darwin.close(descriptor) }
+
+        var descriptorMetadata = stat()
+        var pathMetadata = stat()
+        guard fstat(descriptor, &descriptorMetadata) == 0,
+              lstat(versionURL.path, &pathMetadata) == 0,
+              isSafeInstalledVersionMetadata(descriptorMetadata),
+              isSafeInstalledVersionMetadata(pathMetadata),
+              descriptorMetadata.st_dev == pathMetadata.st_dev,
+              descriptorMetadata.st_ino == pathMetadata.st_ino else {
             return nil
         }
-        return value
+
+        var bytes = [UInt8](repeating: 0, count: 65)
+        var count = 0
+        while count < bytes.count {
+            let result = bytes.withUnsafeMutableBytes { buffer in
+                Darwin.read(
+                    descriptor,
+                    buffer.baseAddress?.advanced(by: count),
+                    buffer.count - count
+                )
+            }
+            if result < 0 {
+                if errno == EINTR { continue }
+                return nil
+            }
+            if result == 0 { break }
+            count += result
+        }
+        guard count <= 64 else { return nil }
+
+        var finalDescriptorMetadata = stat()
+        var finalPathMetadata = stat()
+        guard fstat(descriptor, &finalDescriptorMetadata) == 0,
+              lstat(versionURL.path, &finalPathMetadata) == 0,
+              isSafeInstalledVersionMetadata(finalDescriptorMetadata),
+              isSafeInstalledVersionMetadata(finalPathMetadata),
+              finalDescriptorMetadata.st_dev == descriptorMetadata.st_dev,
+              finalDescriptorMetadata.st_ino == descriptorMetadata.st_ino,
+              finalPathMetadata.st_dev == descriptorMetadata.st_dev,
+              finalPathMetadata.st_ino == descriptorMetadata.st_ino,
+              finalDescriptorMetadata.st_size == off_t(count) else {
+            return nil
+        }
+        return parseInstalledVersionData(Data(bytes.prefix(count)))
     }
 
     private func writeInstalledVersion(_ version: String) throws {
-        guard semanticVersion(version) != nil else {
+        let data = Data("\(version)\n".utf8)
+        guard semanticVersion(version) != nil,
+              parseInstalledVersionData(data) == version else {
             throw updateError("invalid installed component version")
         }
-        try Data("\(version)\n".utf8).write(to: versionURL, options: [.atomic])
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o600],
-            ofItemAtPath: versionURL.path
-        )
+        var existingMetadata = stat()
+        if lstat(versionURL.path, &existingMetadata) == 0 {
+            guard installedVersion() != nil else {
+                throw updateError("installed component version state is unsafe")
+            }
+        } else if errno != ENOENT {
+            throw updateError("installed component version state is unavailable")
+        }
+
+        try data.write(to: versionURL, options: [.atomic])
+        let descriptor = Darwin.open(versionURL.path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
+        guard descriptor >= 0 else {
+            throw updateError("installed component version state could not be secured")
+        }
+        defer { Darwin.close(descriptor) }
+        guard fchown(descriptor, 0, 0) == 0,
+              fchmod(descriptor, mode_t(0o600)) == 0,
+              installedVersion() == version else {
+            throw updateError("installed component version state failed readback")
+        }
     }
 
-    private func semanticVersion(_ value: String) -> [Int]? {
+    private func semanticVersion(_ value: String) -> [String]? {
+        guard !value.isEmpty, value.utf8.count <= 63 else { return nil }
         let fields = value.split(separator: ".", omittingEmptySubsequences: false)
         guard fields.count == 3 else { return nil }
-        var result: [Int] = []
+        var result: [String] = []
         for field in fields {
-            guard !field.isEmpty, field.allSatisfy({ $0.isNumber }),
-                  let number = Int(field), number >= 0 else { return nil }
-            result.append(number)
+            guard !field.isEmpty,
+                  field.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }),
+                  field == "0" || field.first != "0" else { return nil }
+            result.append(String(field))
         }
         return result
+    }
+
+    private func semanticVersionPrecedes(_ lhs: [String], _ rhs: [String]) -> Bool {
+        for (left, right) in zip(lhs, rhs) where left != right {
+            if left.utf8.count != right.utf8.count {
+                return left.utf8.count < right.utf8.count
+            }
+            return left.lexicographicallyPrecedes(right)
+        }
+        return false
+    }
+
+    private func isSafeInstalledVersionMetadata(_ metadata: stat) -> Bool {
+        metadata.st_mode & S_IFMT == S_IFREG
+            && metadata.st_mode & 0o7777 == 0o600
+            && metadata.st_uid == 0
+            && metadata.st_gid == 0
+            && metadata.st_size > 0
+            && metadata.st_size <= 64
+    }
+
+    private func parseInstalledVersionData(_ data: Data) -> String? {
+        guard !data.isEmpty, data.count <= 64, data.last == 0x0A else { return nil }
+        let versionBytes = data.dropLast()
+        guard !versionBytes.isEmpty, !versionBytes.contains(0x0A),
+              let version = String(bytes: versionBytes, encoding: .ascii),
+              semanticVersion(version) != nil else {
+            return nil
+        }
+        return version
     }
 
     private func validDigest(_ value: String) -> Bool {

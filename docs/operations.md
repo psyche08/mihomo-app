@@ -72,17 +72,65 @@ snapshot before elevation.
 
 Upgrades migrate the former `dev.linsheng.mihomo-app.daemon` label to
 `dev.linsheng.mihomo.daemon`. The old job is stopped and its plist removed
-before the new job starts; rollback restores the prior running label.
+before the new job starts; rollback restores the prior running label. Before
+stopping any previously loaded job, the installer validates and saves its
+root-owned launchd plist in the root-private rollback directory. A running
+Homebrew Mihomo job is restarted by bootstrapping that saved plist, not by
+assuming that `kickstart` can recreate a job removed by `bootout`; a trusted
+copy is also retained for a later uninstall.
 
-After this bootstrap has installed an update-capable daemon, normal App updates
-do not require another administrator dialog. On launch, the App compares the
-bundled and installed daemon/agent/Mihomo digests. Changed binaries cross the
-authenticated XPC channel, are independently validated against the same leaf
-certificate, atomically replaced with rollback, and restarted by the daemon or
-launchd. Daemon replacement remains `update_pending` across launchd restart
-until the new set passes full network health; App and CLI report success only
-after that commit. Plist, path-layout, or signing-certificate
-migrations still require **Install / Repair Daemon**.
+Rollback and preflight recovery are successful only after every previously
+loaded launchd job is present again. If the prior MihomoBox managed runtime was
+active, controller, TUN, Fake-IP route, DNS bridge, Mihomo DNS, persisted DNS,
+and effective DNS must all return to the fully managed health state. A failed
+bootstrap, restart, or health readback is reported as `recovery_required`, and
+the root-private rollback directory is printed and retained for manual
+recovery. The installer deletes that snapshot only after restoration has been
+verified; it never reports a failed or unverified restart as restored.
+
+After this bootstrap has installed a protocol-compatible update-capable daemon,
+normal App updates do not require another administrator dialog. On launch, the
+App compares the bundled and installed daemon/agent/Mihomo digests. Changed
+binaries cross the authenticated XPC channel, are independently validated
+against the same leaf certificate, atomically replaced with rollback, and
+restarted by the daemon or launchd. Daemon replacement remains
+`update_pending` across launchd restart until the new set passes full network
+health; App and CLI report success only after that commit. Plist, path-layout,
+signing-certificate, or control-protocol migrations still require **Install /
+Repair Daemon**.
+
+### Migrating a 0.7 daemon
+
+The 0.8.1 App recognizes the authenticated version-1 response emitted by an
+installed 0.7 daemon. It does not reinterpret a connection failure, malformed
+reply, missing marker file, or error string as proof of a legacy daemon. In the
+confirmed legacy state the tray shows `Daemon upgrade required` and disables
+all incompatible XPC actions. Select the emphasized `Upgrade Daemon…` item (or
+`Tools > Install / Repair Daemon… (Required)`) and authorize the existing
+verified installer. Repair preserves the root-owned active profile and does
+not import user profile bytes again.
+
+The repair briefly restarts Mihomo, Enhanced TUN and managed DNS. It succeeds
+only after a version-2 tray-state response is received; cancellation, timeout,
+rollback, or another version-1 response leaves the repair-required state
+visible. An installation with a root-owned active profile must also pass the
+full controller/TUN/Fake-IP/DNS health gate. Without one, repair safely remains
+in REJECT-only provisioning with the agent, TUN, and managed DNS stopped until
+the user activates a profile. Verify that `component-version` reports the
+current App version and the root daemon/agent/Mihomo and root-owned CLI came
+from the verified App snapshot. The root installer rejects a version below its
+existing root-owned floor; a legacy installation without that marker proceeds
+only after the exact snapshot CLI authenticates protocol 1. Do not use the old
+version-1 component-update operation as a migration shortcut.
+
+All privileged installer modes share one root-owned BSD file lock. A concurrent
+install, restore, profile transaction, start, or restart is rejected before it
+changes state. The persistent lock file is not itself evidence of a running
+operation and must not be deleted as stale; the kernel lock is released
+automatically when its process exits. Repair also refuses to replace files while
+`component-update-pending.plist` exists. It first stops the old daemon, confirms
+the pending transaction is absent, and only then snapshots the stable rollback
+source.
 
 Sparkle performs automatic signed update checks from the Swift user process.
 It verifies the signed appcast, the enclosure's EdDSA signature, Apple code
@@ -195,6 +243,11 @@ importing or refreshing requires supplying them again.
 /Library/Application Support/Mihomo App/controller.json
 /Library/Application Support/Mihomo App/controller-secret
 /Library/Application Support/Mihomo App/component-version
+/Library/Application Support/Mihomo App/component-update-pending.plist
+/Library/Application Support/Mihomo App/provisioning
+/Library/Application Support/Mihomo App/homebrew-mihomo-was-running
+/Library/Application Support/Mihomo App/homebrew-mihomo-launchd.plist
+/Library/Application Support/.mihomobox-install.lock
 /Library/Application Support/Mihomo App/mihomo
 /Library/Application Support/Mihomo App/mihomo-daemon
 /Library/Application Support/Mihomo App/mihomo-agent
@@ -209,16 +262,18 @@ importing or refreshing requires supplying them again.
 /Library/Logs/Mihomo App/mihomo-agent-crash.log
 /Library/Logs/Mihomo App/mihomo-agent-command.log
 /Library/Logs/Mihomo App/mihomo-agent-command-crash.log
-~/Library/Logs/MihomoBox/mihomobox.log
-~/Library/Logs/MihomoBox/mihomobox-crash.log
 ```
 
-Every file is limited to 100 MiB and keeps three numbered generations (`.1`
-through `.3`). Normal logs are batch-written at most once per second or when
-64 KiB is ready. `mihomo.log` contains aggregate output counts rather than raw
-Mihomo lines. The crash logs are independent of normal rotation so a panic or
-fatal-signal record survives even when the main log rolls. The tray's `Tools >
-Open Diagnostic Logs…` command opens both user and daemon log folders.
+Each root-service file is limited to 100 MiB and keeps three numbered
+generations (`.1` through `.3`). Normal logs are batch-written at most once per
+second or when 64 KiB is ready. `mihomo.log` contains aggregate output counts
+rather than raw Mihomo lines. The crash logs are independent of normal rotation
+so a panic or fatal-signal record survives even when the main log rolls. The
+native App writes its bounded diagnostics to the macOS unified log under
+subsystem `dev.linsheng.mihomo-app`; old files under
+`~/Library/Logs/MihomoBox` are legacy artifacts and are not current 0.8 logs.
+The tray's `Tools > Open Diagnostic Logs…` command opens Console and the daemon
+log folder.
 
 The user paths stage local tray imports before daemon installation. When a
 profile accompanies first installation, the unprivileged App freezes its
@@ -238,14 +293,16 @@ sudo '/Library/Application Support/Mihomo App/mihomo-agent' \
   --check-system-dns
 sudo '/Library/Application Support/Mihomo App/mihomo-agent' \
   --config '/Library/Application Support/Mihomo App/daemon.json' \
+  --check-system-dns-restored
+sudo '/Library/Application Support/Mihomo App/mihomo-agent' \
+  --config '/Library/Application Support/Mihomo App/daemon.json' \
   --health
 tail -f '/Library/Logs/Mihomo App/mihomo-daemon.log'
 tail -f '/Library/Logs/Mihomo App/mihomo-agent.log'
 tail -f '/Library/Logs/Mihomo App/mihomo.log'
 tail -f '/Library/Logs/Mihomo App/mihomo-daemon-crash.log'
 tail -f '/Library/Logs/Mihomo App/mihomo-agent-crash.log'
-tail -f "$HOME/Library/Logs/MihomoBox/mihomobox.log"
-tail -f "$HOME/Library/Logs/MihomoBox/mihomobox-crash.log"
+log stream --style compact --predicate 'subsystem == "dev.linsheng.mihomo-app"'
 dig @127.0.0.53 -p 53 example.com
 dig @127.0.0.1 -p 1054 example.com
 scutil --dns
@@ -255,6 +312,13 @@ The `--check-system-dns` command verifies the persisted CurrentSet
 PrimaryService DNS value (or the Global fallback when no primary service is
 available). `scutil --dns` verifies the effective dynamic resolver state; the
 installer requires both checks to pass.
+
+The inverse `--check-system-dns-restored` command succeeds only when the
+managed address is absent from Global DNS and every service DNS entry in the
+persistent CurrentSet, and from every current dynamic Global/service DNS state.
+Provisioning installation also requires no managed
+agent or Mihomo process, no TUN or Fake-IP route, and no managed DNS listener
+before it reports a safely stopped runtime.
 
 `--health` reports controller, TUN, Fake-IP route, DNS bridge, Mihomo DNS, and
 system-DNS consistency. The first failed observation immediately disables

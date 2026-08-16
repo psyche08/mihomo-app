@@ -147,6 +147,23 @@ final class TrayStateCoordinator: TrayService {
         self.consecutivePollFailures = 0
         self.apply(poll, retainDelays: !authoritative)
         await self.applyLoginDefaultIfNeeded()
+      } catch let error as ControlError {
+        if case .protocolVersionMismatch(let expected, let received) = error {
+          self.consecutivePollFailures = 0
+          let local = await self.profiles.localState()
+          self.publish(
+            self.protocolMismatchSnapshot(
+              expected: expected,
+              received: received,
+              localProfiles: local
+            ))
+          return
+        }
+        self.consecutivePollFailures += 1
+        if self.consecutivePollFailures >= 2 {
+          let local = await self.profiles.localState()
+          self.publish(self.offlineSnapshot(localProfiles: local))
+        }
       } catch {
         self.consecutivePollFailures += 1
         if self.consecutivePollFailures >= 2 {
@@ -168,6 +185,15 @@ final class TrayStateCoordinator: TrayService {
   }
 
   private func setEnhancedTUNEnabledLocked(_ enabled: Bool) async throws {
+    guard !currentSnapshot.daemonCompatibility.blocksControlActions else {
+      let message = protocolActionError(for: currentSnapshot.daemonCompatibility)
+      publishError(message)
+      throw NSError(
+        domain: "MihomoBoxTray",
+        code: 2,
+        userInfo: [NSLocalizedDescriptionKey: message]
+      )
+    }
     var busy = currentSnapshot
     busy.tunOperationInFlight = true
     publish(busy)
@@ -200,7 +226,11 @@ final class TrayStateCoordinator: TrayService {
         )
       }
       if resolved == .installDaemon {
-        try await installer.installOrRepair(initialProfile: selectedLocalProfile())
+        let initialProfile =
+          Self.managedInstallationPresent(fileManager: fileManager)
+          ? nil
+          : selectedLocalProfile()
+        try await installer.installOrRepair(initialProfile: initialProfile)
         let ready = try await waitForControllerReadiness()
         if ready.enhancedTUN {
           apply(ready, retainDelays: false)
@@ -230,6 +260,7 @@ final class TrayStateCoordinator: TrayService {
 
   func setOutboundMode(_ mode: TrayOutboundMode) async throws {
     try await withShellMutation {
+      try self.requireCompatibleControlAction()
       try await self.action("Action failed: outbound mode was not safely applied") {
         self.apply(try await self.control.setOutboundMode(mode), retainDelays: false)
       }
@@ -238,6 +269,7 @@ final class TrayStateCoordinator: TrayService {
 
   func selectProxy(group: String, name: String) async throws {
     try await withShellMutation {
+      try self.requireCompatibleControlAction()
       try await self.action("Action failed: proxy selection was not applied") {
         self.apply(
           try await self.control.selectProxy(group: group, name: name),
@@ -249,6 +281,7 @@ final class TrayStateCoordinator: TrayService {
 
   func testProxyDelays() async throws {
     try await withShellMutation {
+      try self.requireCompatibleControlAction()
       try await self.runLatencyTest(automatic: false)
     }
   }
@@ -282,11 +315,40 @@ final class TrayStateCoordinator: TrayService {
     try await profileAction { try await self.profiles.reload() }
   }
 
-  func installOrRepairDaemon() async throws {
+  func installOrRepairDaemon(requireLegacy: Bool) async throws {
     try await withShellMutation {
+      if requireLegacy, !self.currentSnapshot.daemonCompatibility.requiresRepair {
+        self.refresh(authoritative: true)
+        return
+      }
+      guard self.currentSnapshot.daemonCompatibility.allowsExplicitInstaller,
+        self.currentSnapshot.installationActionsAvailable
+      else {
+        let message = self.protocolActionError(
+          for: self.currentSnapshot.daemonCompatibility
+        )
+        self.publishError(message)
+        throw NSError(
+          domain: "MihomoBoxTray",
+          code: 3,
+          userInfo: [NSLocalizedDescriptionKey: message]
+        )
+      }
       try await self.action("Action failed: the privileged installer did not complete") {
-        try await self.installer.installOrRepair(initialProfile: self.selectedLocalProfile())
-        self.apply(try await self.waitForControllerReadiness(), retainDelays: false)
+        let managedInstallationPresent = Self.managedInstallationPresent(
+          fileManager: self.fileManager
+        )
+        let repairingLegacy = self.currentSnapshot.daemonCompatibility.requiresRepair
+        if repairingLegacy, !self.confirmDaemonUpgrade() { return }
+        // Repair preserves the root-owned active profile. Supplying user bytes
+        // again is necessary only for first installation and would otherwise
+        // add an unrelated profile mutation to the protocol migration.
+        let initialProfile =
+          (repairingLegacy || managedInstallationPresent)
+          ? nil
+          : self.selectedLocalProfile()
+        try await self.installer.installOrRepair(initialProfile: initialProfile)
+        self.apply(try await self.waitForDaemonProtocolReadiness(), retainDelays: false)
       }
     }
   }
@@ -303,6 +365,14 @@ final class TrayStateCoordinator: TrayService {
       if attempt < 29 { try await Task.sleep(for: .milliseconds(500)) }
     }
     throw TrayControlError.readbackMismatch("controller readiness")
+  }
+
+  private func waitForDaemonProtocolReadiness() async throws -> TrayControlPoll {
+    for attempt in 0..<30 {
+      if let poll = try? await control.poll() { return poll }
+      if attempt < 29 { try await Task.sleep(for: .milliseconds(500)) }
+    }
+    throw TrayControlError.readbackMismatch("daemon protocol readiness")
   }
 
   private func action(
@@ -322,6 +392,7 @@ final class TrayStateCoordinator: TrayService {
     _ operation: @escaping @MainActor @Sendable () async throws -> ProfileList
   ) async throws {
     try await withShellMutation {
+      try self.requireCompatibleControlAction()
       guard !self.currentSnapshot.profileOperationInFlight else {
         throw ProfileCoordinatorError.busy
       }
@@ -369,6 +440,7 @@ final class TrayStateCoordinator: TrayService {
       : poll.proxies
     publish(
       TraySnapshot(
+        daemonCompatibility: .compatible,
         controllerReachable: poll.controllerReachable,
         daemonReachable: true,
         agentRunning: poll.agentRunning,
@@ -428,6 +500,78 @@ final class TrayStateCoordinator: TrayService {
     return value
   }
 
+  private func protocolMismatchSnapshot(
+    expected: Int,
+    received: Int,
+    localProfiles: ProfileList
+  ) -> TraySnapshot {
+    let compatibility = Self.protocolCompatibility(
+      expected: expected,
+      received: received
+    )
+    return TraySnapshot(
+      daemonCompatibility: compatibility,
+      controllerReachable: false,
+      daemonReachable: true,
+      agentRunning: false,
+      enhancedTUN: false,
+      tunOperationInFlight: currentSnapshot.tunOperationInFlight,
+      mutationOperationInFlight: currentSnapshot.mutationOperationInFlight,
+      networkHealthy: nil,
+      systemDNSManaged: nil,
+      healthTUNEnabled: nil,
+      outboundMode: .rule,
+      proxies: [],
+      profiles: localProfiles.profiles,
+      activeProfile: localProfiles.activeProfile,
+      profileOperationInFlight: currentSnapshot.profileOperationInFlight,
+      profileActionsAvailable: false,
+      installationActionsAvailable: installationAvailable,
+      enhancedTUNActionAvailable: false,
+      actionError: currentSnapshot.actionError
+    )
+  }
+
+  nonisolated static func protocolCompatibility(
+    expected: Int,
+    received: Int
+  ) -> DaemonProtocolCompatibility {
+    if expected == mihomoControlProtocolVersion, received == 1 {
+      return .legacyRepairRequired(peerVersion: received)
+    }
+    if received > expected {
+      return .appUpdateRequired(peerVersion: received)
+    }
+    return .incompatible(peerVersion: received)
+  }
+
+  private func protocolActionError(
+    for compatibility: DaemonProtocolCompatibility
+  ) -> String {
+    switch compatibility {
+    case .legacyRepairRequired:
+      return "Action unavailable: upgrade the MihomoBox daemon first"
+    case .appUpdateRequired:
+      return "Action unavailable: update MihomoBox to match the installed daemon"
+    case .incompatible:
+      return "Action unavailable: the daemon protocol is incompatible"
+    case .unknown, .compatible:
+      return "Action unavailable: daemon compatibility is unknown"
+    }
+  }
+
+  private func requireCompatibleControlAction() throws {
+    guard !currentSnapshot.daemonCompatibility.blocksControlActions else {
+      let message = protocolActionError(for: currentSnapshot.daemonCompatibility)
+      publishError(message)
+      throw NSError(
+        domain: "MihomoBoxTray",
+        code: 2,
+        userInfo: [NSLocalizedDescriptionKey: message]
+      )
+    }
+  }
+
   private func publish(_ snapshot: TraySnapshot) {
     currentSnapshot = snapshot
     onSnapshot?(snapshot)
@@ -463,6 +607,10 @@ final class TrayStateCoordinator: TrayService {
 
   private func runLatencyTest(automatic: Bool) async throws {
     try Task.checkCancellation()
+    if currentSnapshot.daemonCompatibility.blocksControlActions {
+      if automatic { return }
+      try requireCompatibleControlAction()
+    }
     let names = currentSnapshot.proxies.map(\.name)
     guard !names.isEmpty else { return }
     let succeeded: Int
@@ -508,6 +656,17 @@ final class TrayStateCoordinator: TrayService {
     return alert.runModal() == .alertFirstButtonReturn
   }
 
+  private func confirmDaemonUpgrade() -> Bool {
+    let alert = NSAlert()
+    alert.messageText = "Upgrade the MihomoBox daemon?"
+    alert.informativeText =
+      "The signed installer will briefly restart Mihomo, Enhanced TUN, and managed DNS."
+    alert.alertStyle = .warning
+    alert.addButton(withTitle: "Upgrade Daemon")
+    alert.addButton(withTitle: "Cancel")
+    return alert.runModal() == .alertFirstButtonReturn
+  }
+
   private func selectedLocalProfile() -> URL? {
     guard let active = currentSnapshot.activeProfile else { return nil }
     let url = fileManager.homeDirectoryForCurrentUser
@@ -523,6 +682,25 @@ final class TrayStateCoordinator: TrayService {
       && fileManager.fileExists(
         atPath: "/Library/LaunchDaemons/dev.linsheng.mihomo.daemon.plist"
       )
+  }
+
+  private static func managedInstallationPresent(fileManager: FileManager) -> Bool {
+    let paths = [
+      "/Library/Application Support/Mihomo App",
+      "/Library/LaunchDaemons/dev.linsheng.mihomo.daemon.plist",
+      "/Library/LaunchDaemons/dev.linsheng.mihomo-app.daemon.plist",
+    ]
+    return hasManagedInstallationArtifact(at: paths, fileManager: fileManager)
+  }
+
+  nonisolated static func hasManagedInstallationArtifact(
+    at paths: [String],
+    fileManager: FileManager
+  ) -> Bool {
+    return paths.contains { path in
+      fileManager.fileExists(atPath: path)
+        || (try? fileManager.destinationOfSymbolicLink(atPath: path)) != nil
+    }
   }
 
   private func tunActionAvailable(enhancedTUN: Bool, activeProfile: String?) -> Bool {

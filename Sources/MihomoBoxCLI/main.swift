@@ -701,6 +701,34 @@ private func sendControl(
     )).payload
 }
 
+private enum InstallerProtocolProbeExit: Int32 {
+    case legacy = 10
+    case future = 11
+    case incompatible = 12
+}
+
+/// Reports daemon compatibility only through its exit status for the verified
+/// root installer. It never sends a downgraded request and is intentionally
+/// omitted from the public CLI help.
+private func probeDaemonProtocolForInstaller() throws -> Int32 {
+    do {
+        _ = try sendControl(.componentStatus)
+        return 0
+    } catch let error as ControlError {
+        guard case .protocolVersionMismatch(let expected, let received) = error,
+              expected == mihomoControlProtocolVersion else {
+            throw error
+        }
+        if received == 1 {
+            return InstallerProtocolProbeExit.legacy.rawValue
+        }
+        if received > expected {
+            return InstallerProtocolProbeExit.future.rawValue
+        }
+        return InstallerProtocolProbeExit.incompatible.rawValue
+    }
+}
+
 private func controlObject(_ operation: ControlOperation) throws -> [String: Any] {
     guard let data = try sendControl(operation),
           let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -1080,6 +1108,9 @@ private func main() throws -> Int32 {
             throw CLIError(message: "usage: mihomoboxctl components update")
         }
         return try updateManagedComponents()
+    case "__installer-probe-daemon-protocol":
+        try requireNoExtraArguments(arguments)
+        return try probeDaemonProtocolForInstaller()
     case "uninstall":
         try requireNoExtraArguments(arguments)
         return try runInstaller(["--restore"])

@@ -46,6 +46,14 @@ actor ComponentSynchronizer {
       do {
         let completed = try await self.synchronizeIfNeeded()
         if completed { await self.clearTask() }
+      } catch let error as ControlError where error.isLegacyDaemonProtocol {
+        // Protocol v1 cannot safely self-upgrade into the transactional v2
+        // daemon. The tray exposes an explicit verified Install / Repair path;
+        // never retry the old component.update operation with a downgraded
+        // request envelope.
+        AppLog.info(
+          "event=component_sync result=repair_required reason=legacy_protocol peer_version=1")
+        await self.clearTask()
       } catch {
         AppLog.error("event=component_sync result=failed")
         await self.clearTask()
@@ -81,6 +89,10 @@ actor ComponentSynchronizer {
       do {
         let completed = try await self.synchronizeIfNeeded()
         if completed { await self.clearTask() }
+      } catch let error as ControlError where error.isLegacyDaemonProtocol {
+        AppLog.info(
+          "event=component_sync result=repair_required reason=legacy_protocol peer_version=1")
+        await self.clearTask()
       } catch {
         AppLog.error("event=component_sync result=failed")
         await self.clearTask()

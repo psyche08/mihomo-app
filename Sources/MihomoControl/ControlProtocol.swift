@@ -4,9 +4,10 @@ import Security
 import XPC
 
 public let mihomoControlServiceName = "dev.linsheng.mihomo.daemon.control"
-/// 0.8.0 intentionally breaks compatibility with the pre-native shell. An
-/// existing 0.7 daemon must be replaced through the verified installer rather
-/// than through its older, non-transactional self-update path.
+/// The native 0.8 control plane intentionally does not downgrade requests to
+/// the pre-native protocol. A version-1 daemon is identified from its signed
+/// response and must be replaced through the verified installer rather than
+/// through its older, non-transactional self-update path.
 public let mihomoControlProtocolVersion = 2
 public let mihomoControlMaximumPayloadBytes = 256 * 1_024 * 1_024
 
@@ -128,6 +129,22 @@ public struct ControlResponse: Codable, Sendable {
         self.payload = payload
         self.error = error
     }
+
+    public func validated() throws -> Self {
+        guard version > 0 else {
+            throw ControlError.invalidReply
+        }
+        guard version == mihomoControlProtocolVersion else {
+            throw ControlError.protocolVersionMismatch(
+                expected: mihomoControlProtocolVersion,
+                received: version
+            )
+        }
+        guard success else {
+            throw ControlError.rejected(error ?? "the XPC request was rejected")
+        }
+        return self
+    }
 }
 
 public enum ControlError: Error, LocalizedError {
@@ -137,6 +154,7 @@ public enum ControlError: Error, LocalizedError {
     case invalidComponentSignature
     case connectionFailed
     case invalidReply
+    case protocolVersionMismatch(expected: Int, received: Int)
     case rejected(String)
 
     /// Whether this reports the daemon going away rather than refusing.
@@ -153,6 +171,15 @@ public enum ControlError: Error, LocalizedError {
         }
     }
 
+    /// Identifies the one incompatible daemon generation that 0.8 must replace
+    /// through its verified installer instead of XPC component synchronization.
+    public var isLegacyDaemonProtocol: Bool {
+        guard case .protocolVersionMismatch(let expected, let received) = self else {
+            return false
+        }
+        return expected == mihomoControlProtocolVersion && received == 1
+    }
+
     public var errorDescription: String? {
         switch self {
         case .unsignedProcess:
@@ -167,6 +194,15 @@ public enum ControlError: Error, LocalizedError {
             return "the MihomoBox XPC service is unavailable or rejected the client certificate"
         case .invalidReply:
             return "the MihomoBox XPC service returned an invalid response"
+        case .protocolVersionMismatch(let expected, let received):
+            if expected == mihomoControlProtocolVersion, received == 1 {
+                return "the installed MihomoBox daemon must be upgraded with Install / Repair Daemon"
+            }
+            if received > expected {
+                return "the installed MihomoBox daemon is newer than this App; update MihomoBox"
+            }
+            return "the MihomoBox XPC service uses control protocol version \(received), " +
+                "but version \(expected) is required"
         case let .rejected(message):
             return message
         }
@@ -320,13 +356,7 @@ public final class MihomoControlSession: @unchecked Sendable {
         if let payload = xpc_dictionary_get_data(reply, "payload", &payloadLength), payloadLength > 0 {
             response.payload = Data(bytes: payload, count: payloadLength)
         }
-        guard response.version == mihomoControlProtocolVersion else {
-            throw ControlError.invalidReply
-        }
-        if !response.success {
-            throw ControlError.rejected(response.error ?? "the XPC request was rejected")
-        }
-        return response
+        return try response.validated()
     }
 }
 

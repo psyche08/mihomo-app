@@ -145,6 +145,20 @@ final class StatusItemController: NSObject, NSMenuDelegate, ApplicationStatusIte
     networkStatus.isEnabled = false
     menu.addItem(networkStatus)
 
+    if TrayDaemonMenuPolicy.showsUpgradeAction(snapshot) {
+      let upgrade = item("Upgrade Daemon…", action: #selector(upgradeDaemon))
+      upgrade.isEnabled = TrayMenuActionPolicy.installerEnabled(snapshot)
+      upgrade.image = NSImage(
+        systemSymbolName: "exclamationmark.triangle.fill",
+        accessibilityDescription: "Daemon upgrade required"
+      )
+      upgrade.attributedTitle = NSAttributedString(
+        string: upgrade.title,
+        attributes: [.font: NSFont.boldSystemFont(ofSize: NSFont.systemFontSize)]
+      )
+      menu.addItem(upgrade)
+    }
+
     let tun = item("Enhanced TUN", action: #selector(toggleEnhancedTUN(_:)))
     tun.state = snapshot.enhancedTUN ? .on : .off
     tun.isEnabled = TrayMenuActionPolicy.enhancedTUNEnabled(snapshot)
@@ -163,7 +177,12 @@ final class StatusItemController: NSObject, NSMenuDelegate, ApplicationStatusIte
     let tools = NSMenuItem(title: "Tools", action: nil, keyEquivalent: "")
     let toolsMenu = NSMenu(title: "Tools")
     toolsMenu.autoenablesItems = false
-    let install = item("Install / Repair Daemon…", action: #selector(installOrRepairDaemon))
+    let install = item(
+      TrayDaemonMenuPolicy.installerTitle(snapshot),
+      action: TrayDaemonMenuPolicy.showsUpgradeAction(snapshot)
+        ? #selector(upgradeDaemon)
+        : #selector(installOrRepairDaemon)
+    )
     install.isEnabled = TrayMenuActionPolicy.installerEnabled(snapshot)
     toolsMenu.addItem(install)
     toolsMenu.addItem(item("Open Diagnostic Logs…", action: #selector(openDiagnosticLogs)))
@@ -190,7 +209,7 @@ final class StatusItemController: NSObject, NSMenuDelegate, ApplicationStatusIte
       let row = item(mode.title, action: #selector(selectOutboundMode(_:)))
       row.representedObject = mode.rawValue
       row.state = snapshot.outboundMode == mode ? .on : .off
-      row.isEnabled = snapshot.controllerReachable && !snapshot.mutationOperationInFlight
+      row.isEnabled = TrayMenuActionPolicy.controllerActionEnabled(snapshot)
       submenu.addItem(row)
     }
     parent.submenu = submenu
@@ -203,7 +222,7 @@ final class StatusItemController: NSObject, NSMenuDelegate, ApplicationStatusIte
     submenu.autoenablesItems = false
 
     let testNow = item("Test Now", action: #selector(testProxyDelays))
-    testNow.isEnabled = snapshot.controllerReachable && !snapshot.mutationOperationInFlight
+    testNow.isEnabled = TrayMenuActionPolicy.controllerActionEnabled(snapshot)
     submenu.addItem(testNow)
     submenu.addItem(.separator())
 
@@ -220,7 +239,7 @@ final class StatusItemController: NSObject, NSMenuDelegate, ApplicationStatusIte
         let row = item(node.menuTitle, action: #selector(selectProxy(_:)))
         row.representedObject = ProxyAction(group: node.group, name: node.name)
         row.state = node.isSelected ? .on : .off
-        row.isEnabled = snapshot.controllerReachable && !snapshot.mutationOperationInFlight
+        row.isEnabled = TrayMenuActionPolicy.controllerActionEnabled(snapshot)
         submenu.addItem(row)
         proxyItems[node.id] = row
       }
@@ -287,6 +306,10 @@ final class StatusItemController: NSObject, NSMenuDelegate, ApplicationStatusIte
     // AppKit can optimistically toggle a check item. Restore the daemon-owned
     // value immediately; only authenticated readback may change the mark.
     sender.state = displayedValue ? .on : .off
+    guard TrayMenuActionPolicy.enhancedTUNEnabled(latestSnapshot) else {
+      service.refresh(authoritative: true)
+      return
+    }
     switch TrayEnhancedTUNClickPolicy.decision(
       displayedEnhancedTUN: displayedValue,
       latestEnhancedTUN: latestSnapshot.enhancedTUN
@@ -306,6 +329,7 @@ final class StatusItemController: NSObject, NSMenuDelegate, ApplicationStatusIte
   }
 
   @objc private func selectOutboundMode(_ sender: NSMenuItem) {
+    guard TrayMenuActionPolicy.controllerActionEnabled(latestSnapshot) else { return }
     guard
       let rawValue = sender.representedObject as? String,
       let mode = TrayOutboundMode(rawValue: rawValue)
@@ -314,10 +338,12 @@ final class StatusItemController: NSObject, NSMenuDelegate, ApplicationStatusIte
   }
 
   @objc private func testProxyDelays() {
+    guard TrayMenuActionPolicy.controllerActionEnabled(latestSnapshot) else { return }
     perform { service in try await service.testProxyDelays() }
   }
 
   @objc private func selectProxy(_ sender: NSMenuItem) {
+    guard TrayMenuActionPolicy.controllerActionEnabled(latestSnapshot) else { return }
     guard let action = sender.representedObject as? ProxyAction else { return }
     perform { service in
       try await service.selectProxy(group: action.group, name: action.name)
@@ -325,24 +351,39 @@ final class StatusItemController: NSObject, NSMenuDelegate, ApplicationStatusIte
   }
 
   @objc private func importLocalProfile() {
+    guard TrayMenuActionPolicy.profileActionEnabled(latestSnapshot) else { return }
     perform { service in try await service.importLocalProfile() }
   }
 
   @objc private func importHTTPProfile() {
+    guard TrayMenuActionPolicy.profileActionEnabled(latestSnapshot) else { return }
     perform { service in try await service.importHTTPProfile() }
   }
 
   @objc private func selectProfile(_ sender: NSMenuItem) {
+    guard TrayMenuActionPolicy.profileActionEnabled(latestSnapshot) else { return }
     guard let name = sender.representedObject as? String else { return }
     perform { service in try await service.switchProfile(named: name) }
   }
 
   @objc private func reloadProfile() {
+    guard TrayMenuActionPolicy.profileReloadEnabled(latestSnapshot) else { return }
     perform { service in try await service.reloadProfile() }
   }
 
   @objc private func installOrRepairDaemon() {
-    perform { service in try await service.installOrRepairDaemon() }
+    guard TrayMenuActionPolicy.installerEnabled(latestSnapshot) else { return }
+    perform { service in try await service.installOrRepairDaemon(requireLegacy: false) }
+  }
+
+  @objc private func upgradeDaemon() {
+    guard latestSnapshot.daemonCompatibility.requiresRepair,
+      TrayMenuActionPolicy.installerEnabled(latestSnapshot)
+    else {
+      service.refresh(authoritative: true)
+      return
+    }
+    perform { service in try await service.installOrRepairDaemon(requireLegacy: true) }
   }
 
   @objc private func openDiagnosticLogs() {

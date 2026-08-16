@@ -17,6 +17,7 @@ private let arguments = CommandLine.arguments
 private let commandMode = arguments.contains("--check")
     || arguments.contains("--restore-system-dns")
     || arguments.contains("--check-system-dns")
+    || arguments.contains("--check-system-dns-restored")
     || arguments.contains("--health")
     || arguments.contains("--configure-profile")
     || arguments.contains("--restore-profile")
@@ -35,7 +36,8 @@ ServiceLog.info("event=agent_started pid=\(getpid())")
 if arguments.contains("--help") || arguments.contains("-h") {
     print("""
     usage: mihomo-agent [--config PATH] [--check] [--health]
-                        [--check-system-dns] [--restore-system-dns]
+                        [--check-system-dns] [--check-system-dns-restored]
+                        [--restore-system-dns]
                         [--configure-profile --profile PATH --profile-backup PATH
                          [--secret-file PATH] [--controller-metadata PATH]
                          [--daemon-config PATH]]
@@ -110,6 +112,18 @@ do {
         }
         ServiceLog.info("event=agent_command command=check_system_dns result=success")
         print("system DNS preferences applied")
+        exit(0)
+    }
+    if arguments.contains("--check-system-dns-restored") {
+        guard try ProxyService.isSystemDNSRestored(configuration: configuration) else {
+            ServiceLog.error(
+                "event=agent_command command=check_system_dns_restored result=inconsistent"
+            )
+            print("system DNS restoration is not confirmed")
+            exit(1)
+        }
+        ServiceLog.info("event=agent_command command=check_system_dns_restored result=success")
+        print("system DNS restoration confirmed")
         exit(0)
     }
     if arguments.contains("--health") {

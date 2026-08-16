@@ -9,7 +9,9 @@ ACTIVE_PROFILE="$APP_SUPPORT/active-profile"
 CONTROLLER_SECRET="$APP_SUPPORT/controller-secret"
 CONTROLLER_METADATA="$APP_SUPPORT/controller.json"
 COMPONENT_VERSION="$APP_SUPPORT/component-version"
+COMPONENT_PENDING="$APP_SUPPORT/component-update-pending.plist"
 PROVISIONING_STATE="$APP_SUPPORT/provisioning"
+INSTALL_LOCK="/Library/Application Support/.mihomobox-install.lock"
 CLI_ENTRY="/usr/local/bin/mihomoboxctl"
 CLI_TARGET_METADATA="$APP_SUPPORT/cli-target"
 LOG_DIR="/Library/Logs/Mihomo App"
@@ -17,8 +19,10 @@ PLIST="/Library/LaunchDaemons/dev.linsheng.mihomo.daemon.plist"
 LABEL="dev.linsheng.mihomo.daemon"
 RENAMED_PLIST="/Library/LaunchDaemons/dev.linsheng.mihomo-app.daemon.plist"
 RENAMED_LABEL="dev.linsheng.mihomo-app.daemon"
+LEGACY_PLIST="/Library/LaunchDaemons/homebrew.mxcl.mihomo.plist"
 LEGACY_LABEL="homebrew.mxcl.mihomo"
 LEGACY_MARKER="$APP_SUPPORT/homebrew-mihomo-was-running"
+LEGACY_PLIST_BACKUP="$APP_SUPPORT/homebrew-mihomo-launchd.plist"
 APP_BUNDLE=""
 VERIFIED_APP_SNAPSHOT=0
 VERIFIED_APP_VERSION=""
@@ -36,9 +40,12 @@ PROFILE_DAEMON_WAS_RUNNING=0
 PREVIOUS_DAEMON_RUNNING=0
 PREVIOUS_RENAMED_DAEMON_RUNNING=0
 PREVIOUS_LEGACY_RUNNING=0
+PREVIOUS_MANAGED_RUNTIME_RUNNING=0
 PREVIOUS_CLI_LINK=""
 PREVIOUS_CLI_LINK_PRESENT=0
 CLI_LINK_CHANGED=0
+UNVERSIONED_INSTALLATION_AUTHORIZED=0
+INSTALL_LOCK_HELD=0
 
 usage() {
   echo "usage: $0 [--app-bundle PATH --dry-run] [--restore | --restore-network | --start | --restart | --import-profile PATH [--activate] | --switch-profile NAME]"
@@ -176,12 +183,218 @@ write_component_version() {
   /usr/sbin/chown root:wheel "$staged"
   /bin/chmod 0600 "$staged"
   /bin/mv -f "$staged" "$COMPONENT_VERSION"
+  local installed_version
+  installed_version="$(read_exact_semantic_version_file "$COMPONENT_VERSION" 2>/dev/null || true)"
   [[ -f "$COMPONENT_VERSION" && ! -L "$COMPONENT_VERSION" &&
     "$(/usr/bin/stat -f '%u:%g:%Lp' "$COMPONENT_VERSION")" == "0:0:600" &&
-    "$(/usr/bin/sed -n '1p' "$COMPONENT_VERSION")" == "$VERIFIED_APP_VERSION" ]] || {
+    "$installed_version" == "$VERIFIED_APP_VERSION" ]] || {
     echo "component-version atomic readback failed" >&2
     return 1
   }
+}
+
+read_exact_semantic_version_file() {
+  local path="$1"
+  local size value
+  local LC_ALL=C
+  size="$(/usr/bin/stat -f '%z' "$path" 2>/dev/null || true)"
+  [[ "$size" =~ ^[0-9]+$ && "$size" -gt 0 && "$size" -le 64 ]] || return 1
+  IFS= read -r value < "$path" || return 1
+  [[ "$value" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || return 1
+  # The byte count must be exactly the ASCII value plus one LF. This rejects
+  # NUL bytes, extra unterminated data, CRLF, and trailing lines even when a
+  # shell text reader would otherwise hide them.
+  [[ "$size" -eq $(( ${#value} + 1 )) ]] || return 1
+  /usr/bin/printf '%s\n' "$value"
+}
+
+decimal_precedes() {
+  local left="$1"
+  local right="$2"
+  local LC_ALL=C
+  if (( ${#left} != ${#right} )); then
+    (( ${#left} < ${#right} ))
+    return
+  fi
+  [[ "$left" < "$right" ]]
+}
+
+semantic_version_precedes() {
+  local proposed="$1"
+  local installed="$2"
+  local proposed_major proposed_minor proposed_patch
+  local installed_major installed_minor installed_patch
+  IFS=. read -r proposed_major proposed_minor proposed_patch <<< "$proposed"
+  IFS=. read -r installed_major installed_minor installed_patch <<< "$installed"
+  if [[ "$proposed_major" != "$installed_major" ]]; then
+    decimal_precedes "$proposed_major" "$installed_major"
+    return
+  fi
+  if [[ "$proposed_minor" != "$installed_minor" ]]; then
+    decimal_precedes "$proposed_minor" "$installed_minor"
+    return
+  fi
+  decimal_precedes "$proposed_patch" "$installed_patch"
+}
+
+probe_installed_daemon_protocol() {
+  local probe="$APP_BUNDLE/Contents/MacOS/mihomoboxctl"
+  [[ -f "$probe" && ! -L "$probe" && -x "$probe" ]] || return 12
+  local status=0 probe_pid deadline state
+  "$probe" __installer-probe-daemon-protocol >/dev/null 2>&1 &
+  probe_pid=$!
+  deadline=$((SECONDS + 5))
+  while (( SECONDS < deadline )); do
+    state="$(
+      { /bin/ps -p "$probe_pid" -o state= 2>/dev/null || true; } |
+        /usr/bin/tr -d '[:space:]'
+    )"
+    if [[ -z "$state" || "$state" == Z* ]]; then
+      wait "$probe_pid" || status=$?
+      return "$status"
+    fi
+    /bin/sleep 0.1
+  done
+  /bin/kill -TERM "$probe_pid" >/dev/null 2>&1 || true
+  /bin/sleep 0.25
+  /bin/kill -KILL "$probe_pid" >/dev/null 2>&1 || true
+  wait "$probe_pid" >/dev/null 2>&1 || true
+  # Any non-version result is unavailable. A valid root-owned version floor
+  # can still authorize explicit repair; an unversioned installation cannot.
+  status=13
+  return "$status"
+}
+
+validate_existing_component_version_floor() {
+  [[ -f "$COMPONENT_VERSION" && ! -L "$COMPONENT_VERSION" &&
+    "$(/usr/bin/stat -f '%u:%g:%Lp' "$COMPONENT_VERSION")" == "0:0:600" ]] || {
+    echo "installed component version state is unsafe" >&2
+    return 1
+  }
+  local installed_version
+  installed_version="$(read_exact_semantic_version_file "$COMPONENT_VERSION" 2>/dev/null || true)"
+  [[ -n "$installed_version" ]] || {
+    echo "installed component version state is invalid" >&2
+    return 1
+  }
+  if semantic_version_precedes "$VERIFIED_APP_VERSION" "$installed_version"; then
+    echo "refusing to downgrade installed components" >&2
+    return 1
+  fi
+}
+
+enforce_component_version_floor() {
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "+ verify the root-owned component version floor"
+    return
+  fi
+  [[ -n "$VERIFIED_APP_VERSION" ]] || {
+    echo "verified App component version is unavailable" >&2
+    return 1
+  }
+  # Only the final live check immediately before stop may authorize an
+  # unversioned legacy installation.
+  UNVERSIONED_INSTALLATION_AUTHORIZED=0
+
+  local marker_present=0
+  if [[ -e "$COMPONENT_VERSION" || -L "$COMPONENT_VERSION" ]]; then
+    marker_present=1
+    validate_existing_component_version_floor || return 1
+  fi
+
+  local probe_status=0
+  probe_installed_daemon_protocol || probe_status=$?
+  if [[ "$probe_status" -eq 11 ]]; then
+    echo "installed daemon protocol is newer than this App" >&2
+    return 1
+  fi
+  if [[ "$probe_status" -eq 12 ]]; then
+    echo "installed daemon protocol is incompatible with this App" >&2
+    return 1
+  fi
+  if [[ "$marker_present" -eq 1 ]]; then
+    return 0
+  fi
+
+  local artifact
+  local existing_installation=0
+  for artifact in \
+    "$APP_SUPPORT" \
+    "$PLIST" \
+    "$RENAMED_PLIST"; do
+    if [[ -e "$artifact" || -L "$artifact" ]]; then
+      existing_installation=1
+      break
+    fi
+  done
+  if [[ "$existing_installation" -eq 0 ]]; then
+    UNVERSIONED_INSTALLATION_AUTHORIZED=1
+    return
+  fi
+
+  # Version 0.7 installations predate the root-owned floor. With any managed
+  # artifact already present, a missing marker is accepted only when the exact
+  # verified snapshot CLI authenticates a live protocol-v1 daemon. Current,
+  # future, unreachable, and malformed peers all fail closed here.
+  [[ "$probe_status" -eq 10 ]] || {
+    echo "unversioned installed daemon is not an authenticated legacy peer" >&2
+    return 1
+  }
+  UNVERSIONED_INSTALLATION_AUTHORIZED=1
+}
+
+enforce_component_version_floor_after_stop() {
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "+ recheck the root-owned component version floor before commit"
+    return
+  fi
+  if [[ -e "$COMPONENT_VERSION" || -L "$COMPONENT_VERSION" ]]; then
+    validate_existing_component_version_floor || return 1
+    return
+  fi
+  [[ "$UNVERSIONED_INSTALLATION_AUTHORIZED" -eq 1 ]] || {
+    echo "unversioned installation was not authenticated before replacement" >&2
+    return 1
+  }
+}
+
+release_install_lock() {
+  [[ "$INSTALL_LOCK_HELD" -eq 1 ]] || return 0
+  exec 9>&-
+  INSTALL_LOCK_HELD=0
+}
+
+acquire_install_lock() {
+  [[ "$DRY_RUN" -eq 0 ]] || return 0
+  local lock_identity fd_identity
+  if [[ ! -e "$INSTALL_LOCK" && ! -L "$INSTALL_LOCK" ]]; then
+    local staged_lock
+    staged_lock="$(/usr/bin/mktemp "/Library/Application Support/.mihomobox-install-lock.XXXXXX")"
+    /usr/sbin/chown root:wheel "$staged_lock"
+    /bin/chmod 0600 "$staged_lock"
+    /bin/ln "$staged_lock" "$INSTALL_LOCK" 2>/dev/null || true
+    /bin/rm -f "$staged_lock"
+  fi
+  [[ -f "$INSTALL_LOCK" && ! -L "$INSTALL_LOCK" &&
+    "$(/usr/bin/stat -f '%u:%g:%Lp' "$INSTALL_LOCK")" == "0:0:600" ]] || {
+    echo "privileged mutation lock is unsafe" >&2
+    return 1
+  }
+  exec 9<>"$INSTALL_LOCK"
+  lock_identity="$(/usr/bin/stat -f '%d:%i' "$INSTALL_LOCK")"
+  fd_identity="$(/usr/bin/stat -f '%d:%i' /dev/fd/9)"
+  [[ "$lock_identity" == "$fd_identity" ]] || {
+    exec 9>&-
+    echo "privileged mutation lock changed while opening" >&2
+    return 1
+  }
+  /usr/bin/lockf -s -t 0 9 || {
+    exec 9>&-
+    echo "another privileged MihomoBox mutation is running" >&2
+    return 1
+  }
+  INSTALL_LOCK_HELD=1
+  trap release_install_lock EXIT
 }
 
 require_verified_bootstrap
@@ -239,6 +452,94 @@ wait_for_job_absent() {
   return 1
 }
 
+wait_for_job_present() {
+  local label="$1"
+  wait_for "running launchd job $label" launchd_job_running "$label"
+}
+
+launchd_job_running() {
+  local label="$1"
+  local job
+  job="$(/bin/launchctl print "system/$label" 2>/dev/null)" || return 1
+  /usr/bin/grep -Eq '^[[:space:]]*state = running[[:space:]]*$' <<< "$job"
+}
+
+validate_trusted_launchd_plist() {
+  local path="$1"
+  local expected_label="$2"
+  local mode label
+  [[ -f "$path" && ! -L "$path" &&
+    "$(/usr/bin/stat -f '%u:%g' "$path")" == "0:0" ]] || {
+    echo "untrusted launchd plist for $expected_label: $path" >&2
+    return 1
+  }
+  mode="$(/usr/bin/stat -f '%Lp' "$path")"
+  [[ "$mode" =~ ^[0-7]{3,4}$ ]] || return 1
+  (( (8#$mode & 022) == 0 )) || {
+    echo "writable launchd plist for $expected_label: $path" >&2
+    return 1
+  }
+  label="$(/usr/bin/plutil -extract Label raw -o - "$path" 2>/dev/null)" || {
+    echo "invalid launchd plist for $expected_label: $path" >&2
+    return 1
+  }
+  [[ "$label" == "$expected_label" ]] || {
+    echo "launchd plist label mismatch for $expected_label: $path" >&2
+    return 1
+  }
+}
+
+ensure_rollback_directory() {
+  [[ "$DRY_RUN" -eq 0 ]] || return 0
+  if [[ -z "$ROLLBACK_DIR" ]]; then
+    ROLLBACK_DIR="$(/usr/bin/mktemp -d /private/tmp/mihomo-app-install.XXXXXX)"
+  fi
+  [[ "$ROLLBACK_DIR" == /private/tmp/mihomo-app-install.* &&
+    -d "$ROLLBACK_DIR" && ! -L "$ROLLBACK_DIR" &&
+    "$(/usr/bin/stat -f '%u:%Lp' "$ROLLBACK_DIR")" == "0:700" ]] || {
+    echo "unsafe rollback snapshot directory" >&2
+    return 1
+  }
+}
+
+save_trusted_launchd_plist() {
+  local source="$1"
+  local destination="$2"
+  local expected_label="$3"
+  local source_identity
+  validate_trusted_launchd_plist "$source" "$expected_label" || return 1
+  source_identity="$(/usr/bin/stat -f '%d:%i:%z' "$source")"
+  /bin/cp -p "$source" "$destination" || return 1
+  [[ "$source_identity" == "$(/usr/bin/stat -f '%d:%i:%z' "$source")" ]] || {
+    echo "launchd plist changed while snapshotting $expected_label" >&2
+    return 1
+  }
+  /usr/bin/cmp -s "$source" "$destination" || {
+    echo "launchd plist snapshot readback failed for $expected_label" >&2
+    return 1
+  }
+  validate_trusted_launchd_plist "$destination" "$expected_label"
+}
+
+snapshot_previous_launchd_definitions() {
+  [[ "$DRY_RUN" -eq 0 ]] || return 0
+  ensure_rollback_directory || return 1
+  # Snapshot every definition the installer will overwrite or remove, even if
+  # its job is currently unloaded. The running flags decide only which jobs
+  # rollback must bootstrap again.
+  if [[ -e "$PLIST" || -L "$PLIST" ]]; then
+    save_trusted_launchd_plist "$PLIST" "$ROLLBACK_DIR/daemon.plist" "$LABEL" || return 1
+  fi
+  if [[ -e "$RENAMED_PLIST" || -L "$RENAMED_PLIST" ]]; then
+    save_trusted_launchd_plist \
+      "$RENAMED_PLIST" "$ROLLBACK_DIR/renamed-daemon.plist" "$RENAMED_LABEL" || return 1
+  fi
+  if [[ "$PREVIOUS_LEGACY_RUNNING" -eq 1 ]]; then
+    save_trusted_launchd_plist \
+      "$LEGACY_PLIST" "$ROLLBACK_DIR/homebrew-mihomo.plist" "$LEGACY_LABEL" || return 1
+  fi
+}
+
 managed_daemon_pids() {
   /usr/bin/pgrep -f -x "$APP_SUPPORT/mihomo-daemon --config $APP_SUPPORT/daemon.json" 2>/dev/null || true
 }
@@ -285,6 +586,35 @@ managed_controller_ready() {
   local health
   health="$("$APP_SUPPORT/mihomo-agent" --config "$APP_SUPPORT/daemon.json" --health)" || return 1
   [[ "$health" == *'"controller_reachable":true'* ]]
+}
+
+managed_agent_pids() {
+  /usr/bin/pgrep -f -x \
+    "$APP_SUPPORT/mihomo-agent --config $APP_SUPPORT/daemon\.json( --parent-pid [0-9]+)?" \
+    2>/dev/null || true
+}
+
+managed_mihomo_pids() {
+  /usr/bin/pgrep -f -x \
+    "$APP_SUPPORT/mihomo -d $MIHOMO_DATA -f $MIHOMO_DATA/config\.yaml" \
+    2>/dev/null || true
+}
+
+managed_network_restored() {
+  [[ -z "$(managed_agent_pids)" ]] || return 1
+  [[ -z "$(managed_mihomo_pids)" ]] || return 1
+  "$APP_SUPPORT/mihomo-agent" --config "$APP_SUPPORT/daemon.json" \
+    --check-system-dns-restored >/dev/null 2>&1 || return 1
+  local health
+  health="$("$APP_SUPPORT/mihomo-agent" --config "$APP_SUPPORT/daemon.json" --health)" || return 1
+  [[ "$health" == *'"controller_reachable":false'* &&
+    "$health" == *'"tun_enabled":false'* &&
+    "$health" != *'"tun_interface":'* &&
+    "$health" == *'"fake_ip_route_ready":false'* &&
+    "$health" == *'"dns_bridge_ready":false'* &&
+    "$health" == *'"mihomo_dns_ready":false'* &&
+    "$health" == *'"system_dns_managed":false'* &&
+    "$health" == *'"network_consistent":true'* ]]
 }
 
 install_cli_entry() {
@@ -546,25 +876,20 @@ import_profile() {
   fi
 }
 
-snapshot_installation() {
+record_installation_state() {
   [[ "$DRY_RUN" -eq 0 ]] || return 0
-  ROLLBACK_DIR="$(/usr/bin/mktemp -d /private/tmp/mihomo-app-install.XXXXXX)"
-  if [[ -d "$APP_SUPPORT" ]]; then
-    /usr/bin/ditto "$APP_SUPPORT" "$ROLLBACK_DIR/app-support"
-  fi
-  if [[ -f "$PLIST" ]]; then
-    /bin/cp -p "$PLIST" "$ROLLBACK_DIR/daemon.plist"
-  fi
-  if [[ -f "$RENAMED_PLIST" ]]; then
-    /bin/cp -p "$RENAMED_PLIST" "$ROLLBACK_DIR/renamed-daemon.plist"
-  fi
   if /bin/launchctl print "system/$LABEL" >/dev/null 2>&1; then
     PREVIOUS_DAEMON_RUNNING=1
-  elif /bin/launchctl print "system/$RENAMED_LABEL" >/dev/null 2>&1; then
+  fi
+  if /bin/launchctl print "system/$RENAMED_LABEL" >/dev/null 2>&1; then
     PREVIOUS_RENAMED_DAEMON_RUNNING=1
   fi
   if /bin/launchctl print "system/$LEGACY_LABEL" >/dev/null 2>&1; then
     PREVIOUS_LEGACY_RUNNING=1
+  fi
+  if [[ $((PREVIOUS_DAEMON_RUNNING + PREVIOUS_RENAMED_DAEMON_RUNNING)) -gt 0 &&
+    ! -e "$PROVISIONING_STATE" && ! -L "$PROVISIONING_STATE" ]]; then
+    PREVIOUS_MANAGED_RUNTIME_RUNNING=1
   fi
   if [[ -L "$CLI_ENTRY" ]]; then
     PREVIOUS_CLI_LINK="$(/usr/bin/readlink "$CLI_ENTRY")"
@@ -572,53 +897,171 @@ snapshot_installation() {
   fi
 }
 
+snapshot_installation() {
+  [[ "$DRY_RUN" -eq 0 ]] || return 0
+  ensure_rollback_directory || return 1
+  if [[ -d "$APP_SUPPORT" ]]; then
+    /usr/bin/ditto "$APP_SUPPORT" "$ROLLBACK_DIR/app-support" || return 1
+  fi
+}
+
+restart_launchd_job() {
+  local label="$1"
+  local saved_plist="$2"
+  if ! /bin/launchctl print "system/$label" >/dev/null 2>&1; then
+    validate_trusted_launchd_plist "$saved_plist" "$label" || return 1
+    /bin/launchctl bootstrap system "$saved_plist" >/dev/null 2>&1 || {
+      echo "failed to bootstrap previous launchd job $label" >&2
+      return 1
+    }
+  fi
+  /bin/launchctl enable "system/$label" >/dev/null 2>&1 || {
+    echo "failed to enable previous launchd job $label" >&2
+    return 1
+  }
+  /bin/launchctl kickstart -k "system/$label" >/dev/null 2>&1 || {
+    echo "failed to restart previous launchd job $label" >&2
+    return 1
+  }
+  wait_for_job_present "$label"
+}
+
+restart_previous_installation() {
+  if [[ "$PREVIOUS_DAEMON_RUNNING" -eq 1 ]]; then
+    restart_launchd_job "$LABEL" "$ROLLBACK_DIR/daemon.plist" || return 1
+  fi
+  if [[ "$PREVIOUS_RENAMED_DAEMON_RUNNING" -eq 1 ]]; then
+    restart_launchd_job \
+      "$RENAMED_LABEL" "$ROLLBACK_DIR/renamed-daemon.plist" || return 1
+  fi
+  if [[ "$PREVIOUS_LEGACY_RUNNING" -eq 1 ]]; then
+    restart_launchd_job \
+      "$LEGACY_LABEL" "$ROLLBACK_DIR/homebrew-mihomo.plist" || return 1
+  fi
+  if [[ "$PREVIOUS_MANAGED_RUNTIME_RUNNING" -eq 1 ]]; then
+    wait_for "restored managed MihomoBox network" managed_network_ready || return 1
+  fi
+}
+
+restore_saved_legacy_installation() {
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "+ bootstrap and verify $LEGACY_LABEL from its saved trusted plist"
+    return
+  fi
+  local saved_plist=""
+  if validate_trusted_launchd_plist \
+    "$LEGACY_PLIST_BACKUP" "$LEGACY_LABEL" >/dev/null 2>&1; then
+    saved_plist="$LEGACY_PLIST_BACKUP"
+  elif validate_trusted_launchd_plist \
+    "$LEGACY_PLIST" "$LEGACY_LABEL" >/dev/null 2>&1; then
+    # Installations predating the persistent backup can still recover from the
+    # root-owned Homebrew LaunchDaemon definition that was originally loaded.
+    saved_plist="$LEGACY_PLIST"
+  else
+    report_recovery_required "no trusted Homebrew launchd plist is available"
+    return 1
+  fi
+  restart_launchd_job "$LEGACY_LABEL" "$saved_plist" || {
+    report_recovery_required "the previous Homebrew launchd job could not be verified"
+    return 1
+  }
+}
+
+remove_rollback_snapshot() {
+  [[ -n "$ROLLBACK_DIR" ]] || return 0
+  ensure_rollback_directory || return 1
+  /bin/rm -rf "$ROLLBACK_DIR" || return 1
+  ROLLBACK_DIR=""
+}
+
+report_recovery_required() {
+  local reason="$1"
+  echo "recovery_required: $reason" >&2
+  if [[ -n "$ROLLBACK_DIR" && -d "$ROLLBACK_DIR" ]]; then
+    echo "recovery_required: rollback snapshot preserved at $ROLLBACK_DIR" >&2
+  else
+    echo "recovery_required: rollback snapshot is unavailable" >&2
+  fi
+}
+
+resume_previous_installation_after_preflight_failure() {
+  local status=$?
+  trap - ERR
+  if ! restart_previous_installation; then
+    report_recovery_required "preflight failed and the previous services could not be verified"
+    exit "$status"
+  fi
+  if ! remove_rollback_snapshot; then
+    report_recovery_required "preflight recovery succeeded but its snapshot could not be cleaned up"
+  fi
+  exit "$status"
+}
+
+stop_replacement_installation() {
+  if /bin/launchctl print "system/$LABEL" >/dev/null 2>&1; then
+    /bin/launchctl bootout "system/$LABEL" >/dev/null 2>&1 || return 1
+  fi
+  if /bin/launchctl print "system/$RENAMED_LABEL" >/dev/null 2>&1; then
+    /bin/launchctl bootout "system/$RENAMED_LABEL" >/dev/null 2>&1 || return 1
+  fi
+  wait_for_job_absent "$LABEL" || return 1
+  wait_for_job_absent "$RENAMED_LABEL" || return 1
+  wait_for_managed_process_absent || return 1
+  if [[ -x "$APP_SUPPORT/mihomo-agent" && -f "$APP_SUPPORT/daemon.json" ]]; then
+    "$APP_SUPPORT/mihomo-agent" --config "$APP_SUPPORT/daemon.json" --restore-system-dns \
+      >/dev/null 2>&1 || return 1
+  fi
+}
+
+restore_previous_cli_link() {
+  [[ "$CLI_LINK_CHANGED" -eq 1 ]] || return 0
+  local installed_target="$APP_SUPPORT/mihomoboxctl"
+  if [[ -e "$CLI_ENTRY" || -L "$CLI_ENTRY" ]]; then
+    [[ -L "$CLI_ENTRY" &&
+      "$(/usr/bin/readlink "$CLI_ENTRY")" == "$installed_target" ]] || {
+      echo "managed CLI link changed during installation rollback" >&2
+      return 1
+    }
+    /bin/rm -f "$CLI_ENTRY" || return 1
+  fi
+  if [[ "$PREVIOUS_CLI_LINK_PRESENT" -eq 1 ]]; then
+    /bin/mkdir -p "${CLI_ENTRY%/*}" || return 1
+    /bin/ln -s "$PREVIOUS_CLI_LINK" "$CLI_ENTRY" || return 1
+    [[ -L "$CLI_ENTRY" &&
+      "$(/usr/bin/readlink "$CLI_ENTRY")" == "$PREVIOUS_CLI_LINK" ]] || return 1
+  fi
+}
+
+restore_previous_installation_snapshot() {
+  stop_replacement_installation || return 1
+  /bin/rm -rf "$APP_SUPPORT" || return 1
+  /bin/rm -f "$PLIST" "$RENAMED_PLIST" || return 1
+  if [[ -d "$ROLLBACK_DIR/app-support" ]]; then
+    /usr/bin/ditto "$ROLLBACK_DIR/app-support" "$APP_SUPPORT" || return 1
+  fi
+  if [[ -f "$ROLLBACK_DIR/daemon.plist" ]]; then
+    /bin/cp -p "$ROLLBACK_DIR/daemon.plist" "$PLIST" || return 1
+  fi
+  if [[ -f "$ROLLBACK_DIR/renamed-daemon.plist" ]]; then
+    /bin/cp -p "$ROLLBACK_DIR/renamed-daemon.plist" "$RENAMED_PLIST" || return 1
+  fi
+  restore_previous_cli_link || return 1
+  restart_previous_installation
+}
+
 rollback_installation() {
   local status=$?
   trap - ERR
-  echo "installation failed; restoring the previous DNS runtime" >&2
-  /bin/launchctl bootout "system/$LABEL" >/dev/null 2>&1 || true
-  /bin/launchctl bootout "system/$RENAMED_LABEL" >/dev/null 2>&1 || true
-  wait_for_job_absent "$LABEL" || true
-  wait_for_job_absent "$RENAMED_LABEL" || true
-  wait_for_managed_process_absent || true
-  if [[ -x "$APP_SUPPORT/mihomo-agent" && -f "$APP_SUPPORT/daemon.json" ]]; then
-    "$APP_SUPPORT/mihomo-agent" --config "$APP_SUPPORT/daemon.json" --restore-system-dns \
-      >/dev/null 2>&1 || true
+  echo "installation failed; restoring and verifying the previous DNS runtime" >&2
+  if ! restore_previous_installation_snapshot; then
+    report_recovery_required "automatic installation rollback could not be verified"
+    exit "$status"
   fi
-  /bin/rm -rf "$APP_SUPPORT"
-  /bin/rm -f "$PLIST" "$RENAMED_PLIST"
-  if [[ "$CLI_LINK_CHANGED" -eq 1 ]]; then
-    local installed_target="$APP_SUPPORT/mihomoboxctl"
-    if [[ -L "$CLI_ENTRY" &&
-      "$(/usr/bin/readlink "$CLI_ENTRY")" == "$installed_target" ]]; then
-      /bin/rm -f "$CLI_ENTRY"
-      if [[ "$PREVIOUS_CLI_LINK_PRESENT" -eq 1 ]]; then
-        /bin/mkdir -p "${CLI_ENTRY%/*}"
-        /bin/ln -s "$PREVIOUS_CLI_LINK" "$CLI_ENTRY"
-      fi
-    fi
+  if ! remove_rollback_snapshot; then
+    report_recovery_required "the previous installation was restored but its snapshot could not be cleaned up"
+    exit "$status"
   fi
-  if [[ -d "$ROLLBACK_DIR/app-support" ]]; then
-    /usr/bin/ditto "$ROLLBACK_DIR/app-support" "$APP_SUPPORT"
-  fi
-  if [[ -f "$ROLLBACK_DIR/daemon.plist" ]]; then
-    /bin/cp -p "$ROLLBACK_DIR/daemon.plist" "$PLIST"
-  fi
-  if [[ -f "$ROLLBACK_DIR/renamed-daemon.plist" ]]; then
-    /bin/cp -p "$ROLLBACK_DIR/renamed-daemon.plist" "$RENAMED_PLIST"
-  fi
-  if [[ "$PREVIOUS_DAEMON_RUNNING" -eq 1 && -f "$PLIST" ]]; then
-    /bin/launchctl bootstrap system "$PLIST" >/dev/null 2>&1 || true
-    /bin/launchctl enable "system/$LABEL" >/dev/null 2>&1 || true
-    /bin/launchctl kickstart -k "system/$LABEL" >/dev/null 2>&1 || true
-  elif [[ "$PREVIOUS_RENAMED_DAEMON_RUNNING" -eq 1 && -f "$RENAMED_PLIST" ]]; then
-    /bin/launchctl bootstrap system "$RENAMED_PLIST" >/dev/null 2>&1 || true
-    /bin/launchctl enable "system/$RENAMED_LABEL" >/dev/null 2>&1 || true
-    /bin/launchctl kickstart -k "system/$RENAMED_LABEL" >/dev/null 2>&1 || true
-  elif [[ "$PREVIOUS_LEGACY_RUNNING" -eq 1 ]]; then
-    /bin/launchctl kickstart -k "system/$LEGACY_LABEL" >/dev/null 2>&1 || true
-  fi
-  [[ -z "$ROLLBACK_DIR" ]] || /bin/rm -rf "$ROLLBACK_DIR"
+  echo "installation failed; previous installation restored and verified" >&2
   exit "$status"
 }
 
@@ -636,8 +1079,8 @@ restore() {
   if [[ -x "$APP_SUPPORT/mihomo-agent" && -f "$APP_SUPPORT/daemon.json" ]]; then
     run "$APP_SUPPORT/mihomo-agent" --config "$APP_SUPPORT/daemon.json" --restore-system-dns
   fi
-  if [[ -f "$LEGACY_MARKER" ]]; then
-    run /bin/launchctl kickstart -k "system/$LEGACY_LABEL"
+  if [[ -f "$LEGACY_MARKER" && ! -L "$LEGACY_MARKER" ]]; then
+    restore_saved_legacy_installation
   fi
   run /bin/rm -f "$PLIST" "$RENAMED_PLIST"
   remove_cli_entry
@@ -727,9 +1170,49 @@ install_daemon() {
     fi
   fi
 
-  snapshot_installation
+  enforce_component_version_floor
+
   if [[ "$DRY_RUN" -eq 0 ]]; then
+    record_installation_state
+
+    # The second live check is immediately followed by stopping the daemon.
+    # Component replacement writes its pending marker before touching a binary;
+    # after stop we reject that marker and let the prior daemon recover it.
+    enforce_component_version_floor
+    ensure_rollback_directory
+    trap resume_previous_installation_after_preflight_failure ERR
+    snapshot_previous_launchd_definitions
+    if [[ "$PREVIOUS_LEGACY_RUNNING" -eq 1 ]]; then
+      /bin/launchctl bootout "system/$LEGACY_LABEL"
+      wait_for_job_absent "$LEGACY_LABEL"
+    fi
+    if [[ "$PREVIOUS_RENAMED_DAEMON_RUNNING" -eq 1 ]]; then
+      /bin/launchctl bootout "system/$RENAMED_LABEL"
+      wait_for_job_absent "$RENAMED_LABEL"
+    fi
+    if [[ "$PREVIOUS_DAEMON_RUNNING" -eq 1 ]]; then
+      /bin/launchctl bootout "system/$LABEL"
+      wait_for_job_absent "$LABEL"
+    fi
+    wait_for_managed_process_absent
+    if [[ -x "$APP_SUPPORT/mihomo-agent" && -f "$APP_SUPPORT/daemon.json" ]]; then
+      "$APP_SUPPORT/mihomo-agent" --config "$APP_SUPPORT/daemon.json" \
+        --restore-system-dns
+    fi
+    enforce_component_version_floor_after_stop
+    if [[ -e "$COMPONENT_PENDING" || -L "$COMPONENT_PENDING" ]]; then
+      echo "component update recovery must finish before installer repair" >&2
+      false
+    fi
+
+    # Only stopped, transaction-free bytes may become the rollback source.
+    # This prevents a concurrent newer update from being replaced by a stale
+    # snapshot if a later installation step fails.
+    snapshot_installation
     trap rollback_installation ERR
+  else
+    echo "+ stop the previous daemon and reject pending component updates"
+    snapshot_installation
   fi
 
   ensure_root_directory "$APP_SUPPORT" 0755
@@ -745,7 +1228,7 @@ install_daemon() {
         "$(/usr/bin/stat -f '%u:%g:%Lp' "$APP_SUPPORT/mihomoboxctl")" == "0:0:755" ]] ||
         ! /usr/bin/cmp -s "$CLI_SOURCE" "$APP_SUPPORT/mihomoboxctl"; then
         echo "installed CLI readback failed" >&2
-        exit 1
+        false
       fi
     fi
   fi
@@ -792,20 +1275,14 @@ install_daemon() {
     run /bin/chmod 0600 "$PROVISIONING_STATE"
   fi
 
-  if /bin/launchctl print "system/$LEGACY_LABEL" >/dev/null 2>&1; then
+  if [[ "$PREVIOUS_LEGACY_RUNNING" -eq 1 ]]; then
+    run /usr/bin/install -o root -g wheel -m 0600 \
+      "$ROLLBACK_DIR/homebrew-mihomo.plist" "$LEGACY_PLIST_BACKUP"
+    if [[ "$DRY_RUN" -eq 0 ]]; then
+      validate_trusted_launchd_plist "$LEGACY_PLIST_BACKUP" "$LEGACY_LABEL"
+    fi
     run /usr/bin/touch "$LEGACY_MARKER"
-    run /bin/launchctl bootout "system/$LEGACY_LABEL"
   fi
-
-  if /bin/launchctl print "system/$RENAMED_LABEL" >/dev/null 2>&1; then
-    run /bin/launchctl bootout "system/$RENAMED_LABEL"
-    wait_for_job_absent "$RENAMED_LABEL"
-  fi
-  if /bin/launchctl print "system/$LABEL" >/dev/null 2>&1; then
-    run /bin/launchctl bootout "system/$LABEL"
-    wait_for_job_absent "$LABEL"
-  fi
-  wait_for_managed_process_absent
   run /bin/rm -f \
     "$LOG_DIR/mihomo.log" \
     "$LOG_DIR/mihomo.log.1" \
@@ -818,6 +1295,7 @@ install_daemon() {
   # component-update request cannot observe an unversioned installation. The
   # surrounding installation rollback restores the prior marker on any later
   # health failure.
+  enforce_component_version_floor_after_stop
   write_component_version
   run /bin/launchctl bootstrap system "$PLIST"
   run /bin/launchctl enable "system/$LABEL"
@@ -827,6 +1305,7 @@ install_daemon() {
     # The root daemon is available for authenticated profile activation, but
     # it deliberately has not launched the agent or modified system networking.
     wait_for "authenticated daemon XPC" "$APP_SUPPORT/mihomoboxctl" profiles --json
+    wait_for "verified stopped network after provisioning" managed_network_restored
   else
     wait_for "authenticated Mihomo controller" managed_controller_ready
     wait_for "system DNS 127.0.0.53:53" /usr/bin/dig @127.0.0.53 -p 53 test.invalid A +time=1 +tries=1
@@ -838,11 +1317,13 @@ install_daemon() {
   fi
   install_cli_entry
   trap - ERR
-  if [[ -n "$ROLLBACK_DIR" ]]; then
-    /bin/rm -rf "$ROLLBACK_DIR"
+  if ! remove_rollback_snapshot; then
+    echo "warning: installation succeeded but rollback snapshot remains at $ROLLBACK_DIR" >&2
   fi
   echo "installed $LABEL provisioning=$provisioning_install"
 }
+
+acquire_install_lock
 
 if [[ -n "$IMPORT_PROFILE" ]]; then
   import_profile "$IMPORT_PROFILE"

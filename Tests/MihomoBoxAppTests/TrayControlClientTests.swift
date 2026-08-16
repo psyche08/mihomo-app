@@ -61,6 +61,25 @@ final class TrayControlClientTests: XCTestCase {
     XCTAssertEqual(retained[0].group, "Auto")
     XCTAssertTrue(retained[0].isSelected)
   }
+
+  func testPollDoesNotRetryAuthenticatedProtocolMismatch() async throws {
+    let session = ProtocolMismatchSession()
+    let client = TrayControlClient(makeSession: { session })
+
+    do {
+      _ = try await client.poll()
+      XCTFail("expected protocol mismatch")
+    } catch let error as ControlError {
+      guard case .protocolVersionMismatch(let expected, let received) = error else {
+        return XCTFail("unexpected control error: \(error)")
+      }
+      XCTAssertEqual(expected, mihomoControlProtocolVersion)
+      XCTAssertEqual(received, 1)
+      XCTAssertTrue(error.isLegacyDaemonProtocol)
+      XCTAssertFalse(error.isDisconnection)
+    }
+    XCTAssertEqual(session.operations, [.trayState])
+  }
 }
 
 private final class QueueSession: AppControlSession, @unchecked Sendable {
@@ -78,5 +97,20 @@ private final class QueueSession: AppControlSession, @unchecked Sendable {
     let response = responses.removeFirst()
     if !response.success { throw ControlError.rejected(response.error ?? "rejected") }
     return response
+  }
+}
+
+private final class ProtocolMismatchSession: AppControlSession, @unchecked Sendable {
+  private let lock = NSLock()
+  private(set) var operations: [ControlOperation] = []
+
+  func send(_ request: ControlRequest) throws -> ControlResponse {
+    lock.lock()
+    operations.append(request.operation)
+    lock.unlock()
+    throw ControlError.protocolVersionMismatch(
+      expected: mihomoControlProtocolVersion,
+      received: 1
+    )
   }
 }

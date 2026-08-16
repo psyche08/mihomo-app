@@ -100,15 +100,50 @@ final class ControlDispatcher: @unchecked Sendable {
             ServiceLog.error("event=control_request operation=\(operation) result=unsupported_version")
             return ControlResponse(success: false, error: "unsupported control protocol version")
         }
-        if components.recoveryRequired,
-           Self.isMutating(request.operation),
-           request.operation != .stopAgent {
-            ServiceLog.error("event=control_request operation=\(operation) result=recovery_required")
+
+        if (components.recoveryRequired || components.requiresDaemonRestart),
+           mutating, request.operation != .stopAgent {
+            let result = components.recoveryRequired ? "recovery_required" : "restart_required"
+            ServiceLog.error("event=control_request operation=\(operation) result=\(result)")
             return ControlResponse(
                 success: false,
-                error: "component recovery is required before runtime mutations"
+                error: components.recoveryRequired
+                    ? "component recovery is required before runtime mutations"
+                    : "a daemon restart is required before runtime mutations"
             )
         }
+
+        var externalMutationFileLock: ComponentMutationFileLock?
+        if mutating, request.operation != .upgradeComponents {
+            // BSD flock is process-scoped on macOS. Never open a second lock
+            // object while this daemon retains the pending-update lock: an
+            // unlock through either descriptor would release the long-lived
+            // transaction boundary.
+            if components.ownsPendingMutationFileLock {
+                ServiceLog.error("event=control_request operation=\(operation) result=mutation_busy")
+                return ControlResponse(
+                    success: false,
+                    error: "a component update is awaiting daemon validation"
+                )
+            }
+            do {
+                externalMutationFileLock = try ComponentMutationFileLock()
+            } catch ComponentMutationLockError.busy {
+                ServiceLog.error("event=control_request operation=\(operation) result=mutation_busy")
+                return ControlResponse(
+                    success: false,
+                    error: "another privileged MihomoBox mutation is running"
+                )
+            } catch {
+                ServiceLog.error("event=control_request operation=\(operation) result=lock_rejected")
+                return ControlResponse(
+                    success: false,
+                    error: (error as? LocalizedError)?.errorDescription
+                        ?? "privileged mutation lock is unavailable"
+                )
+            }
+        }
+        defer { withExtendedLifetime(externalMutationFileLock) {} }
         do {
             let payload: Data?
             switch request.operation {

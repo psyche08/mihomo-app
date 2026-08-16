@@ -127,8 +127,77 @@ public final class GlobalDNSPreferences: @unchecked Sendable {
         return current?[kSCPropNetDNSServerAddresses as String] as? [String] == servers
     }
 
+    public func containsManagedServerPersistently() throws -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let preferences = try createLockedPreferences()
+        defer { SCPreferencesUnlock(preferences) }
+        guard let currentSet = SCPreferencesGetValue(
+            preferences,
+            kSCPrefCurrentSet
+        ) as? String else {
+            throw GlobalDNSPreferencesError.currentSetMissing
+        }
+        let globalPath = "\(currentSet)/Network/Global/DNS"
+        if persistentServers(at: globalPath, preferences: preferences)
+            .contains(where: { servers.contains($0) }) {
+            return true
+        }
+        let servicesPath = "\(currentSet)/Network/Service"
+        let services = (
+            SCPreferencesPathGetValue(preferences, servicesPath as CFString) as? [String: Any]
+        ) ?? [:]
+        for serviceID in services.keys {
+            let path = "\(servicesPath)/\(serviceID)/DNS"
+            if persistentServers(at: path, preferences: preferences)
+                .contains(where: { servers.contains($0) }) {
+                return true
+            }
+        }
+        return false
+    }
+
     public func isEffective() -> Bool {
         effectiveServers() == servers
+    }
+
+    public func containsManagedServerEffectively() throws -> Bool {
+        guard preferencesID == nil else { return false }
+        let store = try createDynamicStore(
+            "dev.linsheng.mihomo-app.daemon.dns-restore-check"
+        )
+        if dynamicServers(
+            at: "State:/Network/Global/DNS",
+            store: store
+        ).contains(where: { servers.contains($0) }) {
+            return true
+        }
+        guard let keys = SCDynamicStoreCopyKeyList(
+            store,
+            "State:/Network/Service/.*/DNS" as CFString
+        ) as? [String] else {
+            throw GlobalDNSPreferencesError.dynamicStateOperationFailed(
+                "enumerate DNS state",
+                SCError()
+            )
+        }
+        for key in keys {
+            if dynamicServers(at: key, store: store)
+                .contains(where: { servers.contains($0) }) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func persistentServers(at path: String, preferences: SCPreferences) -> [String] {
+        let dns = SCPreferencesPathGetValue(preferences, path as CFString) as? [String: Any]
+        return dns?[kSCPropNetDNSServerAddresses as String] as? [String] ?? []
+    }
+
+    private func dynamicServers(at key: String, store: SCDynamicStore) -> [String] {
+        let dns = SCDynamicStoreCopyValue(store, key as CFString) as? [String: Any]
+        return dns?[kSCPropNetDNSServerAddresses as String] as? [String] ?? []
     }
 
     public func hasManagedBackup() -> Bool {

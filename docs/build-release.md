@@ -81,7 +81,8 @@ explicitly installed test LaunchDaemon:
    readback;
 5. verify component synchronization, hidden login startup, window restoration,
    DNS/TUN health and one daemon-owned Mihomo process;
-6. exercise both the legacy 0.7-to-0.8 updater and the Sparkle updater path.
+6. exercise the legacy 0.7-to-current-0.8.x updater, its explicit verified
+   daemon-repair migration, and the Sparkle updater path from 0.8.0.
 
 This acceptance changes runtime state and is not part of normal validation.
 
@@ -116,6 +117,10 @@ SPARKLE_SIGNATURE_VERIFIER
 SPARKLE_SIGNATURE_VERIFIER_SHA256
 LEGACY_MINISIGN
 LEGACY_UPDATER_PRIVATE_KEY_FILE
+LEGACY_UPDATER_SMOKE_ARCHIVE (optional path override)
+LEGACY_UPDATER_SMOKE_SIGNATURE (optional path override)
+PUBLISHED_080_ARCHIVE (optional path override)
+PUBLISHED_080_SIGNATURE (optional path override)
 ```
 
 `SPARKLE_DISTRIBUTION_ROOT` points at the complete Sparkle 2.9.4 binary
@@ -131,6 +136,17 @@ Developer ID Application identity, `CODESIGN_IDENTITY_FINGERPRINT` must be the
 exact 40-hex fingerprint. The script never silently selects the first identity.
 `LEGACY_MINISIGN` points at the external standard Minisign executable used only
 for the temporary 0.7 migration feed.
+
+Before the first release signature, the script authenticates the frozen
+published 0.7.0 and 0.8.0 legacy updater archives with the embedded legacy
+Minisign public key and requires their exact published SHA-256 values, product
+versions and bundle identifier. The default inputs are the corresponding
+archive and `.sig` pairs already under `dist/`; the optional path overrides
+must still contain those exact bytes and cannot replace the pins. The selected
+Developer ID Application fingerprint must equal the frozen 0.7.0 leaf
+fingerprint, and both the authenticated 0.8.0 archive and the new App must
+contain the frozen 0.8.0 `SUPublicEDKey`. A missing asset, altered wrapper,
+different certificate or rotated Sparkle key stops before `codesign`.
 
 `SPARKLE_SIGNATURE_VERIFIER` is a separately audited Ed25519 verifier, not a
 build command or a Keychain wrapper. It must be an executable regular
@@ -210,6 +226,16 @@ created with `COPYFILE_DISABLE=1`, starts with `MihomoBox.app/`, and contains no
 AppleDouble or `__MACOSX` entries. A standard external Minisign implementation
 must be proven byte-compatible with the existing public key by a real 0.7
 updater smoke test before publication.
+
+Replacing the App is not proof that privileged migration succeeded. A real
+0.7 acceptance run must continue after relaunch: the native App must classify
+the authenticated version-1 daemon as repair-required, keep incompatible
+controls disabled, and migrate only after the operator explicitly selects the
+verified installer. Acceptance then requires protocol version 2, a current
+root-owned `component-version`, matching daemon/agent/Mihomo/CLI artifacts,
+exactly one managed runtime, and complete TUN/Fake-IP/DNS health. Also replay
+the mixed state produced by 0.8.0 (0.8 App with a 0.7 daemon) and the normal
+Sparkle update from a healthy 0.8 daemon.
 
 `appcast.xml` and the DMG serve 0.8 and later. Appcast generation must use the
 Sparkle tools from the exact resolved 2.9.4 package, a private key supplied by

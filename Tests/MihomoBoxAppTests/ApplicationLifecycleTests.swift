@@ -101,7 +101,7 @@ private final class LifecycleTrayService: TrayService {
   func importHTTPProfile() async throws {}
   func switchProfile(named name: String) async throws {}
   func reloadProfile() async throws {}
-  func installOrRepairDaemon() async throws {}
+  func installOrRepairDaemon(requireLegacy: Bool) async throws {}
   func openDiagnosticLogs() {}
   func checkForUpdates() {}
 }

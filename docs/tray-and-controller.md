@@ -48,6 +48,16 @@ targets are omitted from this flat node list. If the controller is
 unavailable, controller mutations are disabled while profile switching, daemon
 repair, and network recovery remain available.
 
+An authenticated protocol-version mismatch is distinct from an unavailable
+daemon. A version-1 daemon is shown as `Network: Daemon upgrade required`; all
+tray XPC-backed TUN, profile, mode, and proxy controls are disabled, while
+an emphasized `Upgrade Daemon…` action and `Tools > Install / Repair Daemon…
+(Required)` remain available. The App stays hidden and never opens an
+administrator prompt automatically. Selecting the action first explains that
+Mihomo, Enhanced TUN and managed DNS will restart briefly, then enters the
+existing exact-signature verified installer. A newer daemon is shown as
+requiring an App update and cannot be repaired by the older App.
+
 Outbound mode semantics are user-facing rather than selector-facing:
 
 - `Rule` follows the configured rules.

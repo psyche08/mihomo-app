@@ -186,15 +186,27 @@ final class CoreTests: XCTestCase {
         )
         try manager.apply()
         XCTAssertTrue(try manager.isApplied())
+        XCTAssertTrue(try manager.containsManagedServerPersistently())
         SCPreferencesSynchronize(preferences)
-        let managed = SCPreferencesPathGetValue(preferences, dnsPath) as? [String: Any]
-        XCTAssertEqual(managed?[kSCPropNetDNSServerAddresses as String] as? [String], ["127.0.0.53"])
+        let managed = try XCTUnwrap(
+            SCPreferencesPathGetValue(preferences, dnsPath) as? [String: Any]
+        )
+        XCTAssertEqual(managed[kSCPropNetDNSServerAddresses as String] as? [String], ["127.0.0.53"])
+
+        let mixed = [kSCPropNetDNSServerAddresses as String: ["127.0.0.53", "8.8.8.8"]]
+            as CFDictionary
+        XCTAssertTrue(SCPreferencesPathSetValue(preferences, dnsPath, mixed))
+        XCTAssertTrue(SCPreferencesCommitChanges(preferences))
+        XCTAssertTrue(try manager.containsManagedServerPersistently())
+        XCTAssertTrue(SCPreferencesPathSetValue(preferences, dnsPath, managed as CFDictionary))
+        XCTAssertTrue(SCPreferencesCommitChanges(preferences))
 
         try manager.apply()
         try manager.restore()
         SCPreferencesSynchronize(preferences)
         let restored = SCPreferencesPathGetValue(preferences, dnsPath) as? [String: Any]
         XCTAssertEqual(restored?[kSCPropNetDNSServerAddresses as String] as? [String], ["1.1.1.1"])
+        XCTAssertFalse(try manager.containsManagedServerPersistently())
         XCTAssertFalse(FileManager.default.fileExists(atPath: backupPath))
     }
 
@@ -215,6 +227,7 @@ final class CoreTests: XCTestCase {
         XCTAssertTrue(SCPreferencesSetValue(preferences, kSCPrefCurrentSet, "/Sets/Test" as CFString))
         let globalPath = "/Sets/Test/Network/Global/DNS" as CFString
         let servicePath = "/Sets/Test/Network/Service/service-1/DNS" as CFString
+        let staleServicePath = "/Sets/Test/Network/Service/service-stale/DNS" as CFString
         let global = [kSCPropNetDNSServerAddresses as String: ["9.9.9.9"]] as CFDictionary
         let service = [
             kSCPropNetDNSServerAddresses as String: ["10.0.0.53"],
@@ -222,6 +235,10 @@ final class CoreTests: XCTestCase {
         ] as CFDictionary
         XCTAssertTrue(SCPreferencesPathSetValue(preferences, globalPath, global))
         XCTAssertTrue(SCPreferencesPathSetValue(preferences, servicePath, service))
+        let staleService = [
+            kSCPropNetDNSServerAddresses as String: ["127.0.0.53", "8.8.8.8"]
+        ] as CFDictionary
+        XCTAssertTrue(SCPreferencesPathSetValue(preferences, staleServicePath, staleService))
         guard SCPreferencesCommitChanges(preferences) else {
             throw XCTSkip("SCPreferences custom-file commit requires privileged SystemConfiguration access")
         }
@@ -250,6 +267,10 @@ final class CoreTests: XCTestCase {
         SCPreferencesSynchronize(preferences)
         let restored = SCPreferencesPathGetValue(preferences, servicePath) as? [String: Any]
         XCTAssertEqual(restored?[kSCPropNetDNSServerAddresses as String] as? [String], ["10.0.0.53"])
+        XCTAssertTrue(try manager.containsManagedServerPersistently())
+        XCTAssertTrue(SCPreferencesPathRemoveValue(preferences, staleServicePath))
+        XCTAssertTrue(SCPreferencesCommitChanges(preferences))
+        XCTAssertFalse(try manager.containsManagedServerPersistently())
         XCTAssertEqual(restored?[kSCPropNetDNSSearchDomains as String] as? [String], ["corp.example"])
     }
 

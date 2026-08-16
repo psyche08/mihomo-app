@@ -255,11 +255,83 @@ extension ControlProtocolTests {
         XCTAssertTrue(ControlError.connectionFailed.isDisconnection)
         XCTAssertTrue(ControlError.invalidReply.isDisconnection)
 
+        XCTAssertFalse(
+            ControlError.protocolVersionMismatch(expected: 2, received: 1).isDisconnection
+        )
         XCTAssertFalse(ControlError.rejected("Mihomo agent is not running").isDisconnection)
         XCTAssertFalse(ControlError.unsignedProcess.isDisconnection)
         XCTAssertFalse(ControlError.invalidSigningInformation.isDisconnection)
         XCTAssertFalse(ControlError.invalidRequirement.isDisconnection)
         XCTAssertFalse(ControlError.invalidComponentSignature.isDisconnection)
+    }
+
+    func testControlResponseRecognisesOnlyExactLegacyDaemonProtocol() {
+        var response = ControlResponse(success: false, error: "must not mask version mismatch")
+        response.version = 1
+
+        XCTAssertThrowsError(try response.validated()) { error in
+            guard let controlError = error as? ControlError else {
+                return XCTFail("expected ControlError, got \(error)")
+            }
+            guard case .protocolVersionMismatch(let expected, let received) = controlError else {
+                return XCTFail("expected protocolVersionMismatch, got \(controlError)")
+            }
+            XCTAssertEqual(expected, mihomoControlProtocolVersion)
+            XCTAssertEqual(received, 1)
+            XCTAssertTrue(controlError.isLegacyDaemonProtocol)
+            XCTAssertFalse(controlError.isDisconnection)
+            XCTAssertTrue(controlError.localizedDescription.contains("Install / Repair Daemon"))
+        }
+
+        response.version = 3
+        XCTAssertThrowsError(try response.validated()) { error in
+            guard let controlError = error as? ControlError else {
+                return XCTFail("expected ControlError, got \(error)")
+            }
+            guard case .protocolVersionMismatch(let expected, let received) = controlError else {
+                return XCTFail("expected protocolVersionMismatch, got \(controlError)")
+            }
+            XCTAssertEqual(expected, mihomoControlProtocolVersion)
+            XCTAssertEqual(received, 3)
+            XCTAssertFalse(controlError.isLegacyDaemonProtocol)
+            XCTAssertFalse(controlError.isDisconnection)
+            XCTAssertTrue(controlError.localizedDescription.contains("update MihomoBox"))
+        }
+    }
+
+    func testControlResponseRejectsNonpositiveProtocolAsInvalidReply() {
+        var response = ControlResponse(success: false, error: "must not mask invalid version")
+        response.version = 0
+
+        XCTAssertThrowsError(try response.validated()) { error in
+            guard let controlError = error as? ControlError,
+                  case .invalidReply = controlError else {
+                return XCTFail("expected invalidReply, got \(error)")
+            }
+        }
+    }
+
+    func testControlResponsePreservesSameVersionRejection() {
+        let response = ControlResponse(success: false, error: "request refused")
+
+        XCTAssertThrowsError(try response.validated()) { error in
+            guard let controlError = error as? ControlError,
+                  case let .rejected(message) = controlError else {
+                return XCTFail("expected rejected, got \(error)")
+            }
+            XCTAssertEqual(message, "request refused")
+        }
+    }
+
+    func testControlResponseReturnsSuccessfulResponseUnchanged() throws {
+        let payload = Data([1, 2, 3])
+        let response = ControlResponse(success: true, payload: payload)
+        let validated = try response.validated()
+
+        XCTAssertEqual(validated.version, response.version)
+        XCTAssertEqual(validated.success, response.success)
+        XCTAssertEqual(validated.payload, response.payload)
+        XCTAssertEqual(validated.error, response.error)
     }
 
     private func json(_ object: [String: Any]) throws -> Data {

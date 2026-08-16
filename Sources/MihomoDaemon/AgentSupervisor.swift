@@ -98,10 +98,17 @@ final class AgentSupervisor: @unchecked Sendable {
             return false
         }
         let observed = ProxyService.networkHealth(configuration: configuration)
+        guard (try? ProxyService.isSystemDNSRestored(configuration: configuration)) == true else {
+            return false
+        }
         return agentStopped
             && !isRunning
             && !observed.controllerReachable
             && !observed.tunEnabled
+            && observed.tunInterface == nil
+            && !observed.fakeIPRouteReady
+            && !observed.dnsBridgeReady
+            && !observed.mihomoDNSReady
             && !observed.systemDNSManaged
             && observed.networkConsistent
     }

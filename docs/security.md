@@ -45,7 +45,11 @@
   the agent, TUN, or managed DNS in this state. The App activates the selected
   profile through typed XPC; only its full-health transaction clears the
   provisioning marker and starts networking. A failed first activation keeps
-  real system DNS and cannot silently direct or block traffic.
+  real system DNS and cannot silently direct or block traffic. Provisioning is
+  accepted as safely stopped only after both persistent SystemConfiguration
+  Global/service DNS entries and every effective dynamic Global/service resolver no longer
+  contain the managed address, and no managed agent, Mihomo process, TUN,
+  route, or DNS listener remains.
   Subsequent lifecycle, profile reload, TUN,
   outbound-mode, and proxy operations do not elevate interactively.
 - Post-bootstrap binary synchronization is a typed XPC operation, not an
@@ -55,11 +59,36 @@
   and rolls back on replacement or health-check failure. A successful verified
   bootstrap atomically records that semantic version in mode-`0600`
   `component-version`; user-controlled App state cannot lower it.
+  The verified root installer enforces the same floor before replacing any
+  installed artifact. Beside existing managed files, a missing marker is
+  accepted only when the exact snapshot CLI authenticates a live protocol-v1
+  daemon; malformed, unreachable, current, and future unversioned states fail
+  closed. An authenticated future protocol always blocks repair regardless of
+  the App's semantic version.
+  Every privileged installer mode holds one persistent root-owned BSD file
+  lock, so install, restore, profile, and lifecycle transactions cannot modify
+  Application Support concurrently. The file's existence is not a stale-lock
+  signal: the kernel releases the lock when the process exits. Repair stops the
+  old daemon and rejects any component-update pending record before it captures
+  the rollback tree, so only stable, transaction-free bytes can be restored.
+  This floor is enforced by 0.8.1 and later installers. It cannot revoke an
+  already distributed 0.8.0 installer after an administrator explicitly
+  authorizes that older root script; operators must treat such authorization
+  as an intentional recovery/downgrade action and use the newest installed App.
   Daemon replacement is a two-boot transaction: a mode-`0600` pending record
   binds old/new digests and a root-only backup; the new daemon must prove full
   network health before clearing it. Power loss or failed health restores the
   complete prior signed set with same-filesystem atomic replacement. While
   recovery is incomplete, runtime mutations fail closed.
+- A signed legacy protocol response is not permission to downgrade the App's
+  XPC requests. Version 1 is classified only from the authenticated response
+  envelope, never from a marker file or error string. The tray disables all
+  incompatible mutations and requires the user to select the exact-CDHash
+  verified installer; polling and component synchronization cannot open an
+  administrator prompt. An already-open dashboard request still fails at the
+  typed version-2 boundary and cannot mutate or elevate. A peer newer than the
+  App disables repair to prevent signed downgrade. The legacy component-update
+  path is never re-enabled.
 - The privileged root LaunchDaemon executes stable root-owned copies, never
   files in a user-writable Git checkout or movable App bundle. The separate
   current-user LaunchAgent may execute only an installed App under

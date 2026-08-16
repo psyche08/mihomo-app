@@ -250,6 +250,10 @@ LATEST_JSON="$DIST/latest.json"
 APPCAST="$DIST/appcast.xml"
 LEGACY_PUBLIC_KEY="dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI2QUExNjI1M0Q1MzdEQTkKUldTcGZWTTlKUmFxdHF2UEhrd2t1bTgxY2hoTUZZcHpUV1hqTmV1b1ZRKzBDOVNtbnBTWUZNMFgK"
 DEVELOPMENT_SPARKLE_PUBLIC_ED_KEY="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+PUBLISHED_070_ARCHIVE_SHA256="37a5ea188e7c95ef2e45768193c11c6a2cdd40f672135b613f51230f91efeb0e"
+PUBLISHED_070_DEVELOPER_ID_LEAF_SHA1="2E1EF531C972A15F5B5C58855001FA6FA1186383"
+PUBLISHED_080_ARCHIVE_SHA256="d04c8b432e39df1f2f66ed547f828c95fb490f7ff03c8719bbcbbcff25309c9b"
+PUBLISHED_080_SPARKLE_PUBLIC_ED_KEY="CL5i36xBB93GX8INJAcBAVFreeVys28Vu94mgAgTA00="
 RELEASE_LOCK_DIR="$RELEASE_STATE_DIR/release.lock"
 RELEASE_LOCK_TOKEN=""
 SIGNED_APP_STATE="$RELEASE_STATE_DIR/MihomoBox-$VERSION-signed-app.json"
@@ -342,6 +346,13 @@ LEGACY_UPDATER_SMOKE_SIGNATURE="${LEGACY_UPDATER_SMOKE_SIGNATURE:-$LEGACY_UPDATE
 if [[ ! -f "$LEGACY_UPDATER_SMOKE_ARCHIVE" || -L "$LEGACY_UPDATER_SMOKE_ARCHIVE" ]] ||
   [[ ! -f "$LEGACY_UPDATER_SMOKE_SIGNATURE" || -L "$LEGACY_UPDATER_SMOKE_SIGNATURE" ]]; then
   echo "real 0.7 updater smoke artifact/signature is required" >&2
+  exit 1
+fi
+PUBLISHED_080_ARCHIVE="${PUBLISHED_080_ARCHIVE:-$DIST/MihomoBox-0.8.0-macos-arm64.app.tar.gz}"
+PUBLISHED_080_SIGNATURE="${PUBLISHED_080_SIGNATURE:-$PUBLISHED_080_ARCHIVE.sig}"
+if [[ ! -f "$PUBLISHED_080_ARCHIVE" || -L "$PUBLISHED_080_ARCHIVE" ]] ||
+  [[ ! -f "$PUBLISHED_080_SIGNATURE" || -L "$PUBLISHED_080_SIGNATURE" ]]; then
+  echo "published 0.8.0 updater artifact/signature is required" >&2
   exit 1
 fi
 
@@ -438,6 +449,9 @@ UPDATE_AUDIT="$(/usr/bin/mktemp -d /private/tmp/mihomobox-update-audit.XXXXXX)"
 APPCAST_STAGE="$(/usr/bin/mktemp -d /private/tmp/mihomobox-appcast.XXXXXX)"
 LEGACY_PUBLIC_KEY_FILE="$UPDATE_AUDIT/legacy-updater.pub"
 LEGACY_SMOKE_MINISIG="$UPDATE_AUDIT/legacy-0.7.minisig"
+LEGACY_SMOKE_INFO="$UPDATE_AUDIT/legacy-0.7-Info.plist"
+PUBLISHED_080_MINISIG="$UPDATE_AUDIT/published-0.8.0.minisig"
+PUBLISHED_080_INFO="$UPDATE_AUDIT/published-0.8.0-Info.plist"
 LEGACY_UPDATE_MINISIG="$UPDATE_AUDIT/current.minisig"
 SPARKLE_KEY_CHALLENGE="$UPDATE_AUDIT/sparkle-key-challenge"
 cleanup() {
@@ -469,13 +483,63 @@ if ! /usr/bin/printf '%s' "$LEGACY_PUBLIC_KEY" |
   echo "embedded legacy updater public key is invalid" >&2
   exit 1
 fi
-if ! /usr/bin/base64 -D < "$LEGACY_UPDATER_SMOKE_SIGNATURE" > "$LEGACY_SMOKE_MINISIG"; then
-  echo "0.7 updater smoke signature is not base64-wrapped minisign data" >&2
+
+verify_published_legacy_archive() {
+  local archive="$1"
+  local wrapped_signature="$2"
+  local expected_sha256="$3"
+  local expected_version="$4"
+  local minisign_signature="$5"
+  local info_plist="$6"
+  local info_member="MihomoBox.app/Contents/Info.plist"
+  local info_member_count
+  local actual_sha256
+
+  actual_sha256="$(release_sha256 "$archive")"
+  if [[ "$actual_sha256" != "$expected_sha256" ]]; then
+    echo "published $expected_version updater archive does not match its frozen SHA-256" >&2
+    return 1
+  fi
+  if ! /usr/bin/base64 -D < "$wrapped_signature" > "$minisign_signature"; then
+    echo "published $expected_version updater signature is not base64-wrapped Minisign data" >&2
+    return 1
+  fi
+  "$LEGACY_MINISIGN" -V -m "$archive" \
+    -x "$minisign_signature" -p "$LEGACY_PUBLIC_KEY_FILE"
+  info_member_count="$(/usr/bin/tar -tzf "$archive" |
+    /usr/bin/awk -v member="$info_member" '$0 == member { count += 1 } END { print count + 0 }')"
+  if [[ "$info_member_count" != "1" ]] ||
+    ! /usr/bin/tar -xOzf "$archive" "$info_member" > "$info_plist"; then
+    echo "published $expected_version updater archive has no unique App Info.plist" >&2
+    return 1
+  fi
+  if [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info_plist")" != \
+    "$expected_version" ]] ||
+    [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$info_plist")" != \
+      "dev.linsheng.mihomo-app" ]]; then
+    echo "published updater archive identity does not match MihomoBox $expected_version" >&2
+    return 1
+  fi
+}
+
+verify_published_legacy_archive \
+  "$LEGACY_UPDATER_SMOKE_ARCHIVE" "$LEGACY_UPDATER_SMOKE_SIGNATURE" \
+  "$PUBLISHED_070_ARCHIVE_SHA256" "0.7.0" \
+  "$LEGACY_SMOKE_MINISIG" "$LEGACY_SMOKE_INFO"
+verify_published_legacy_archive \
+  "$PUBLISHED_080_ARCHIVE" "$PUBLISHED_080_SIGNATURE" \
+  "$PUBLISHED_080_ARCHIVE_SHA256" "0.8.0" \
+  "$PUBLISHED_080_MINISIG" "$PUBLISHED_080_INFO"
+if [[ "$IDENTITY" != "$PUBLISHED_070_DEVELOPER_ID_LEAF_SHA1" ]]; then
+  echo "selected Developer ID leaf does not match the leaf used for published 0.7.0" >&2
   exit 1
 fi
-"$LEGACY_MINISIGN" -V -m "$LEGACY_UPDATER_SMOKE_ARCHIVE" \
-  -x "$LEGACY_SMOKE_MINISIG" -p "$LEGACY_PUBLIC_KEY_FILE"
-echo "verified real 0.7 updater signature compatibility"
+if [[ "$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$PUBLISHED_080_INFO")" != \
+  "$PUBLISHED_080_SPARKLE_PUBLIC_ED_KEY" ]]; then
+  echo "published 0.8.0 updater archive does not contain the frozen Sparkle public key" >&2
+  exit 1
+fi
+echo "verified published 0.7.0 and 0.8.0 release continuity inputs"
 
 release_app_cdhash() {
   local cdhash
@@ -677,6 +741,10 @@ require_prebuilt_app() {
   if [[ "$sparkle_public_ed_key" == "$DEVELOPMENT_SPARKLE_PUBLIC_ED_KEY" ]] ||
     [[ ! "$sparkle_public_ed_key" =~ ^[A-Za-z0-9+/]{43}=$ ]]; then
     echo "prebuilt App Sparkle public key is invalid" >&2
+    exit 1
+  fi
+  if [[ "$sparkle_public_ed_key" != "$PUBLISHED_080_SPARKLE_PUBLIC_ED_KEY" ]]; then
+    echo "prebuilt App Sparkle public key does not match published 0.8.0" >&2
     exit 1
   fi
   verify_sparkle_key_pair "$sparkle_public_ed_key"

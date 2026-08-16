@@ -149,6 +149,16 @@ public final class ProxyService {
         return try preferences.isApplied()
     }
 
+    public static func isSystemDNSRestored(configuration: ProxyConfiguration) throws -> Bool {
+        let preferences = GlobalDNSPreferences(
+            servers: [configuration.systemDNSListen.host],
+            backupPath: configuration.systemDNSBackupPath
+        )
+        let persistentlyPresent = try preferences.containsManagedServerPersistently()
+        let dynamicallyPresent = try preferences.containsManagedServerEffectively()
+        return !persistentlyPresent && !dynamicallyPresent
+    }
+
     public static func networkHealth(configuration: ProxyConfiguration) -> NetworkConsistencyHealth {
         MihomoRuntimeInspector.inspect(configuration: configuration)
     }

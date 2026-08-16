@@ -92,6 +92,7 @@ final class TrayModelTests: XCTestCase {
 
   func testInstallerAndProfileActionsFailClosedDuringMutations() {
     var snapshot = TraySnapshot(
+      daemonCompatibility: .compatible,
       profileActionsAvailable: true,
       installationActionsAvailable: true,
       enhancedTUNActionAvailable: true
@@ -124,6 +125,7 @@ final class TrayModelTests: XCTestCase {
 
   func testUnavailableProfileOrInstallerCapabilityStaysDisabled() {
     let snapshot = TraySnapshot(
+      daemonCompatibility: .compatible,
       profileActionsAvailable: false,
       installationActionsAvailable: false
     )
@@ -151,6 +153,7 @@ final class TrayModelTests: XCTestCase {
 
   func testProfileReloadRequiresActiveProfileAndReachableController() {
     var snapshot = TraySnapshot(
+      daemonCompatibility: .compatible,
       controllerReachable: true,
       profiles: ["default.yaml"],
       activeProfile: "default.yaml"
@@ -163,8 +166,128 @@ final class TrayModelTests: XCTestCase {
     XCTAssertFalse(TrayMenuActionPolicy.profileReloadEnabled(snapshot))
   }
 
+  func testProtocolCompatibilityStatusesTakePriorityOverRuntimeState() {
+    var snapshot = TraySnapshot(
+      daemonCompatibility: .legacyRepairRequired(peerVersion: 1),
+      controllerReachable: true,
+      daemonReachable: true,
+      agentRunning: true,
+      networkHealthy: true
+    )
+    XCTAssertEqual(snapshot.networkStatusTitle, "Network: Daemon upgrade required")
+    XCTAssertEqual(snapshot.tooltip, "MihomoBox · daemon repair required")
+
+    snapshot.daemonCompatibility = .appUpdateRequired(peerVersion: 3)
+    XCTAssertEqual(snapshot.networkStatusTitle, "Network: App update required")
+    XCTAssertEqual(snapshot.tooltip, "MihomoBox · app update required")
+
+    snapshot.daemonCompatibility = .incompatible(peerVersion: 0)
+    XCTAssertEqual(snapshot.networkStatusTitle, "Network: Protocol incompatible")
+    XCTAssertEqual(snapshot.tooltip, "MihomoBox · protocol incompatible")
+  }
+
+  func testActionErrorRemainsVisibleWhileDaemonRepairIsRequired() {
+    let snapshot = TraySnapshot(
+      daemonCompatibility: .legacyRepairRequired(peerVersion: 1),
+      actionError: "Action failed: daemon repair did not complete"
+    )
+    XCTAssertEqual(
+      snapshot.networkStatusTitle,
+      "Action failed: daemon repair did not complete"
+    )
+    XCTAssertEqual(snapshot.tooltip, "MihomoBox · daemon repair required")
+    XCTAssertTrue(TrayDaemonMenuPolicy.showsUpgradeAction(snapshot))
+  }
+
+  func testProtocolMismatchDisablesControlTunAndProfileActions() {
+    let compatibilities: [DaemonProtocolCompatibility] = [
+      .legacyRepairRequired(peerVersion: 1),
+      .appUpdateRequired(peerVersion: 3),
+      .incompatible(peerVersion: 0),
+    ]
+
+    for compatibility in compatibilities {
+      let snapshot = TraySnapshot(
+        daemonCompatibility: compatibility,
+        controllerReachable: true,
+        enhancedTUN: true,
+        profiles: ["default.yaml"],
+        activeProfile: "default.yaml",
+        profileActionsAvailable: true,
+        installationActionsAvailable: true,
+        enhancedTUNActionAvailable: true
+      )
+      XCTAssertTrue(compatibility.blocksControlActions)
+      XCTAssertFalse(TrayMenuActionPolicy.controllerActionEnabled(snapshot))
+      XCTAssertFalse(TrayMenuActionPolicy.enhancedTUNEnabled(snapshot))
+      XCTAssertFalse(TrayMenuActionPolicy.profileActionEnabled(snapshot))
+      XCTAssertFalse(TrayMenuActionPolicy.profileReloadEnabled(snapshot))
+    }
+  }
+
+  func testUnknownCompatibilityPreservesFirstInstallActions() {
+    let snapshot = TraySnapshot(
+      daemonCompatibility: .unknown,
+      profileActionsAvailable: true,
+      installationActionsAvailable: true,
+      enhancedTUNActionAvailable: true
+    )
+    XCTAssertFalse(snapshot.daemonCompatibility.blocksControlActions)
+    XCTAssertTrue(TrayMenuActionPolicy.enhancedTUNEnabled(snapshot))
+    XCTAssertTrue(TrayMenuActionPolicy.profileActionEnabled(snapshot))
+    XCTAssertTrue(TrayMenuActionPolicy.installerEnabled(snapshot))
+  }
+
+  func testOnlyLegacyMismatchOffersRequiredDaemonUpgrade() {
+    let legacy = TraySnapshot(
+      daemonCompatibility: .legacyRepairRequired(peerVersion: 1),
+      installationActionsAvailable: true
+    )
+    XCTAssertTrue(legacy.daemonCompatibility.requiresRepair)
+    XCTAssertTrue(TrayMenuActionPolicy.installerEnabled(legacy))
+    XCTAssertTrue(TrayDaemonMenuPolicy.showsUpgradeAction(legacy))
+    XCTAssertEqual(
+      TrayDaemonMenuPolicy.installerTitle(legacy),
+      "Install / Repair Daemon… (Required)"
+    )
+
+    for compatibility in [
+      DaemonProtocolCompatibility.appUpdateRequired(peerVersion: 3),
+      .incompatible(peerVersion: 0),
+    ] {
+      let snapshot = TraySnapshot(
+        daemonCompatibility: compatibility,
+        installationActionsAvailable: true
+      )
+      XCTAssertFalse(compatibility.requiresRepair)
+      XCTAssertFalse(TrayMenuActionPolicy.installerEnabled(snapshot))
+      XCTAssertFalse(TrayDaemonMenuPolicy.showsUpgradeAction(snapshot))
+      XCTAssertEqual(
+        TrayDaemonMenuPolicy.installerTitle(snapshot),
+        "Install / Repair Daemon…"
+      )
+    }
+  }
+
+  func testCompatibilityChangeForcesMenuRebuild() {
+    let rendered = snapshot(delay: 180)
+    var incoming = rendered
+    incoming.daemonCompatibility = .legacyRepairRequired(peerVersion: 1)
+
+    XCTAssertNotEqual(rendered.menuSignature, incoming.menuSignature)
+    XCTAssertEqual(
+      TrayMenuUpdatePolicy.decision(
+        rendered: rendered,
+        incoming: incoming,
+        isTracking: false
+      ),
+      .rebuildNow
+    )
+  }
+
   private func snapshot(delay: Int?) -> TraySnapshot {
     TraySnapshot(
+      daemonCompatibility: .compatible,
       controllerReachable: true,
       enhancedTUN: true,
       networkHealthy: true,

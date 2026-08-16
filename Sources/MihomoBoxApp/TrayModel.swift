@@ -1,5 +1,38 @@
 import Foundation
 
+enum DaemonProtocolCompatibility: Equatable, Sendable {
+  case unknown
+  case compatible
+  case legacyRepairRequired(peerVersion: Int)
+  case appUpdateRequired(peerVersion: Int)
+  case incompatible(peerVersion: Int)
+
+  var requiresRepair: Bool {
+    if case .legacyRepairRequired = self {
+      return true
+    }
+    return false
+  }
+
+  var blocksControlActions: Bool {
+    switch self {
+    case .unknown, .compatible:
+      false
+    case .legacyRepairRequired, .appUpdateRequired, .incompatible:
+      true
+    }
+  }
+
+  var allowsExplicitInstaller: Bool {
+    switch self {
+    case .unknown, .compatible, .legacyRepairRequired:
+      true
+    case .appUpdateRequired, .incompatible:
+      false
+    }
+  }
+}
+
 enum TrayOutboundMode: String, CaseIterable, Sendable {
   case rule
   case global
@@ -64,6 +97,7 @@ struct TrayProxyNode: Equatable, Sendable {
 /// The tray never receives a controller URL or secret. Service implementations
 /// translate only typed daemon results into this value.
 struct TraySnapshot: Equatable, Sendable {
+  var daemonCompatibility: DaemonProtocolCompatibility
   var controllerReachable: Bool
   var daemonReachable: Bool
   var agentRunning: Bool
@@ -84,6 +118,7 @@ struct TraySnapshot: Equatable, Sendable {
   var actionError: String?
 
   init(
+    daemonCompatibility: DaemonProtocolCompatibility = .unknown,
     controllerReachable: Bool = false,
     daemonReachable: Bool = false,
     agentRunning: Bool = false,
@@ -103,6 +138,7 @@ struct TraySnapshot: Equatable, Sendable {
     enhancedTUNActionAvailable: Bool = true,
     actionError: String? = nil
   ) {
+    self.daemonCompatibility = daemonCompatibility
     self.controllerReachable = controllerReachable
     self.daemonReachable = daemonReachable
     self.agentRunning = agentRunning
@@ -127,6 +163,16 @@ struct TraySnapshot: Equatable, Sendable {
     if let actionError, !actionError.isEmpty {
       return actionError
     }
+    switch daemonCompatibility {
+    case .legacyRepairRequired:
+      return "Network: Daemon upgrade required"
+    case .appUpdateRequired:
+      return "Network: App update required"
+    case .incompatible:
+      return "Network: Protocol incompatible"
+    case .unknown, .compatible:
+      break
+    }
     if daemonReachable, !agentRunning {
       if !controllerReachable, healthTUNEnabled == false,
         systemDNSManaged == false, networkHealthy == true
@@ -145,6 +191,16 @@ struct TraySnapshot: Equatable, Sendable {
   }
 
   var tooltip: String {
+    switch daemonCompatibility {
+    case .legacyRepairRequired:
+      return "MihomoBox · daemon repair required"
+    case .appUpdateRequired:
+      return "MihomoBox · app update required"
+    case .incompatible:
+      return "MihomoBox · protocol incompatible"
+    case .unknown, .compatible:
+      break
+    }
     if daemonReachable, !agentRunning {
       return networkStatusTitle.contains("DNS restored")
         ? "MihomoBox · service stopped, DNS restored"
@@ -164,6 +220,7 @@ struct TraySnapshot: Equatable, Sendable {
   /// a submenu, whereas replacing the menu would collapse it under the cursor.
   var menuSignature: TrayMenuSignature {
     TrayMenuSignature(
+      daemonCompatibility: daemonCompatibility,
       controllerReachable: controllerReachable,
       daemonReachable: daemonReachable,
       agentRunning: agentRunning,
@@ -194,6 +251,7 @@ struct TrayMenuProxySignature: Equatable, Sendable {
 }
 
 struct TrayMenuSignature: Equatable, Sendable {
+  var daemonCompatibility: DaemonProtocolCompatibility
   var controllerReachable: Bool
   var daemonReachable: Bool
   var agentRunning: Bool
@@ -258,28 +316,52 @@ enum TrayEnhancedTUNClickPolicy {
 }
 
 enum TrayMenuActionPolicy {
+  static func controllerActionEnabled(_ snapshot: TraySnapshot) -> Bool {
+    !snapshot.daemonCompatibility.blocksControlActions
+      && snapshot.controllerReachable
+      && !snapshot.mutationOperationInFlight
+  }
+
   static func enhancedTUNEnabled(_ snapshot: TraySnapshot) -> Bool {
-    !snapshot.mutationOperationInFlight
+    !snapshot.daemonCompatibility.blocksControlActions
+      && !snapshot.mutationOperationInFlight
       && !snapshot.profileOperationInFlight
       && !snapshot.tunOperationInFlight
       && snapshot.enhancedTUNActionAvailable
   }
 
   static func profileActionEnabled(_ snapshot: TraySnapshot) -> Bool {
-    snapshot.profileActionsAvailable
+    !snapshot.daemonCompatibility.blocksControlActions
+      && snapshot.profileActionsAvailable
       && !snapshot.mutationOperationInFlight
       && !snapshot.profileOperationInFlight
   }
 
   static func profileReloadEnabled(_ snapshot: TraySnapshot) -> Bool {
-    snapshot.activeProfile != nil
+    !snapshot.daemonCompatibility.blocksControlActions
+      && snapshot.activeProfile != nil
       && snapshot.controllerReachable
       && !snapshot.mutationOperationInFlight
       && !snapshot.profileOperationInFlight
   }
 
   static func installerEnabled(_ snapshot: TraySnapshot) -> Bool {
-    snapshot.installationActionsAvailable && !snapshot.mutationOperationInFlight
+    snapshot.daemonCompatibility.allowsExplicitInstaller
+      && snapshot.installationActionsAvailable
+      && !snapshot.mutationOperationInFlight
+  }
+}
+
+enum TrayDaemonMenuPolicy {
+  static func showsUpgradeAction(_ snapshot: TraySnapshot) -> Bool {
+    snapshot.daemonCompatibility.requiresRepair
+  }
+
+  static func installerTitle(_ snapshot: TraySnapshot) -> String {
+    if snapshot.daemonCompatibility.requiresRepair {
+      return "Install / Repair Daemon… (Required)"
+    }
+    return "Install / Repair Daemon…"
   }
 }
 
@@ -304,7 +386,7 @@ protocol TrayService: AnyObject {
   func importHTTPProfile() async throws
   func switchProfile(named name: String) async throws
   func reloadProfile() async throws
-  func installOrRepairDaemon() async throws
+  func installOrRepairDaemon(requireLegacy: Bool) async throws
   func openDiagnosticLogs()
   func checkForUpdates()
 }
