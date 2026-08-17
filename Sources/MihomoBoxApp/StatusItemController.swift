@@ -440,7 +440,7 @@ enum StatusItemIconLoader {
     fallback: () -> NSImage? = {
       NSImage(
         systemSymbolName: "network",
-        accessibilityDescription: StatusItemIconLoader.accessibilityDescription
+        accessibilityDescription: "MihomoBox"
       )
     }
   ) -> StatusItemArtwork? {
