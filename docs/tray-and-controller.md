@@ -5,6 +5,11 @@ The main window is native SwiftUI and hidden at startup. A pure Swift
 loop, `NSStatusItem` owns the tray, Sparkle owns App updates, and an in-process
 `NSHostingController` owns the dashboard window.
 
+The status item loads the exact pinned `assets/Meta.png` bytes embedded as
+`Contents/Resources/Meta.png`, renders them as an 18-point template image for
+light/dark menu bars, and uses a system symbol only as a damaged-bundle
+fallback.
+
 ## Menu
 
 ```text

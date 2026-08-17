@@ -3,7 +3,8 @@
 An open-source native macOS menu-bar controller for Mihomo.
 
 - Pure Swift/AppKit menu-bar shell with a hidden-by-default SwiftUI main window.
-- App and tray artwork is derived from Mihomo's official `Meta.png`.
+- App artwork is derived from Mihomo's official `Meta.png`; the tray embeds
+  that exact pinned artwork as its template icon.
 - The seven-page dashboard follows MetaCubeXD's information architecture and
   Sunset visual language, implemented natively with SwiftUI.
 - Tray controls include Enhanced TUN, outbound mode, proxy selection with

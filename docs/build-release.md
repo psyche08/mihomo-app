@@ -7,7 +7,7 @@
 | Sparkle | `2.9.4` | SwiftPM exact version; binary artifact checksum `cb6fdbdc8884f15d62a616e79face92b08322410fd2d425edc6596ccbf4ba3b0` |
 | MetaCubeXD visual reference | tag `v1.271.0`, commit `c4622599d0a597378729a91c3b7f76c5d9803831` | exact revision check; MIT license copied |
 | Mihomo | release `v1.19.28` | architecture-specific SHA-256 |
-| App icon | upstream Mihomo `Meta.png` | source and derived-output SHA-256 |
+| App and tray icon | upstream Mihomo `Meta.png` | source, embedded tray resource and derived-output SHA-256 |
 
 `VERSION` is the sole product-version source. SwiftPM builds the user App,
 daemon, agent and operator CLI. `scripts/build-macos-app.sh` assembles those
@@ -251,9 +251,9 @@ installed 0.7 clients have migrated.
 
 ## GitHub Release assets
 
-Release titles and descriptions are English. The four artifacts plus both
-feeds are treated as one atomic release set: do not upload a subset while DMG
-notarization, Sparkle signing or legacy compatibility is incomplete.
+Release titles and descriptions are English. The three artifacts plus two
+feeds are treated as one atomic five-file release set: do not upload a subset
+while DMG notarization, Sparkle signing or legacy compatibility is incomplete.
 
 Before uploading, freeze SHA-256 values and verify:
 

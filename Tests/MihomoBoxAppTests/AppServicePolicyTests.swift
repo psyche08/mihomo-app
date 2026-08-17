@@ -1,9 +1,44 @@
+import AppKit
 import Foundation
 import XCTest
 
 @testable import MihomoBoxApp
 
 final class AppServicePolicyTests: XCTestCase {
+  @MainActor
+  func testStatusItemIconUsesThePinnedMetaArtworkAndTemplateSizing() throws {
+    let repository = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+    let meta = repository.appendingPathComponent("assets/Meta.png")
+    var fallbackCalled = false
+
+    let artwork = try XCTUnwrap(
+      StatusItemIconLoader.load(primaryURL: meta) {
+        fallbackCalled = true
+        return nil
+      }
+    )
+
+    XCTAssertEqual(StatusItemIconLoader.resourceName, "Meta")
+    XCTAssertEqual(StatusItemIconLoader.resourceExtension, "png")
+    XCTAssertFalse(fallbackCalled)
+    XCTAssertFalse(artwork.usedFallback)
+    XCTAssertEqual(artwork.image.size, NSSize(width: 18, height: 18))
+    XCTAssertTrue(artwork.image.isTemplate)
+    XCTAssertEqual(artwork.image.accessibilityDescription, "MihomoBox")
+
+    let fallback = NSImage(size: NSSize(width: 1, height: 1))
+    let fallbackArtwork = try XCTUnwrap(
+      StatusItemIconLoader.load(primaryURL: nil) { fallback }
+    )
+    XCTAssertTrue(fallbackArtwork.usedFallback)
+    XCTAssertTrue(fallbackArtwork.image === fallback)
+    XCTAssertEqual(fallbackArtwork.image.size, NSSize(width: 18, height: 18))
+    XCTAssertTrue(fallbackArtwork.image.isTemplate)
+  }
+
   func testEnhancedTUNUsesFiveExclusiveLifecycleStates() {
     XCTAssertEqual(
       EnhancedTUNActionPolicy.resolve(

@@ -70,13 +70,20 @@ final class StatusItemController: NSObject, NSMenuDelegate, ApplicationStatusIte
 
   private func configureStatusItemButton() {
     guard let button = statusItem.button else { return }
-    let image = NSImage(
-      systemSymbolName: "network",
-      accessibilityDescription: "MihomoBox"
-    )
-    image?.isTemplate = true
-    button.image = image
+    guard let artwork = StatusItemIconLoader.load() else {
+      AppLog.error("event=tray_icon result=missing")
+      button.image = nil
+      button.title = "M"
+      button.imagePosition = .noImage
+      return
+    }
+    if artwork.usedFallback {
+      AppLog.error("event=tray_icon result=fallback")
+    }
+    button.title = ""
+    button.image = artwork.image
     button.imagePosition = .imageOnly
+    button.imageScaling = .scaleProportionallyDown
   }
 
   private func receive(_ snapshot: TraySnapshot) {
@@ -412,6 +419,51 @@ final class StatusItemController: NSObject, NSMenuDelegate, ApplicationStatusIte
       }
       service.refresh(authoritative: true)
     }
+  }
+}
+
+@MainActor
+struct StatusItemArtwork {
+  let image: NSImage
+  let usedFallback: Bool
+}
+
+@MainActor
+enum StatusItemIconLoader {
+  static let resourceName = "Meta"
+  static let resourceExtension = "png"
+  static let pointSize = NSSize(width: 18, height: 18)
+  static let accessibilityDescription = "MihomoBox"
+
+  static func load(
+    bundle: Bundle = .main,
+    fallback: () -> NSImage? = {
+      NSImage(
+        systemSymbolName: "network",
+        accessibilityDescription: StatusItemIconLoader.accessibilityDescription
+      )
+    }
+  ) -> StatusItemArtwork? {
+    load(
+      primaryURL: bundle.url(
+        forResource: resourceName,
+        withExtension: resourceExtension
+      ),
+      fallback: fallback
+    )
+  }
+
+  static func load(
+    primaryURL: URL?,
+    fallback: () -> NSImage?
+  ) -> StatusItemArtwork? {
+    let primary = primaryURL.flatMap(NSImage.init(contentsOf:))
+    let usedFallback = primary == nil
+    guard let image = primary ?? fallback() else { return nil }
+    image.size = pointSize
+    image.isTemplate = true
+    image.accessibilityDescription = accessibilityDescription
+    return StatusItemArtwork(image: image, usedFallback: usedFallback)
   }
 }
 

@@ -130,6 +130,8 @@ trap cleanup EXIT
 /usr/bin/ditto "$SPARKLE_FRAMEWORK" "$STAGING_APP/Contents/Frameworks/Sparkle.framework"
 /usr/bin/install -m 0644 "$ROOT/Resources/AppIcon/icon.icns" \
   "$STAGING_APP/Contents/Resources/AppIcon.icns"
+/usr/bin/install -m 0644 "$ROOT/assets/Meta.png" \
+  "$STAGING_APP/Contents/Resources/Meta.png"
 
 /usr/bin/install -m 0755 "$ROOT/scripts/install-daemon.sh" \
   "$STAGING_APP/Contents/Resources/scripts/install-daemon.sh"

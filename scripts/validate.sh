@@ -89,6 +89,8 @@ MIHOMO_AGENT_BINARY="$ROOT/.build/release/mihomo-agent" Tests/e2e.sh
 APP="$ROOT/build/MihomoBox.app"
 INFO="$APP/Contents/Info.plist"
 MANIFEST="$APP/Contents/Resources/BuildManifest.plist"
+PROVENANCE="$ROOT/build/MihomoBox-$VERSION-unsigned-bundle.sha256"
+TRAY_ICON="$APP/Contents/Resources/Meta.png"
 test -d "$APP"
 for executable in mihomo-app mihomo mihomo-daemon mihomo-agent mihomoboxctl; do
   test -x "$APP/Contents/MacOS/$executable"
@@ -133,6 +135,13 @@ test -f "$APP/Contents/Resources/daemon/dev.linsheng.mihomo.daemon.plist"
 test -f "$APP/Contents/Resources/licenses/Mihomo.LICENSE"
 test -f "$APP/Contents/Resources/licenses/MetaCubeXD.LICENSE"
 test -f "$APP/Contents/Resources/licenses/Sparkle.LICENSE"
+test -f "$TRAY_ICON"
+test ! -L "$TRAY_ICON"
+test "$(/usr/bin/stat -f '%Lp' "$TRAY_ICON")" = "644"
+/usr/bin/cmp -s assets/Meta.png "$TRAY_ICON"
+/usr/bin/grep -Fq \
+  $'F\t644\t0dc1c7df03c02ac34ea60b7b169020648abdc6e199627c2e1276d337249289c8\tContents/Resources/Meta.png' \
+  "$PROVENANCE"
 test ! -e "$APP/Contents/Resources/index.html"
 test ! -d "$APP/Contents/Resources/ui-dist"
 test "$(/usr/libexec/PlistBuddy -c 'Print :Label' \
