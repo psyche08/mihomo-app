@@ -132,6 +132,13 @@ automatically when its process exits. Repair also refuses to replace files while
 the pending transaction is absent, and only then snapshots the stable rollback
 source.
 
+The 0.8.1 and 0.8.2 installers incorrectly inspected the opened lock through
+the `/dev/fd` pathname, whose macOS device number differs from the underlying
+file. They can therefore report `privileged mutation lock changed while
+opening` before taking the kernel lock or changing installed components or
+networking. Do not delete the persistent lock file or modify the signed App
+bundle. Use a signed 0.8.3-or-later App to retry Install / Repair.
+
 Sparkle performs automatic signed update checks from the Swift user process.
 It verifies the signed appcast, the enclosure's EdDSA signature, Apple code
 signature, and notarization chain before atomically replacing the App and

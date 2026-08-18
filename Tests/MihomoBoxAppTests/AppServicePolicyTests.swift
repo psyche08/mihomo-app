@@ -485,6 +485,12 @@ final class AppServicePolicyTests: XCTestCase {
     XCTAssertTrue(installer.contains("/usr/bin/lockf -s -t 0 9"))
     XCTAssertTrue(installer.contains("exec 9<>\"$INSTALL_LOCK\""))
     XCTAssertTrue(
+      installer.contains(
+        "fd_identity=\"$(/usr/bin/stat -f '%d:%i:%u:%g:%Lp' <&9)\""
+      )
+    )
+    XCTAssertFalse(installer.contains("/usr/bin/stat -f '%d:%i' /dev/fd/9"))
+    XCTAssertTrue(
       installer.contains("COMPONENT_PENDING=\"$APP_SUPPORT/component-update-pending.plist\""))
     XCTAssertTrue(
       installer.contains("component update recovery must finish before installer repair"))

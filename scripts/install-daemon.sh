@@ -381,9 +381,13 @@ acquire_install_lock() {
     return 1
   }
   exec 9<>"$INSTALL_LOCK"
-  lock_identity="$(/usr/bin/stat -f '%d:%i' "$INSTALL_LOCK")"
-  fd_identity="$(/usr/bin/stat -f '%d:%i' /dev/fd/9)"
-  [[ "$lock_identity" == "$fd_identity" ]] || {
+  lock_identity="$(/usr/bin/stat -f '%d:%i:%u:%g:%Lp' "$INSTALL_LOCK")"
+  # stat(1) treats /dev/fd/9 as a devfs vnode, whose st_dev differs from the
+  # opened file even when its inode is identical. With no pathname stat(1)
+  # calls fstat(2) on stdin, so redirect stdin from fd 9 to compare the real
+  # opened descriptor against the path without weakening the device check.
+  fd_identity="$(/usr/bin/stat -f '%d:%i:%u:%g:%Lp' <&9)"
+  [[ "$lock_identity" == "$fd_identity" && "$fd_identity" == *":0:0:600" ]] || {
     exec 9>&-
     echo "privileged mutation lock changed while opening" >&2
     return 1
