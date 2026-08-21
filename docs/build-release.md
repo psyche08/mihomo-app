@@ -40,6 +40,94 @@ runs Swift and shell tests, builds the bundle through
 `scripts/build-macos-app.sh`, and performs structural checks on the final App.
 It never installs the LaunchDaemon and never changes the current network.
 
+## Operator release orchestration
+
+`scripts/release-product.zsh` is the operator-only release entry point. Because
+its `fresh` mode invokes `scripts/validate.sh`, an agent must never run this
+script: an agent may edit or statically inspect it, then give the exact command
+to the operator to run in a normal Terminal outside the sandbox. The wrapper
+does not unlock Keychain Access; an unavailable signing identity remains an
+operator-controlled prerequisite and fails closed.
+
+Start a new release from a clean, non-detached branch whose upstream is the
+same commit as `HEAD`:
+
+```bash
+./scripts/release-product.zsh fresh
+```
+
+The default result is a draft GitHub Release. `fresh` validates and compiles
+once, verifies that `BuildManifest.plist` records the same full source commit
+with `SourceDirty=false`, signs and notarizes the prebuilt App, freezes the five
+formal assets, creates an annotated `vX.Y.Z` tag, atomically pushes the exact
+commit to `main` together with that tag, and uploads only to the release ID
+bound in local state. The five-asset set is exactly:
+
+```text
+MihomoBox-X.Y.Z-macos-arm64.app.tar.gz
+MihomoBox-X.Y.Z-macos-arm64.app.tar.gz.sig
+MihomoBox-X.Y.Z-macos-arm64.dmg
+latest.json
+appcast.xml
+```
+
+The wrapper uses non-empty `NOTARY_TEAM_ID`, `NOTARY_APPLE_ID`, and
+`NOTARY_PASSWORD` values from the operator environment as-is; it prompts only
+for a missing value, and the password is the Apple app-specific password. It
+does not request the Mac login or Keychain password and never unlocks a
+Keychain. GitHub authentication comes from the normal `gh` credential store or
+`GH_TOKEN` (an inherited `GITHUB_TOKEN` is normalized to `GH_TOKEN` only for the
+GitHub phase).
+
+Every asset name, byte length and SHA-256 digest is frozen in
+`release-assets.tsv` and verified against GitHub. An existing remote asset with
+a different size or digest stops the release; the workflow never uses
+`--clobber`, deletes an asset, chooses the first draft, or mutates a release by
+an unbound tag or URL.
+
+Resume the same version and full commit after inspecting the previous log:
+
+```bash
+./scripts/release-product.zsh resume
+```
+
+State lives under
+`dist/.release-state/X.Y.Z-FULL_SOURCE_COMMIT/`, while
+`dist/.release-state/release-product.lock` and
+`dist/.release-state/release.lock` serialize product and signing operations
+across every version. Before `release-assets.tsv` exists, `resume` delegates to
+`release-macos.sh --resume` and retains the existing signed-App and
+notarization bindings. Once that asset manifest exists, the artifacts are
+immutable: `resume` skips validation and `release-macos.sh` completely and only
+reconciles the state-bound GitHub draft, release ID and five remote digests.
+Never delete state to force `fresh`.
+
+After signed-machine acceptance, publish only the exact frozen draft using the
+full confirmation printed by the wrapper:
+
+```bash
+./scripts/release-product.zsh publish \
+  --confirm vX.Y.Z@FULL_SOURCE_COMMIT
+```
+
+For an explicitly approved release that does not require a separate acceptance
+pause, publication may be requested in the initial operator run:
+
+```bash
+./scripts/release-product.zsh fresh --publish \
+  --confirm vX.Y.Z@FULL_SOURCE_COMMIT
+```
+
+Both publication forms re-read the exact numeric GitHub `release_id`, tag,
+commit and all five remote digests before making that release public and latest.
+The ordinary `fresh` and `resume` forms never publish.
+
+Version `0.8.2` is already public. Version `0.8.3` is a separate repair release
+for its installer-lock regression: it uses its own source commit, annotated
+tag, state directory, notarization submissions and five assets. Preparing or
+publishing `0.8.3` must not delete, resume, replace, upload to, or otherwise
+alter any `0.8.2` state or GitHub assets.
+
 The bundle gate must find exactly these product executables:
 
 ```text

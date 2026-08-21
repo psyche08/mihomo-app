@@ -254,19 +254,70 @@ PUBLISHED_070_ARCHIVE_SHA256="37a5ea188e7c95ef2e45768193c11c6a2cdd40f672135b613f
 PUBLISHED_070_DEVELOPER_ID_LEAF_SHA1="2E1EF531C972A15F5B5C58855001FA6FA1186383"
 PUBLISHED_080_ARCHIVE_SHA256="d04c8b432e39df1f2f66ed547f828c95fb490f7ff03c8719bbcbbcff25309c9b"
 PUBLISHED_080_SPARKLE_PUBLIC_ED_KEY="CL5i36xBB93GX8INJAcBAVFreeVys28Vu94mgAgTA00="
-RELEASE_LOCK_DIR="$RELEASE_STATE_DIR/release.lock"
+if [[ "$RELEASE_STATE_DIR" != /* ]]; then
+  echo "RELEASE_STATE_DIR must be absolute" >&2
+  exit 1
+fi
+if [[ -n "${RELEASE_LOCK_DIR:-}" ]]; then
+  EXPECTED_SHARED_RELEASE_LOCK_DIR="$(/usr/bin/dirname "$RELEASE_STATE_DIR")/release.lock"
+  if [[ "$RELEASE_LOCK_DIR" != "$EXPECTED_SHARED_RELEASE_LOCK_DIR" ]]; then
+    echo "RELEASE_LOCK_DIR must be the release-state sibling lock: $EXPECTED_SHARED_RELEASE_LOCK_DIR" >&2
+    exit 1
+  fi
+else
+  RELEASE_LOCK_DIR="$RELEASE_STATE_DIR/release.lock"
+fi
 RELEASE_LOCK_TOKEN=""
 SIGNED_APP_STATE="$RELEASE_STATE_DIR/MihomoBox-$VERSION-signed-app.json"
 
 release_lock_cleanup() {
   local recorded_token=""
+  local actual_entries=""
+  local expected_entries=""
+  local metadata=""
   if [[ -n "$RELEASE_LOCK_TOKEN" && -d "$RELEASE_LOCK_DIR" &&
     ! -L "$RELEASE_LOCK_DIR" ]]; then
+    for metadata in pid host started_at token; do
+      if [[ ! -f "$RELEASE_LOCK_DIR/$metadata" || -L "$RELEASE_LOCK_DIR/$metadata" ]]; then
+        echo "release lock contains unsafe metadata; preserving it for inspection: $RELEASE_LOCK_DIR" >&2
+        return 0
+      fi
+    done
     recorded_token="$(/bin/cat "$RELEASE_LOCK_DIR/token" 2>/dev/null || true)"
     if [[ "$recorded_token" == "$RELEASE_LOCK_TOKEN" ]]; then
-      /bin/rm -rf -- "$RELEASE_LOCK_DIR"
+      if ! actual_entries="$(
+        /usr/bin/find "$RELEASE_LOCK_DIR" -mindepth 1 -maxdepth 1 -print |
+          LC_ALL=C /usr/bin/sort
+      )"; then
+        echo "release lock could not be inspected; preserving it: $RELEASE_LOCK_DIR" >&2
+        return 0
+      fi
+      expected_entries="$(
+        /usr/bin/printf '%s\n' \
+          "$RELEASE_LOCK_DIR/host" \
+          "$RELEASE_LOCK_DIR/pid" \
+          "$RELEASE_LOCK_DIR/started_at" \
+          "$RELEASE_LOCK_DIR/token" |
+          LC_ALL=C /usr/bin/sort
+      )"
+      if [[ "$actual_entries" != "$expected_entries" ]]; then
+        echo "release lock contains unexpected entries; preserving it for inspection: $RELEASE_LOCK_DIR" >&2
+        return 0
+      fi
+      if ! /bin/rm -f -- \
+        "$RELEASE_LOCK_DIR/host" \
+        "$RELEASE_LOCK_DIR/pid" \
+        "$RELEASE_LOCK_DIR/started_at" \
+        "$RELEASE_LOCK_DIR/token"; then
+        echo "release lock metadata could not be removed; preserving the lock: $RELEASE_LOCK_DIR" >&2
+        return 0
+      fi
+      if ! /bin/rmdir -- "$RELEASE_LOCK_DIR"; then
+        echo "release lock directory could not be removed; preserving it: $RELEASE_LOCK_DIR" >&2
+      fi
     fi
   fi
+  return 0
 }
 
 acquire_release_lock() {
@@ -274,7 +325,7 @@ acquire_release_lock() {
   local owner_host="unknown"
   local owner_started="unknown"
   /bin/mkdir -p "$RELEASE_STATE_DIR"
-  if ! /bin/mkdir "$RELEASE_LOCK_DIR" 2>/dev/null; then
+  if ! /bin/mkdir -- "$RELEASE_LOCK_DIR" 2>/dev/null; then
     if [[ -L "$RELEASE_LOCK_DIR" || ! -d "$RELEASE_LOCK_DIR" ]]; then
       echo "release lock path is unsafe: $RELEASE_LOCK_DIR" >&2
       exit 1

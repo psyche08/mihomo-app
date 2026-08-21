@@ -47,6 +47,7 @@ env \
   /usr/bin/swift test --disable-sandbox
 /bin/bash Tests/test_release_common.sh
 /bin/bash Tests/test_installer_lock.sh
+/bin/bash Tests/test_release_product.sh
 /bin/bash -n scripts/*.sh Tests/e2e.sh
 /usr/bin/plutil -lint deploy/dev.linsheng.mihomo.daemon.plist
 test "$(/usr/libexec/PlistBuddy -c 'Print :RunAtLoad' \
