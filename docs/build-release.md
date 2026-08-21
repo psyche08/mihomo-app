@@ -49,8 +49,10 @@ to the operator to run in a normal Terminal outside the sandbox. The wrapper
 does not unlock Keychain Access; an unavailable signing identity remains an
 operator-controlled prerequisite and fails closed.
 
-Start a new release from a clean, non-detached branch whose upstream is the
-same commit as `HEAD`:
+Start a new acceptance-gated release from a clean, committed, non-detached
+branch. The wrapper refreshes `origin/main`, requires it to be an ancestor of
+`HEAD`, and the GitHub phase atomically advances main together with the tag; an
+intermediate feature-branch push is not required:
 
 ```bash
 ./scripts/release-product.zsh fresh
@@ -122,6 +124,25 @@ Both publication forms re-read the exact numeric GitHub `release_id`, tag,
 commit and all five remote digests before making that release public and latest.
 The ordinary `fresh` and `resume` forms never publish.
 
+For a deliberate one-command public release, use:
+
+```bash
+./scripts/release-product.zsh ship
+```
+
+`ship` computes the exact `vX.Y.Z@FULL_SOURCE_COMMIT` confirmation from the
+clean committed checkout, then runs the same validation/compilation,
+signing/notarization, immutable GitHub upload and publication phases. It does
+not bypass any artifact, remote-main, tag, digest or release-ID gate.
+
+Release inputs are version-independent. The wrapper uses the audited Sparkle
+tool digests checked into `scripts/release-product.zsh`, tools under
+`build/release-inputs/`, and private keys under the operator-owned ignored
+paths documented below. A new `VERSION` does not require creating or editing a
+`release-X.Y.Z.env` file. The Developer ID Application identity is selected by
+`NOTARY_TEAM_ID`; when the team has multiple valid identities,
+`CODESIGN_IDENTITY_FINGERPRINT` must still resolve the ambiguity.
+
 Version `0.8.2` is already public. Version `0.8.3` is a separate repair release
 for its installer-lock regression: it uses its own source commit, annotated
 tag, state directory, notarization submissions and five assets. Preparing or
@@ -190,13 +211,15 @@ matching external manifest with `--provenance`. Sparkle helpers/framework,
 same Developer ID Application leaf.
 Do not use `codesign --deep` to sign; use it only for final verification.
 
-The release environment supplies:
+The release pipeline uses these operator credentials and fixed audited inputs.
+The wrapper derives the fixed paths/pins automatically; only the credential
+variables and an optional disambiguating identity fingerprint are inherited:
 
 ```text
 NOTARY_TEAM_ID
 NOTARY_APPLE_ID
 NOTARY_PASSWORD
-CODESIGN_IDENTITY_FINGERPRINT (optional when the team has exactly one identity)
+CODESIGN_IDENTITY_FINGERPRINT (optional; required only when the team has multiple identities)
 SPARKLE_DISTRIBUTION_ROOT
 SPARKLE_ED_KEY_PATH
 SPARKLE_GENERATE_APPCAST_SHA256

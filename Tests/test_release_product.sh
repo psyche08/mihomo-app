@@ -62,10 +62,12 @@ done
 require_literal "$PRODUCT" "Operator entry point for a complete MihomoBox release"
 require_literal "$PRODUCT" 'readonly VALIDATE_SCRIPT="$ROOT/scripts/validate.sh"'
 require_literal "$PRODUCT" '/bin/bash "$VALIDATE_SCRIPT"'
-require_literal "$PRODUCT" 'fresh)'
+require_literal "$PRODUCT" 'fresh|ship)'
 require_literal "$PRODUCT" 'run_validate'
 require_literal "$PRODUCT" 'verify_validated_app'
 require_literal "$PRODUCT" 'run_release'
+require_literal "$PRODUCT" 'if [[ "$MODE" == "ship" ]]; then'
+require_literal "$PRODUCT" 'CONFIRMATION="$EXPECTED_CONFIRMATION"'
 reject_regex "$PRODUCT" '(/usr/bin/)?(swift|xcodebuild)([[:space:]]|$)|build-macos-app\.sh'
 reject_regex "$PRODUCT" '(/usr/bin/)?codesign([[:space:]]|$)|notarytool([[:space:]]|$)'
 
@@ -104,15 +106,21 @@ require_literal "$RELEASE_MACOS" \
   '/bin/rmdir -- "$RELEASE_LOCK_DIR"'
 reject_literal "$RELEASE_MACOS" '/bin/rm -rf -- "$RELEASE_LOCK_DIR"'
 
-# The ignored release environment is parsed as allowlisted data. It is never
-# sourced or evaluated as shell code.
+# Release tools and key paths are stable across product versions. The wrapper
+# derives them from ROOT/HOME and keeps audited tool digests in source, so a new
+# VERSION never requires editing or checksumming release-X.Y.Z.env.
 require_literal "$PRODUCT" \
-  'while IFS= read -r environment_line || [[ -n "$environment_line" ]]; do'
-require_literal "$PRODUCT" 'allowed_release_variables=('
-require_literal "$PRODUCT" 'release input environment checksum changed'
+  'readonly RELEASE_INPUT_ROOT="$ROOT/build/release-inputs"'
+require_literal "$PRODUCT" \
+  'readonly DEFAULT_SPARKLE_ED_KEY_PATH="${HOME:-}/.config/mihomobox/sparkle-private-ed25519.b64"'
+require_literal "$PRODUCT" \
+  'export LEGACY_MINISIGN="$DEFAULT_LEGACY_MINISIGN"'
+require_literal "$PRODUCT" \
+  'export SPARKLE_DISTRIBUTION_ROOT="$DEFAULT_SPARKLE_DISTRIBUTION_ROOT"'
+require_literal "$PRODUCT" \
+  'export SPARKLE_GENERATE_APPCAST_SHA256="$AUDITED_SPARKLE_GENERATE_APPCAST_SHA256"'
+reject_literal "$PRODUCT" 'release-0.8.0.env'
 reject_regex "$PRODUCT" '^[[:space:]]*(source|eval)([[:space:]]|$)'
-reject_regex "$PRODUCT" \
-  '^[[:space:]]*\.[[:space:]].*(RELEASE_ENV|release-0\.8\.0\.env)'
 
 # Non-empty operator-provided notarization values are restored directly. Only
 # an empty value is prompted for, and the password prompt remains hidden.
@@ -128,6 +136,10 @@ require_literal "$PRODUCT" \
   'typeset SAVED_GH_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"'
 require_literal "$PRODUCT" 'typeset +x SAVED_GH_TOKEN'
 require_literal "$PRODUCT" 'typeset +x PRODUCT_LOCK_TOKEN'
+require_literal "$PRODUCT" \
+  'typeset SAVED_CODESIGN_IDENTITY_FINGERPRINT="${CODESIGN_IDENTITY_FINGERPRINT:-}"'
+require_literal "$PRODUCT" \
+  'export CODESIGN_IDENTITY_FINGERPRINT="$SAVED_CODESIGN_IDENTITY_FINGERPRINT"'
 require_literal "$PRODUCT" 'clear_release_environment() {'
 require_literal "$GITHUB_HELPER" \
   'unset NOTARY_TEAM_ID NOTARY_APPLE_ID NOTARY_PASSWORD'
@@ -212,6 +224,15 @@ reject_literal "$GITHUB_HELPER" 'push --tags'
 reject_literal "$GITHUB_HELPER" '--clobber'
 reject_regex "$GITHUB_HELPER" \
   '(^|[[:space:]])(release|asset)[[:space:]]+delete([[:space:]]|$)|--method[[:space:]]+DELETE'
+
+# A clean committed release branch may be ahead of main without first pushing
+# an intermediate branch. Both wrappers refresh origin/main and require it to
+# be an ancestor; the GitHub helper later atomically pushes HEAD and the tag.
+for path in "$PRODUCT" "$GITHUB_HELPER"; do
+  require_literal "$path" \
+    "'refs/heads/main:refs/remotes/origin/main'"
+  reject_literal "$path" 'current upstream must equal HEAD'
+done
 
 # Publication requires the exact version@commit confirmation and PATCHes only
 # the state-bound release ID after all five remote digests were verified.

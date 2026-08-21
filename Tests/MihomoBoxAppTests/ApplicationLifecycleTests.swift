@@ -6,6 +6,47 @@ import XCTest
 
 @MainActor
 final class ApplicationLifecycleTests: XCTestCase {
+  func testVersionMenuUsesBundleShortVersion() throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("mihomobox-version-\(UUID().uuidString).bundle")
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let info: [String: Any] = [
+      "CFBundleIdentifier": "dev.linsheng.mihomo-app.version-tests",
+      "CFBundlePackageType": "BNDL",
+      "CFBundleShortVersionString": "0.8.3",
+    ]
+    let data = try PropertyListSerialization.data(
+      fromPropertyList: info,
+      format: .xml,
+      options: 0
+    )
+    try data.write(to: root.appendingPathComponent("Info.plist"))
+    let bundle = try XCTUnwrap(Bundle(url: root))
+
+    XCTAssertEqual(AppVersionMenuPolicy.title(bundle: bundle), "Version 0.8.3")
+  }
+
+  func testVersionMenuFailsClosedWhenBundleVersionIsMissing() throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("mihomobox-version-missing-\(UUID().uuidString).bundle")
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let info: [String: Any] = [
+      "CFBundleIdentifier": "dev.linsheng.mihomo-app.version-tests.missing",
+      "CFBundlePackageType": "BNDL",
+    ]
+    let data = try PropertyListSerialization.data(
+      fromPropertyList: info,
+      format: .xml,
+      options: 0
+    )
+    try data.write(to: root.appendingPathComponent("Info.plist"))
+    let bundle = try XCTUnwrap(Bundle(url: root))
+
+    XCTAssertEqual(AppVersionMenuPolicy.title(bundle: bundle), "Version unavailable")
+  }
+
   func testStartAndTearDownAreIdempotentAndLeaveManagedAgentAlone() {
     let service = LifecycleTrayService()
     let coordinator = LifecycleCoordinator(trayService: service)

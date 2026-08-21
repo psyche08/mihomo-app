@@ -364,6 +364,14 @@ public enum MihomoRuntimeInspector {
         )) != nil
     }
 
+    /// Re-probes only the loopback system-DNS bridge after the alias has been
+    /// repaired. A full runtime inspection would repeat controller, route and
+    /// both DNS probes, turning a bounded DNS repair into several unrelated
+    /// network operations on the consistency queue.
+    static func systemDNSBridgeResponds(configuration: ProxyConfiguration) -> Bool {
+        dnsEndpointResponds(endpoint: configuration.systemDNSListen)
+    }
+
     private static func controllerConfiguration(
         configuration: ProxyConfiguration
     ) -> (reachable: Bool, tunEnabled: Bool, mode: String) {
@@ -516,6 +524,34 @@ enum DNSAcquisitionDecision: Equatable {
     case reacquireBridge
     case manage
     case maintain
+}
+
+enum DNSAcquisitionAttemptResult: Equatable {
+    case bridgeUnavailable
+    case managed
+}
+
+/// Executes one bounded system-DNS acquisition attempt.
+///
+/// A rollback can remove the loopback alias, so an acquisition may begin with
+/// a failed bridge probe. Repairing the alias and deferring the second probe to
+/// the next two-second observer tick creates a latch when the bridge flaps
+/// between ticks. The repair, bridge re-probe and System Configuration write
+/// therefore belong to one transaction.
+struct DNSAcquisitionAttempt {
+    static func run(
+        reprobeBridge: Bool,
+        ensureAlias: () throws -> Void,
+        bridgeReady: () -> Bool,
+        applyDNS: () throws -> Void
+    ) throws -> DNSAcquisitionAttemptResult {
+        try ensureAlias()
+        if reprobeBridge, !bridgeReady() {
+            return .bridgeUnavailable
+        }
+        try applyDNS()
+        return .managed
+    }
 }
 
 /// Decides whether the observer should (re)take ownership of system DNS.
@@ -739,23 +775,42 @@ public final class NetworkConsistencyController: @unchecked Sendable {
         let networkOwned = ((try? globalDNS.isApplied()) == true)
             || globalDNS.isEffective()
             || globalDNS.hasManagedBackup()
+        var bridgeReadyForPolicies = before.dnsBridgeReady
         var changed = false
         var action = "observe"
-        switch acquisitionPolicy.decide(
+        let acquisitionDecision = acquisitionPolicy.decide(
             upstreamRuntimeReady: upstreamRuntimeReady,
             dnsBridgeReady: before.dnsBridgeReady,
             systemDNSManaged: before.systemDNSManaged,
             nowNanoseconds: DispatchTime.now().uptimeNanoseconds
-        ) {
+        )
+        switch acquisitionDecision {
         case .none:
             break
-        case .manage:
+        case .manage, .reacquireBridge:
             do {
-                try aliasManager.ensure()
-                try globalDNS.apply()
-                acquisitionPolicy.recordManageSucceeded()
-                action = "manage_dns"
-                changed = true
+                let result = try DNSAcquisitionAttempt.run(
+                    reprobeBridge: acquisitionDecision == .reacquireBridge,
+                    ensureAlias: { try aliasManager.ensure() },
+                    bridgeReady: {
+                        MihomoRuntimeInspector.systemDNSBridgeResponds(
+                            configuration: configuration
+                        )
+                    },
+                    applyDNS: { try globalDNS.apply() }
+                )
+                switch result {
+                case .bridgeUnavailable:
+                    action = "reacquire_dns_bridge"
+                    changed = true
+                case .managed:
+                    acquisitionPolicy.recordManageSucceeded()
+                    bridgeReadyForPolicies = true
+                    action = acquisitionDecision == .reacquireBridge
+                        ? "reacquire_dns_bridge_and_manage_dns"
+                        : "manage_dns"
+                    changed = true
+                }
             } catch {
                 acquisitionPolicy.recordManageFailed(
                     nowNanoseconds: DispatchTime.now().uptimeNanoseconds
@@ -772,18 +827,6 @@ public final class NetworkConsistencyController: @unchecked Sendable {
                 action = "manage_dns_failed"
                 changed = true
             }
-        case .reacquireBridge:
-            // A prior rollback removed the loopback alias, so the system-DNS
-            // bridge stopped answering and left the observer unable to
-            // re-manage. Re-ensure the alias (never touches system DNS) so the
-            // bridge answers again and the next tick can re-take ownership.
-            do {
-                try aliasManager.ensure()
-                action = "reacquire_dns_bridge"
-                changed = true
-            } catch {
-                ServiceLog.error("event=network_transition_failed action=repair_loopback_alias")
-            }
         case .maintain:
             do {
                 try aliasManager.ensure()
@@ -794,7 +837,7 @@ public final class NetworkConsistencyController: @unchecked Sendable {
 
         let bridgeDecision = chargeFailures
             ? bridgeFailurePolicy.decide(
-                bridgeReady: before.dnsBridgeReady,
+                bridgeReady: bridgeReadyForPolicies,
                 upstreamRuntimeReady: upstreamRuntimeReady,
                 networkOwned: networkOwned
             )

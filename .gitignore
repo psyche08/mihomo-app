@@ -6,6 +6,7 @@
 /.pnpm-store/
 /ui-dist/
 /dist/
+/.local/
 __pycache__/
 *.pyc
 .DS_Store

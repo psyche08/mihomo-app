@@ -58,7 +58,6 @@ typeset VERSION=''
 typeset TAG=''
 typeset HEAD_SHA=''
 typeset BRANCH_REF=''
-typeset UPSTREAM_REF=''
 typeset GH_BIN=''
 
 typeset MANIFEST_FILE=''
@@ -368,7 +367,7 @@ validate_origin_repository() {
 derive_repository_state() {
   local version_text=''
   local worktree_changes=''
-  local upstream_sha=''
+  local remote_main_sha=''
 
   require_safe_regular_file "$ROOT/VERSION" "VERSION"
   version_text="$(/usr/bin/tr -d '[:space:]' < "$ROOT/VERSION")"
@@ -389,16 +388,13 @@ derive_repository_state() {
   worktree_changes="$(/usr/bin/git -C "$ROOT" status --porcelain=v1 --untracked-files=all)"
   [[ -z "$worktree_changes" ]] || die "working tree must be clean"
 
-  UPSTREAM_REF="$(/usr/bin/git -C "$ROOT" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}')" ||
-    die "current branch must have an upstream"
-  [[ "$UPSTREAM_REF" == */* ]] || die "current upstream must be a remote-tracking branch"
-  upstream_sha="$(/usr/bin/git -C "$ROOT" rev-parse --verify '@{upstream}^{commit}')" ||
-    die "could not resolve current upstream"
-  [[ "$upstream_sha" == "$HEAD_SHA" ]] || die "current upstream must equal HEAD"
-
-  /usr/bin/git -C "$ROOT" show-ref --verify --quiet refs/remotes/origin/main ||
-    die "origin/main is not available locally"
-  /usr/bin/git -C "$ROOT" merge-base --is-ancestor refs/remotes/origin/main "$HEAD_SHA" ||
+  /usr/bin/git -C "$ROOT" fetch --no-tags origin \
+    'refs/heads/main:refs/remotes/origin/main' >/dev/null ||
+    die "could not refresh origin/main"
+  remote_main_sha="$(
+    /usr/bin/git -C "$ROOT" rev-parse --verify 'refs/remotes/origin/main^{commit}'
+  )" || die "could not resolve origin/main"
+  /usr/bin/git -C "$ROOT" merge-base --is-ancestor "$remote_main_sha" "$HEAD_SHA" ||
     die "origin/main must be an ancestor of HEAD"
 
   validate_origin_repository

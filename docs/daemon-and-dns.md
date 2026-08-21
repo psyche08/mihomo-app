@@ -126,6 +126,15 @@ loopback DNS bridge serves real upstream answers only for domains explicitly
 outside Fake-IP management; managed domains fail closed. Only a failed recovery
 rolls back system DNS and stops the child.
 
+If a rollback removed the loopback alias, reacquisition is one bounded
+observer transaction: re-create the alias, immediately re-probe the system-DNS
+bridge, and, when it answers, reapply the current PrimaryService's persistent
+and dynamic DNS before returning. It never defers a successful repaired bridge
+to a later timer tick. When the bridge is still unavailable, the independent
+two-second observer retries; a System Configuration callback requests the same
+evaluation immediately. This prevents sleep/wake bridge flapping from latching
+the machine indefinitely with healthy Mihomo/TUN but unmanaged system DNS.
+
 When the persistent service DNS value already matches but the PrimaryService's
 dynamic DNS value is absent, the agent reapplies preferences and republishes
 the service value. Persistent and dynamic dictionaries for the previous service

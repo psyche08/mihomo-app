@@ -3,12 +3,17 @@
 # Operator entry point for a complete MihomoBox release. This wrapper is the
 # only layer that may invoke validation (and therefore compilation), the
 # prebuilt-App release pipeline, and the GitHub draft-release helper in one
-# run. Publication always requires an exact version-and-commit confirmation.
+# run. `ship` is the deliberate one-command path that validates, compiles,
+# signs, notarizes, uploads and publishes the current VERSION/HEAD. The staged
+# fresh/resume/publish modes remain available for acceptance-gated releases.
 
 emulate -LR zsh
 unsetopt XTRACE VERBOSE
 setopt ERR_EXIT NO_UNSET PIPE_FAIL
 umask 077
+
+typeset SAVED_CODESIGN_IDENTITY_FINGERPRINT="${CODESIGN_IDENTITY_FINGERPRINT:-}"
+typeset +x SAVED_CODESIGN_IDENTITY_FINGERPRINT
 
 unset BASH_ENV ENV SHELLOPTS BASHOPTS PS4 CDPATH MINISIGN_PASSWORD
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY
@@ -53,7 +58,6 @@ typeset SAVED_NOTARY_PASSWORD="${NOTARY_PASSWORD:-}"
 typeset +x SAVED_NOTARY_TEAM_ID SAVED_NOTARY_APPLE_ID SAVED_NOTARY_PASSWORD
 unset NOTARY_TEAM_ID NOTARY_APPLE_ID NOTARY_PASSWORD
 
-readonly EXPECTED_RELEASE_ENV_SHA256="3d25c562efdb5f720c044aee0a82611b64015e077cad10c6eadd2dac6a4a3b40"
 readonly PROGRAM_NAME="${0:t}"
 
 fail() {
@@ -63,7 +67,7 @@ fail() {
 
 usage() {
   print -u2 -- \
-    "usage: $PROGRAM_NAME fresh|resume|publish [--notes FILE] [--publish --confirm vX.Y.Z@FULL_SHA]"
+    "usage: $PROGRAM_NAME fresh|resume|publish|ship [--notes FILE] [--publish --confirm vX.Y.Z@FULL_SHA]"
   print -u2 -- \
     "       $PROGRAM_NAME publish --confirm vX.Y.Z@FULL_SHA"
   exit 2
@@ -73,7 +77,7 @@ usage() {
 readonly MODE="$1"
 shift
 case "$MODE" in
-  fresh|resume|publish) ;;
+  fresh|resume|publish|ship) ;;
   *) usage ;;
 esac
 
@@ -108,7 +112,10 @@ while (( $# > 0 )); do
   esac
 done
 
-if [[ "$MODE" == "publish" ]]; then
+if [[ "$MODE" == "ship" ]]; then
+  PUBLISH_REQUESTED=1
+  [[ -z "$CONFIRMATION" ]] || fail "ship computes the exact confirmation; do not pass --confirm"
+elif [[ "$MODE" == "publish" ]]; then
   PUBLISH_REQUESTED=1
   [[ -z "$NOTES" ]] || fail "publish mode does not prepare or change release notes"
   [[ -n "$CONFIRMATION" ]] || fail "publish mode requires --confirm"
@@ -123,10 +130,22 @@ readonly ROOT="${SCRIPT_PATH:h:h}"
 readonly VALIDATE_SCRIPT="$ROOT/scripts/validate.sh"
 readonly RELEASE_SCRIPT="$ROOT/scripts/release-macos.sh"
 readonly GITHUB_SCRIPT="$ROOT/scripts/release-github.zsh"
-readonly RELEASE_ENV="$ROOT/build/release-inputs/release-0.8.0.env"
 readonly DIST_ROOT="$ROOT/dist"
 readonly STATE_ROOT="$DIST_ROOT/.release-state"
 readonly PRODUCT_LOCK="$STATE_ROOT/release-product.lock"
+
+# Stable, version-independent release inputs. Their expected tool digests are
+# audited in source; private keys remain in ignored/operator-owned locations.
+# A new product version must never require editing a release environment file.
+readonly RELEASE_INPUT_ROOT="$ROOT/build/release-inputs"
+readonly DEFAULT_SPARKLE_DISTRIBUTION_ROOT="$RELEASE_INPUT_ROOT/Sparkle-2.9.4"
+readonly DEFAULT_SPARKLE_ED_KEY_PATH="${HOME:-}/.config/mihomobox/sparkle-private-ed25519.b64"
+readonly DEFAULT_SPARKLE_SIGNATURE_VERIFIER="$RELEASE_INPUT_ROOT/verify-sparkle-ed25519"
+readonly DEFAULT_LEGACY_MINISIGN="$RELEASE_INPUT_ROOT/minisign-0.12/bin/minisign"
+readonly DEFAULT_LEGACY_UPDATER_PRIVATE_KEY_FILE="$RELEASE_INPUT_ROOT/legacy-minisign.key"
+readonly AUDITED_SPARKLE_GENERATE_APPCAST_SHA256="d70b1872fb6a859695f8abc0a403301d151d1c6c83cf427f4a2716c37a48983d"
+readonly AUDITED_SPARKLE_SIGN_UPDATE_SHA256="bfb52400c3da18bb4c251ac4818c2c2e1e31c2e649a45b31c11109b6e57b34ad"
+readonly AUDITED_SPARKLE_SIGNATURE_VERIFIER_SHA256="d35e471db39dfd3ab98dddff3c2b16ba2fed27fc131b85806f7087f319f2d530"
 
 [[ -f "$ROOT/VERSION" && ! -L "$ROOT/VERSION" ]] ||
   fail "VERSION is missing or unsafe"
@@ -169,7 +188,7 @@ verify_repository_snapshot() {
   local actual_version
   local branch
   local clean_status
-  local upstream_commit
+  local remote_main_commit
 
   branch="$(/usr/bin/git -C "$ROOT" symbolic-ref --quiet HEAD)" ||
     fail "release requires a non-detached branch"
@@ -177,10 +196,20 @@ verify_repository_snapshot() {
     fail "could not resolve HEAD"
   [[ "$actual_commit" =~ '^[0-9a-f]{40}$' ]] ||
     fail "HEAD is not one full SHA-1 commit"
-  upstream_commit="$(/usr/bin/git -C "$ROOT" rev-parse --verify '@{upstream}^{commit}')" ||
-    fail "release branch has no upstream"
-  [[ "$upstream_commit" == "$actual_commit" ]] ||
-    fail "release branch upstream does not equal HEAD"
+  /usr/bin/git -C "$ROOT" fetch --no-tags origin \
+    'refs/heads/main:refs/remotes/origin/main' >/dev/null ||
+    fail "could not refresh origin/main"
+  remote_main_commit="$(
+    /usr/bin/git -C "$ROOT" rev-parse --verify 'refs/remotes/origin/main^{commit}'
+  )" || fail "could not resolve origin/main"
+  if [[ "$MODE" == "publish" ]]; then
+    [[ "$remote_main_commit" == "$actual_commit" ]] ||
+      fail "publish requires remote main to equal HEAD"
+  else
+    /usr/bin/git -C "$ROOT" merge-base --is-ancestor \
+      "$remote_main_commit" "$actual_commit" ||
+      fail "remote main is not an ancestor of HEAD"
+  fi
   clean_status="$(repository_status)" ||
     fail "could not inspect the release worktree"
   [[ -z "$clean_status" ]] ||
@@ -204,6 +233,9 @@ EXPECTED_COMMIT="$REPLY"
 EXPECTED_BRANCH="${reply[1]}"
 readonly EXPECTED_COMMIT EXPECTED_BRANCH
 readonly EXPECTED_CONFIRMATION="v$VERSION@$EXPECTED_COMMIT"
+if [[ "$MODE" == "ship" ]]; then
+  CONFIRMATION="$EXPECTED_CONFIRMATION"
+fi
 if (( PUBLISH_REQUESTED )); then
   [[ "$CONFIRMATION" == "$EXPECTED_CONFIRMATION" ]] ||
     fail "publication confirmation must be exactly $EXPECTED_CONFIRMATION"
@@ -246,6 +278,7 @@ cleanup() {
   CLEANUP_RUNNING=1
   unset NOTARY_TEAM_ID NOTARY_APPLE_ID NOTARY_PASSWORD
   unset SAVED_NOTARY_TEAM_ID SAVED_NOTARY_APPLE_ID SAVED_NOTARY_PASSWORD
+  unset CODESIGN_IDENTITY_FINGERPRINT SAVED_CODESIGN_IDENTITY_FINGERPRINT
   unset GH_TOKEN GITHUB_TOKEN SAVED_GH_TOKEN
   release_product_lock
 }
@@ -309,7 +342,7 @@ if [[ -L "$STATE_DIR" || ( -e "$STATE_DIR" && ! -d "$STATE_DIR" ) ]]; then
 fi
 typeset RESUME_ASSETS_FROZEN=0
 case "$MODE" in
-  fresh)
+  fresh|ship)
     first_state_entry=""
     if [[ -d "$STATE_DIR" ]]; then
       first_state_entry="$(
@@ -317,7 +350,7 @@ case "$MODE" in
       )" || fail "could not inspect the version release state"
     fi
     [[ -z "$first_state_entry" ]] ||
-      fail "fresh requires an empty version state directory: $STATE_DIR"
+      fail "$MODE requires an empty version state directory: $STATE_DIR"
     ;;
   resume)
     if [[ -L "$RELEASE_ASSETS_STATE" ||
@@ -415,83 +448,27 @@ verify_validated_app() {
 }
 
 load_release_environment() {
-  typeset -A allowed_release_variables=(
-    CODESIGN_IDENTITY_FINGERPRINT 1
-    RELEASE_STATE_DIR 1
-    LEGACY_MINISIGN 1
-    LEGACY_UPDATER_PRIVATE_KEY_FILE 1
-    SPARKLE_DISTRIBUTION_ROOT 1
-    SPARKLE_ED_KEY_PATH 1
-    SPARKLE_GENERATE_APPCAST_SHA256 1
-    SPARKLE_SIGN_UPDATE_SHA256 1
-    SPARKLE_SIGNATURE_VERIFIER 1
-    SPARKLE_SIGNATURE_VERIFIER_SHA256 1
-  )
-  typeset -A loaded_release_variables=()
-  local environment_line
-  local assignment
-  local variable_name
-  local quoted_value
-  local variable_value
-  local required_name
   local current_uid
   local key_file
   local key_name
   local key_mode
   local key_owner
 
-  [[ -f "$RELEASE_ENV" && ! -L "$RELEASE_ENV" ]] ||
-    fail "release input environment is missing or unsafe: $RELEASE_ENV"
-  [[ "$(/usr/bin/shasum -a 256 "$RELEASE_ENV" | /usr/bin/awk '{print $1}')" == \
-    "$EXPECTED_RELEASE_ENV_SHA256" ]] ||
-    fail "release input environment checksum changed"
-
-  unset CODESIGN_IDENTITY_FINGERPRINT RELEASE_STATE_DIR
-  unset LEGACY_MINISIGN LEGACY_UPDATER_PRIVATE_KEY_FILE
-  unset SPARKLE_DISTRIBUTION_ROOT SPARKLE_ED_KEY_PATH
-  unset SPARKLE_GENERATE_APPCAST_SHA256 SPARKLE_SIGN_UPDATE_SHA256
-  unset SPARKLE_SIGNATURE_VERIFIER SPARKLE_SIGNATURE_VERIFIER_SHA256
-
-  while IFS= read -r environment_line || [[ -n "$environment_line" ]]; do
-    [[ -z "$environment_line" || "$environment_line" == \#* ]] && continue
-    [[ "$environment_line" == "export "* ]] ||
-      fail "unsupported release environment line"
-    assignment="${environment_line#export }"
-    variable_name="${assignment%%=*}"
-    quoted_value="${assignment#*=}"
-    [[ "$variable_name" =~ '^[A-Z][A-Z0-9_]*$' ]] ||
-      fail "release environment variable name is invalid"
-    [[ -n "${allowed_release_variables[$variable_name]:-}" ]] ||
-      fail "release environment contains an unexpected variable: $variable_name"
-    [[ -z "${loaded_release_variables[$variable_name]:-}" ]] ||
-      fail "release environment repeats variable: $variable_name"
-    [[ "${quoted_value[1]:-}" == "'" && "${quoted_value[-1]:-}" == "'" ]] ||
-      fail "release environment value is not one simple single-quoted string"
-    variable_value="${quoted_value[2,-2]}"
-    [[ "$variable_value" != *"'"* && "$variable_value" != *$'\r'* ]] ||
-      fail "release environment value contains an unsupported character"
-    loaded_release_variables[$variable_name]=1
-
-    # These values are bound by the current repository and invocation. Never
-    # reuse the old wrapper's state location or signing fingerprint.
-    if [[ "$variable_name" != "RELEASE_STATE_DIR" &&
-      "$variable_name" != "CODESIGN_IDENTITY_FINGERPRINT" ]]; then
-      typeset -gx "$variable_name=$variable_value"
-    fi
-  done < "$RELEASE_ENV"
-
-  for required_name in \
-    LEGACY_MINISIGN \
-    LEGACY_UPDATER_PRIVATE_KEY_FILE \
-    SPARKLE_DISTRIBUTION_ROOT \
-    SPARKLE_ED_KEY_PATH \
-    SPARKLE_GENERATE_APPCAST_SHA256 \
-    SPARKLE_SIGN_UPDATE_SHA256 \
-    SPARKLE_SIGNATURE_VERIFIER \
-    SPARKLE_SIGNATURE_VERIFIER_SHA256; do
-    [[ -n "${(P)required_name:-}" ]] ||
-      fail "$required_name is missing from $RELEASE_ENV"
-  done
+  [[ -n "${HOME:-}" && "$HOME" == /* ]] ||
+    fail "HOME must be an absolute path for release inputs"
+  if [[ -n "$SAVED_CODESIGN_IDENTITY_FINGERPRINT" ]]; then
+    export CODESIGN_IDENTITY_FINGERPRINT="$SAVED_CODESIGN_IDENTITY_FINGERPRINT"
+  else
+    unset CODESIGN_IDENTITY_FINGERPRINT
+  fi
+  export LEGACY_MINISIGN="$DEFAULT_LEGACY_MINISIGN"
+  export LEGACY_UPDATER_PRIVATE_KEY_FILE="$DEFAULT_LEGACY_UPDATER_PRIVATE_KEY_FILE"
+  export SPARKLE_DISTRIBUTION_ROOT="$DEFAULT_SPARKLE_DISTRIBUTION_ROOT"
+  export SPARKLE_ED_KEY_PATH="$DEFAULT_SPARKLE_ED_KEY_PATH"
+  export SPARKLE_GENERATE_APPCAST_SHA256="$AUDITED_SPARKLE_GENERATE_APPCAST_SHA256"
+  export SPARKLE_SIGN_UPDATE_SHA256="$AUDITED_SPARKLE_SIGN_UPDATE_SHA256"
+  export SPARKLE_SIGNATURE_VERIFIER="$DEFAULT_SPARKLE_SIGNATURE_VERIFIER"
+  export SPARKLE_SIGNATURE_VERIFIER_SHA256="$AUDITED_SPARKLE_SIGNATURE_VERIFIER_SHA256"
 
   current_uid="$(/usr/bin/id -u)" || fail "could not determine the operator uid"
   for key_name in LEGACY_UPDATER_PRIVATE_KEY_FILE SPARKLE_ED_KEY_PATH; do
@@ -508,7 +485,6 @@ load_release_environment() {
       fail "$key_name permissions must be 0400 or 0600"
   done
 
-  unset CODESIGN_IDENTITY_FINGERPRINT
   export RELEASE_STATE_DIR="$STATE_DIR"
   export RELEASE_LOCK_DIR="$STATE_ROOT/release.lock"
 }
@@ -574,6 +550,7 @@ run_release() {
   fi
   unset NOTARY_TEAM_ID NOTARY_APPLE_ID NOTARY_PASSWORD
   unset SAVED_NOTARY_TEAM_ID SAVED_NOTARY_APPLE_ID SAVED_NOTARY_PASSWORD
+  unset SAVED_CODESIGN_IDENTITY_FINGERPRINT
   clear_release_environment
 }
 
@@ -615,7 +592,7 @@ run_github_publish() {
 cd "$ROOT"
 
 case "$MODE" in
-  fresh)
+  fresh|ship)
     run_validate
     verify_repository_snapshot "$EXPECTED_COMMIT" "$VERSION"
     verify_validated_app

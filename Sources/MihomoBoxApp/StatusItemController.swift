@@ -1,11 +1,24 @@
 import AppKit
 import MihomoBoxUI
 
+enum AppVersionMenuPolicy {
+  static func title(bundle: Bundle = .main) -> String {
+    guard
+      let version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+      !version.isEmpty
+    else {
+      return "Version unavailable"
+    }
+    return "Version \(version)"
+  }
+}
+
 @MainActor
 final class StatusItemController: NSObject, NSMenuDelegate, ApplicationStatusItemControlling {
   private let service: any TrayService
   private let mainWindow: any NativeWindowControlling
   private let onExit: () -> Void
+  private let versionTitle: String
   private let statusBar: NSStatusBar
   private let statusItem: NSStatusItem
 
@@ -21,11 +34,13 @@ final class StatusItemController: NSObject, NSMenuDelegate, ApplicationStatusIte
     service: any TrayService,
     mainWindow: any NativeWindowControlling,
     statusBar: NSStatusBar = .system,
+    versionTitle: String = AppVersionMenuPolicy.title(),
     onExit: @escaping () -> Void
   ) {
     self.service = service
     self.mainWindow = mainWindow
     self.onExit = onExit
+    self.versionTitle = versionTitle
     self.statusBar = statusBar
     statusItem = statusBar.statusItem(withLength: NSStatusItem.variableLength)
     latestSnapshot = service.currentSnapshot
@@ -203,6 +218,9 @@ final class StatusItemController: NSObject, NSMenuDelegate, ApplicationStatusIte
     menu.addItem(tools)
 
     menu.addItem(.separator())
+    let version = NSMenuItem(title: versionTitle, action: nil, keyEquivalent: "")
+    version.isEnabled = false
+    menu.addItem(version)
     menu.addItem(item("Exit", action: #selector(exitApplication)))
     return menu
   }

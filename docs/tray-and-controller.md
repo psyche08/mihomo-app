@@ -39,8 +39,13 @@ Tools ›
   Open Diagnostic Logs…
   Check for Updates…
 ───────────────
+Version X.Y.Z
 Exit
 ```
+
+The disabled version row is read from the signed App bundle's
+`CFBundleShortVersionString`; it is informational and never comes from daemon
+or controller state.
 
 The check mark always represents agent/controller state returned over XPC, not
 the last click. The tray polls every five seconds and immediately after a mutation, but replaces the

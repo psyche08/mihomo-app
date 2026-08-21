@@ -615,6 +615,56 @@ final class CoreTests: XCTestCase {
         )
     }
 
+    func testDNSAcquisitionRepairsBridgeAndManagesWithinSameAttempt() throws {
+        var operations: [String] = []
+
+        let result = try DNSAcquisitionAttempt.run(
+            reprobeBridge: true,
+            ensureAlias: { operations.append("ensure_alias") },
+            bridgeReady: {
+                operations.append("probe_bridge")
+                return true
+            },
+            applyDNS: { operations.append("apply_dns") }
+        )
+
+        XCTAssertEqual(result, .managed)
+        XCTAssertEqual(operations, ["ensure_alias", "probe_bridge", "apply_dns"])
+    }
+
+    func testDNSAcquisitionDoesNotClaimDNSWhileRepairedBridgeIsUnavailable() throws {
+        var applied = false
+
+        let result = try DNSAcquisitionAttempt.run(
+            reprobeBridge: true,
+            ensureAlias: {},
+            bridgeReady: { false },
+            applyDNS: { applied = true }
+        )
+
+        XCTAssertEqual(result, .bridgeUnavailable)
+        XCTAssertFalse(applied)
+    }
+
+    func testDNSAcquisitionWithReadyBridgeDoesNotSpendASecondProbe() throws {
+        var probed = false
+        var applied = false
+
+        let result = try DNSAcquisitionAttempt.run(
+            reprobeBridge: false,
+            ensureAlias: {},
+            bridgeReady: {
+                probed = true
+                return false
+            },
+            applyDNS: { applied = true }
+        )
+
+        XCTAssertEqual(result, .managed)
+        XCTAssertFalse(probed)
+        XCTAssertTrue(applied)
+    }
+
     func testDNSAcquisitionBacksOffInsteadOfThrashingTheLoopbackAlias() {
         // Observed in the field: once taking over system DNS started failing,
         // every tick rolled back (removing the loopback alias) and the next tick
