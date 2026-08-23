@@ -90,10 +90,14 @@ verified; it never reports a failed or unverified restart as restored.
 
 After this bootstrap has installed a protocol-compatible update-capable daemon,
 normal App updates do not require another administrator dialog. On launch, the
-App compares the bundled and installed daemon/agent/Mihomo digests. Changed
-binaries cross the authenticated XPC channel, are independently validated
-against the same leaf certificate, atomically replaced with rollback, and
-restarted by the daemon or launchd. Daemon replacement remains
+App first compares the daemon's authenticated component status with the signed
+bundle's version-matched `BuildManifest.plist`. An exact match avoids reading
+and hashing three unchanged executables. A missing, malformed, or mismatched
+manifest falls back to bounded executable reads and runtime SHA-256 comparison;
+it never declares an update current. Changed binaries cross the authenticated
+XPC channel, are independently validated against the same leaf certificate,
+atomically replaced with rollback, and restarted by the daemon or launchd.
+Daemon replacement remains
 `update_pending` across launchd restart until the new set passes full network
 health; App and CLI report success only after that commit. Plist, path-layout,
 signing-certificate, or control-protocol migrations still require **Install /
@@ -310,6 +314,10 @@ tail -f '/Library/Logs/Mihomo App/mihomo.log'
 tail -f '/Library/Logs/Mihomo App/mihomo-daemon-crash.log'
 tail -f '/Library/Logs/Mihomo App/mihomo-agent-crash.log'
 log stream --style compact --predicate 'subsystem == "dev.linsheng.mihomo-app"'
+log show --last 10m --style compact \
+  --predicate 'subsystem == "dev.linsheng.mihomo-app" AND eventMessage CONTAINS "event=app_startup"'
+grep 'event=daemon_startup' '/Library/Logs/Mihomo App/mihomo-daemon.log'
+grep 'event=agent_startup' '/Library/Logs/Mihomo App/mihomo-agent.log'
 dig @127.0.0.53 -p 53 example.com
 dig @127.0.0.1 -p 1054 example.com
 scutil --dns

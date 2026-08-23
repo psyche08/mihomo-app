@@ -47,6 +47,13 @@ The disabled version row is read from the signed App bundle's
 `CFBundleShortVersionString`; it is informational and never comes from daemon
 or controller state.
 
+The dashboard keeps live controller streams scoped to the selected page.
+Overview owns connections, traffic, and memory; Connections owns connections;
+Usage owns connections and traffic; Logs owns logs. Proxies, Rules, and Config
+use bounded request/readback calls and keep no stream open. Moving between
+pages cancels both inactive streams and their retry timers, so a hidden or
+static page cannot keep polling the controller in the background.
+
 The check mark always represents agent/controller state returned over XPC, not
 the last click. The tray polls every five seconds and immediately after a mutation, but replaces the
 native menu only when its semantic state or structure changes. Delay-only

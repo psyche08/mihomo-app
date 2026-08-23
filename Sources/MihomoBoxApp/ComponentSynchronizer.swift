@@ -15,6 +15,60 @@ enum ComponentSynchronizerError: Error, LocalizedError {
   }
 }
 
+struct ComponentBuildManifest {
+  private static let maximumSize = 1 * 1_024 * 1_024
+  private static let digestKeys: [ManagedComponent: String] = [
+    .daemon: "MihomoDaemonSHA256",
+    .agent: "MihomoAgentSHA256",
+    .mihomo: "MihomoSHA256",
+  ]
+
+  static func load(from bundleURL: URL, expectedVersion: String) -> [String: String]? {
+    let url = bundleURL.appendingPathComponent(
+      "Contents/Resources/BuildManifest.plist",
+      isDirectory: false
+    )
+    guard
+      let values = try? url.resourceValues(forKeys: [
+        .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey,
+      ]),
+      values.isRegularFile == true,
+      values.isSymbolicLink != true,
+      let size = values.fileSize,
+      size > 0,
+      size <= maximumSize,
+      let data = try? Data(contentsOf: url, options: [.mappedIfSafe])
+    else { return nil }
+    return componentDigests(from: data, expectedVersion: expectedVersion)
+  }
+
+  static func componentDigests(
+    from data: Data,
+    expectedVersion: String
+  ) -> [String: String]? {
+    guard data.count <= maximumSize,
+      let propertyList = try? PropertyListSerialization.propertyList(from: data, format: nil),
+      let manifest = propertyList as? [String: Any],
+      manifest["Version"] as? String == expectedVersion
+    else { return nil }
+
+    var result: [String: String] = [:]
+    for component in ManagedComponent.allCases {
+      guard let key = digestKeys[component],
+        let rawDigest = manifest[key] as? String
+      else { return nil }
+      let digest = rawDigest.lowercased()
+      guard digest.utf8.count == 64,
+        digest.utf8.allSatisfy({ byte in
+          (byte >= 48 && byte <= 57) || (byte >= 97 && byte <= 102)
+        })
+      else { return nil }
+      result[component.rawValue] = digest
+    }
+    return result
+  }
+}
+
 /// Reconciles exactly the daemon, agent and Mihomo binaries over authenticated
 /// XPC. No CLI process or installer is involved after bootstrap.
 actor ComponentSynchronizer {
@@ -45,7 +99,10 @@ actor ComponentSynchronizer {
       guard !Task.isCancelled, let self else { return }
       do {
         let completed = try await self.synchronizeIfNeeded()
-        if completed { await self.clearTask() }
+        if completed {
+          AppStartupTimeline.mark(.componentSyncComplete)
+          await self.clearTask()
+        }
       } catch let error as ControlError where error.isLegacyDaemonProtocol {
         // Protocol v1 cannot safely self-upgrade into the transactional v2
         // daemon. The tray exposes an explicit verified Install / Repair path;
@@ -88,7 +145,10 @@ actor ComponentSynchronizer {
       guard !Task.isCancelled, let self else { return }
       do {
         let completed = try await self.synchronizeIfNeeded()
-        if completed { await self.clearTask() }
+        if completed {
+          AppStartupTimeline.mark(.componentSyncComplete)
+          await self.clearTask()
+        }
       } catch let error as ControlError where error.isLegacyDaemonProtocol {
         AppLog.info(
           "event=component_sync result=repair_required reason=legacy_protocol peer_version=1")
@@ -117,6 +177,18 @@ actor ComponentSynchronizer {
     else { throw ComponentSynchronizerError.missingVersion }
 
     let status = try await control.componentStatus()
+    if !status.updatePending,
+      status.installedVersion == version,
+      let expected = ComponentBuildManifest.load(
+        from: bundleURL,
+        expectedVersion: version
+      ),
+      status.components == expected
+    {
+      AppLog.info("event=component_sync result=current source=build_manifest")
+      return
+    }
+
     let directory = bundleURL.appendingPathComponent("Contents/MacOS", isDirectory: true)
     var bytes: [String: Data] = [:]
     var daemonWillRestart = false
@@ -141,7 +213,7 @@ actor ComponentSynchronizer {
       }
     }
     guard changed || status.updatePending || status.installedVersion != version else {
-      AppLog.info("event=component_sync result=current")
+      AppLog.info("event=component_sync result=current source=runtime_digest")
       return
     }
     try await control.upgradeComponents(

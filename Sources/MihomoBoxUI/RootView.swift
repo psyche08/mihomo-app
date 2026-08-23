@@ -39,8 +39,11 @@ public struct RootView: View {
     )
     .background(DashboardTheme.background)
     .preferredColorScheme(.dark)
+    .onAppear {
+      store.setActivePage(selection)
+    }
     .onChange(of: selection) { _, page in
-      Task { await store.refresh(page) }
+      store.setActivePage(page)
     }
     .alert("Action Failed", isPresented: actionErrorPresented) {
       Button("OK") { store.dismissActionError() }

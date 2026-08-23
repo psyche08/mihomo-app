@@ -57,7 +57,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     coordinator.startBackgroundServices()
+    AppStartupTimeline.mark(.backgroundServicesStarted)
     statusItemController?.start()
+    AppStartupTimeline.mark(.statusItemReady)
 
     if showWindowAtLaunch {
       _ = mainWindow.show()

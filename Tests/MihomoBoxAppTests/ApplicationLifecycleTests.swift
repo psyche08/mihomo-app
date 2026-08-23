@@ -14,7 +14,7 @@ final class ApplicationLifecycleTests: XCTestCase {
     let info: [String: Any] = [
       "CFBundleIdentifier": "dev.linsheng.mihomo-app.version-tests",
       "CFBundlePackageType": "BNDL",
-      "CFBundleShortVersionString": "0.8.3",
+      "CFBundleShortVersionString": "0.8.4",
     ]
     let data = try PropertyListSerialization.data(
       fromPropertyList: info,
@@ -24,7 +24,7 @@ final class ApplicationLifecycleTests: XCTestCase {
     try data.write(to: root.appendingPathComponent("Info.plist"))
     let bundle = try XCTUnwrap(Bundle(url: root))
 
-    XCTAssertEqual(AppVersionMenuPolicy.title(bundle: bundle), "Version 0.8.3")
+    XCTAssertEqual(AppVersionMenuPolicy.title(bundle: bundle), "Version 0.8.4")
   }
 
   func testVersionMenuFailsClosedWhenBundleVersionIsMissing() throws {

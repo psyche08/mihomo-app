@@ -109,6 +109,7 @@ public final class DashboardStore: ObservableObject {
   @Published public private(set) var logsPaused = false
   @Published public private(set) var isVisible = false
   @Published public private(set) var isStarted = false
+  @Published public private(set) var activePage: DashboardPage = .overview
 
   private let gateway: any DashboardControlGateway
   private let previewMode: Bool
@@ -157,13 +158,8 @@ public final class DashboardStore: ObservableObject {
       return
     }
 
-    for page in [
-      DashboardPage.overview, .proxies, .rules, .connections, .config,
-    ] {
-      scheduleRefresh(page)
-    }
-    usageState = .loaded
-    startAllStreams()
+    scheduleRefresh(activePage)
+    reconcileStreamsForActivePage()
   }
 
   public func stop() {
@@ -187,6 +183,24 @@ public final class DashboardStore: ObservableObject {
       return
     }
     await refreshPage(page)
+  }
+
+  public func setActivePage(_ page: DashboardPage) {
+    guard activePage != page else { return }
+    activePage = page
+    guard isStarted else { return }
+    if previewMode {
+      loadPreviewFixtures()
+      return
+    }
+
+    for refreshPage in refreshTasks.keys.filter({ $0 != page }) {
+      refreshTasks[refreshPage]?.cancel()
+      refreshTasks[refreshPage] = nil
+      refreshTokens[refreshPage] = nil
+    }
+    reconcileStreamsForActivePage()
+    scheduleRefresh(page)
   }
 
   public func dismissActionError() {
@@ -345,7 +359,7 @@ public final class DashboardStore: ObservableObject {
   public func setLogLevel(_ level: DashboardLogLevel) async {
     guard logLevel != level else { return }
     logLevel = level
-    if isStarted, !previewMode { startLogStream() }
+    if isStarted, !previewMode, desiredStreams.contains(.logs) { startLogStream() }
   }
 
   public func clearLogs() async {
@@ -392,7 +406,7 @@ public final class DashboardStore: ObservableObject {
       try await gateway.reloadActiveProfile()
       let snapshot = try await waitForRuntimeSnapshot()
       apply(snapshot: snapshot)
-      startAllStreams()
+      reconcileStreamsForActivePage(restartExisting: true)
       try await refreshProfileCatalogs()
     }
   }
@@ -402,7 +416,7 @@ public final class DashboardStore: ObservableObject {
       try await gateway.restartAgent()
       let snapshot = try await waitForRuntimeSnapshot()
       apply(snapshot: snapshot)
-      startAllStreams()
+      reconcileStreamsForActivePage(restartExisting: true)
       try await refreshProfileCatalogs()
     }
   }
@@ -449,7 +463,7 @@ public final class DashboardStore: ObservableObject {
       rebuildUsage()
       updateStreamBackedState(for: .usage)
     case .logs:
-      if isStarted { startLogStream() }
+      break
     case .config:
       await load(page: page) {
         apply(config: try await gateway.fetchConfig())
@@ -566,12 +580,38 @@ public final class DashboardStore: ObservableObject {
     throw lastError
   }
 
-  private func startAllStreams() {
-    healthyStreams.removeAll()
-    startConnectionStream()
-    startTrafficStream()
-    startMemoryStream()
-    startLogStream()
+  private var desiredStreams: Set<StreamKind> {
+    Set(streamDependencies(for: activePage))
+  }
+
+  private func reconcileStreamsForActivePage(restartExisting: Bool = false) {
+    let desired = desiredStreams
+    let running = Set(streamTasks.keys)
+    for kind in running where restartExisting || !desired.contains(kind) {
+      stopStream(kind)
+    }
+    for kind in desired where streamTasks[kind] == nil {
+      startStream(kind)
+    }
+  }
+
+  private func startStream(_ kind: StreamKind) {
+    switch kind {
+    case .connections: startConnectionStream()
+    case .traffic: startTrafficStream()
+    case .memory: startMemoryStream()
+    case .logs: startLogStream()
+    }
+  }
+
+  private func stopStream(_ kind: StreamKind) {
+    streamTasks[kind]?.cancel()
+    streamTasks[kind] = nil
+    streamRetryTasks[kind]?.cancel()
+    streamRetryTasks[kind] = nil
+    streamRetryCounts[kind] = nil
+    healthyStreams.remove(kind)
+    streamFailures[kind] = nil
   }
 
   private func startConnectionStream() {
@@ -929,7 +969,8 @@ public final class DashboardStore: ObservableObject {
   }
 
   private func streamFailed(_ error: Error, kind: StreamKind) {
-    guard isStarted else { return }
+    guard isStarted, desiredStreams.contains(kind) else { return }
+    streamTasks[kind] = nil
     healthyStreams.remove(kind)
     let message = "Live data interrupted: \(safeErrorMessage(error))"
     streamFailures[kind] = message
@@ -943,14 +984,9 @@ public final class DashboardStore: ObservableObject {
     streamRetryTasks[kind]?.cancel()
     streamRetryTasks[kind] = Task { [weak self] in
       try? await Task.sleep(nanoseconds: UInt64(delaySeconds) * 1_000_000_000)
-      guard let self, isStarted, !Task.isCancelled else { return }
+      guard let self, isStarted, desiredStreams.contains(kind), !Task.isCancelled else { return }
       streamRetryTasks[kind] = nil
-      switch kind {
-      case .connections: startConnectionStream()
-      case .traffic: startTrafficStream()
-      case .memory: startMemoryStream()
-      case .logs: startLogStream()
-      }
+      startStream(kind)
     }
   }
 
@@ -964,7 +1000,8 @@ public final class DashboardStore: ObservableObject {
       updateStreamBackedState(for: page)
     }
     let runtimeStreams: Set<StreamKind> = [.connections, .traffic, .memory]
-    if runtimeStreams.isSubset(of: healthyStreams),
+    if activePage == .overview,
+      runtimeStreams.isSubset(of: healthyStreams),
       runtimeStatus != .connected,
       refreshTasks[.overview] == nil
     {

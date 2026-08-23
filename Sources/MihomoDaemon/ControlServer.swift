@@ -12,10 +12,16 @@ final class ControlDispatcher: @unchecked Sendable {
     private let controller: ControllerBroker
     private let profiles: ProfileBroker
     private let components: ComponentUpdater
+    private let startupClock: MonotonicStartupClock
     private let mutationLock = NSLock()
 
-    init(agent: AgentSupervisor, configPath: String) throws {
+    init(
+        agent: AgentSupervisor,
+        configPath: String,
+        startupClock: MonotonicStartupClock = MonotonicStartupClock()
+    ) throws {
         self.agent = agent
+        self.startupClock = startupClock
         let controllerBroker = ControllerBroker(configPath: configPath)
         let validateStartedRuntime = {
             try Self.validateStartedRuntime(agent: agent, controller: controllerBroker)
@@ -43,10 +49,14 @@ final class ControlDispatcher: @unchecked Sendable {
                 "event=initial_runtime result=" +
                 (restored ? "component_recovery_required" : "restore_unconfirmed")
             )
+            logInitialRuntimeStartup(
+                result: restored ? "component_recovery_required" : "restore_unconfirmed"
+            )
             return
         }
         if components.requiresDaemonRestart {
             ServiceLog.info("event=component_update result=restart_after_interrupted_recovery")
+            logInitialRuntimeStartup(result: "daemon_restart_required")
             scheduleDaemonRestart()
             return
         }
@@ -54,11 +64,15 @@ final class ControlDispatcher: @unchecked Sendable {
             do {
                 try components.commitPendingBootValidation()
                 ServiceLog.info("event=initial_runtime result=awaiting_profile")
+                logInitialRuntimeStartup(result: "awaiting_profile")
             } catch {
                 let rolledBack = components.rollbackPendingBootValidation()
                 ServiceLog.error(
                     "event=initial_runtime result=" +
                     (rolledBack ? "component_rolled_back" : "component_recovery_required")
+                )
+                logInitialRuntimeStartup(
+                    result: rolledBack ? "component_rolled_back" : "component_recovery_required"
                 )
                 if rolledBack { scheduleDaemonRestart() }
             }
@@ -69,6 +83,7 @@ final class ControlDispatcher: @unchecked Sendable {
             try ensureStartedRuntimeLocked()
             try components.commitPendingBootValidation()
             ServiceLog.info("event=initial_runtime result=ready")
+            logInitialRuntimeStartup(result: "ready")
         } catch {
             let restored = agent.stopAndRestoreVerified()
             let hadPendingUpdate = components.hasPendingBootValidation
@@ -77,10 +92,20 @@ final class ControlDispatcher: @unchecked Sendable {
                 "event=initial_runtime result=" +
                 (restored && componentRollback ? "stopped" : "restore_unconfirmed")
             )
+            logInitialRuntimeStartup(
+                result: restored && componentRollback ? "stopped" : "restore_unconfirmed"
+            )
             if hadPendingUpdate, componentRollback {
                 scheduleDaemonRestart()
             }
         }
+    }
+
+    private func logInitialRuntimeStartup(result: String) {
+        ServiceLog.info(
+            "event=daemon_startup phase=initial_runtime_complete result=\(result) " +
+            "elapsed_ms=\(startupClock.elapsedMilliseconds())"
+        )
     }
 
     func dispatch(_ request: ControlRequest, owner: ObjectIdentifier? = nil) -> ControlResponse {

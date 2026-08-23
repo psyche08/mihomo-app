@@ -5,6 +5,7 @@ import MihomoDNSCore
 private let root = URL(fileURLWithPath: "/Library/Application Support/Mihomo App", isDirectory: true)
 private let defaultConfigPath = root.appendingPathComponent("daemon.json").path
 private let arguments = CommandLine.arguments
+private let startupClock = MonotonicStartupClock()
 
 ServiceLog.configure(
     logPath: "/Library/Logs/Mihomo App/mihomo-daemon.log",
@@ -12,6 +13,9 @@ ServiceLog.configure(
 )
 ServiceLog.installCrashSignalHandlers()
 ServiceLog.info("event=daemon_started pid=\(getpid())")
+ServiceLog.info(
+    "event=daemon_startup phase=process_started elapsed_ms=\(startupClock.elapsedMilliseconds())"
+)
 
 if arguments.contains("--help") || arguments.contains("-h") {
     print("usage: mihomo-daemon [--config PATH]")
@@ -31,7 +35,11 @@ do {
             ServiceLog.error("event=daemon_shutdown result=restore_unconfirmed")
         }
     }
-    let dispatcher = try ControlDispatcher(agent: agent, configPath: configPath)
+    let dispatcher = try ControlDispatcher(
+        agent: agent,
+        configPath: configPath,
+        startupClock: startupClock
+    )
     let server = try ControlServer(dispatcher: dispatcher)
 
     let signalQueue = DispatchQueue(label: "dev.linsheng.mihomo.daemon.signal")
@@ -49,6 +57,9 @@ do {
     }
 
     try server.start()
+    ServiceLog.info(
+        "event=daemon_startup phase=control_ready elapsed_ms=\(startupClock.elapsedMilliseconds())"
+    )
     dispatcher.startInitialRuntime()
     stopped.wait()
     server.stop()

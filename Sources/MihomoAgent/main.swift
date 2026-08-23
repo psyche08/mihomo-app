@@ -14,6 +14,7 @@ var standardError = StandardError()
 
 private let defaultConfigPath = "/Library/Application Support/Mihomo App/daemon.json"
 private let arguments = CommandLine.arguments
+private let startupClock = MonotonicStartupClock()
 private let commandMode = arguments.contains("--check")
     || arguments.contains("--restore-system-dns")
     || arguments.contains("--check-system-dns")
@@ -32,6 +33,11 @@ ServiceLog.configure(
 )
 ServiceLog.installCrashSignalHandlers()
 ServiceLog.info("event=agent_started pid=\(getpid())")
+if !commandMode {
+    ServiceLog.info(
+        "event=agent_startup phase=process_started elapsed_ms=\(startupClock.elapsedMilliseconds())"
+    )
+}
 
 if arguments.contains("--help") || arguments.contains("-h") {
     print("""
@@ -171,6 +177,9 @@ do {
     }
 
     try service.start()
+    ServiceLog.info(
+        "event=agent_startup phase=service_ready elapsed_ms=\(startupClock.elapsedMilliseconds())"
+    )
     semaphore.wait()
     parentWatchdog?.cancel()
     ServiceLog.info("event=agent_stopping")

@@ -153,7 +153,10 @@ counters.
 
 Lifecycle, configuration commands, child exits/restarts, network transitions,
 drift detection, repair attempts, and repair outcomes are structured audit
-events. Mihomo stdout/stderr is never persisted verbatim: only line, byte, and
+events. Startup milestones use a monotonic elapsed-millisecond clock: the
+daemon records process, control-service, and initial-runtime readiness, while
+the agent records process and complete managed-network readiness. Mihomo
+stdout/stderr is never persisted verbatim: only line, byte, and
 severity counts are emitted. Normal logs are buffered for up to one second or
 64 KiB before writing. Each log file is capped at 100 MiB and retains three
 numbered rotated generations. Fatal signals are also synchronously appended to

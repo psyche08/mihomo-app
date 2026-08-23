@@ -71,6 +71,7 @@ final class TrayStateCoordinator: TrayService {
   private var installationAvailable = false
   private var loginDefaultDoneOrInFlight = false
   private var loginDefaultFailures = 0
+  private var didRecordFirstSuccessfulPoll = false
 
   init(
     control: TrayControlClient,
@@ -146,6 +147,10 @@ final class TrayStateCoordinator: TrayService {
         let poll = try await self.control.poll()
         self.consecutivePollFailures = 0
         self.apply(poll, retainDelays: !authoritative)
+        if !self.didRecordFirstSuccessfulPoll {
+          self.didRecordFirstSuccessfulPoll = true
+          AppStartupTimeline.mark(.firstControlSnapshot)
+        }
         await self.applyLoginDefaultIfNeeded()
       } catch let error as ControlError {
         if case .protocolVersionMismatch(let expected, let received) = error {

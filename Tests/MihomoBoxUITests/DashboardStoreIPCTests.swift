@@ -5,7 +5,7 @@ import XCTest
 
 @MainActor
 final class DashboardStoreIPCTests: XCTestCase {
-  func testVisibleStoreHydratesEveryPageAndConsumesAllFourIPCStreams() async throws {
+  func testVisibleStoreLoadsOnlyTheActivePageAndItsIPCStreams() async throws {
     let gateway = FakeDashboardGateway()
     let store = DashboardStore(gateway: gateway)
 
@@ -15,20 +15,22 @@ final class DashboardStoreIPCTests: XCTestCase {
     try await eventually {
       store.runtimeStatus == .connected
         && store.proxyGroups.first?.selectedNode == "Node A"
-        && store.rules.first?.payload == "example.com"
         && store.activeConnections.first?.host == "example.com"
         && store.traffic.downloadSpeed == 8_000
         && store.traffic.memoryBytes == 64_000_000
-        && store.logs.first?.message == "controller warning"
     }
 
     let calls = gateway.calls
     for expected in [
-      "fetchVersion", "fetchSnapshot", "fetchConfig", "fetchProxies",
-      "fetchProxyProviders", "fetchRules", "fetchRuleProviders", "fetchConnections",
-      "stream.connections", "stream.traffic", "stream.memory", "stream.logs.debug",
+      "fetchVersion", "fetchSnapshot", "stream.connections", "stream.traffic", "stream.memory",
     ] {
       XCTAssertTrue(calls.contains(expected), "missing dashboard IPC call: \(expected)")
+    }
+    for unexpected in [
+      "fetchConfig", "fetchProxies", "fetchProxyProviders", "fetchRules",
+      "fetchRuleProviders", "fetchConnections", "stream.logs.debug",
+    ] {
+      XCTAssertFalse(calls.contains(unexpected), "inactive page made IPC call: \(unexpected)")
     }
     XCTAssertEqual(store.coreVersion, "Mihomo v-test")
     XCTAssertTrue(store.configuration.enhancedTUNEnabled)
@@ -36,8 +38,19 @@ final class DashboardStoreIPCTests: XCTestCase {
     XCTAssertFalse(store.configuration.tcpConcurrent)
     XCTAssertEqual(store.configuration.findProcessMode, .strict)
 
+    store.setActivePage(.logs)
+    try await eventually {
+      store.logs.first?.message == "controller warning" && gateway.cancelledStreams == 3
+    }
+    XCTAssertTrue(gateway.calls.contains("stream.logs.debug"))
+
+    store.setActivePage(.proxies)
+    try await eventually {
+      gateway.calls.contains("fetchProxyProviders") && gateway.cancelledStreams == 4
+    }
+
     store.stop()
-    try await eventually { gateway.cancelledStreams == 4 }
+    XCTAssertEqual(gateway.cancelledStreams, 4)
   }
 
   func testDashboardControlsCallGatewayAndUseAuthoritativeReadback() async throws {

@@ -4,6 +4,7 @@ import AppKit
 struct MihomoBoxMain {
   @MainActor
   static func main() {
+    AppStartupTimeline.mark(.processStarted)
     let application = NSApplication.shared
     let delegate = AppDelegate(coordinator: AppComposition.live())
 
