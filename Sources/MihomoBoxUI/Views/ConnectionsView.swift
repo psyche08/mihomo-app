@@ -427,7 +427,7 @@ public struct ConnectionsView: View {
 
   private func connectionRow(_ connection: DashboardConnection) -> some View {
     let active = isConnectionActive(connection.id)
-    HStack(spacing: 12) {
+    return HStack(spacing: 12) {
       clientIcon(
         applicationBundlePath: ConnectionsPresentation.applicationBundlePath(for: connection),
         fallbackSymbol: clientSymbol(processLabel(connection)),
