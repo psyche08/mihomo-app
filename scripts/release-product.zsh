@@ -68,7 +68,7 @@ fail() {
 
 usage() {
   print -u2 -- \
-    "usage: $PROGRAM_NAME local|local-resume|fresh|resume|publish|ship [--notes FILE] [--publish --confirm vX.Y.Z@FULL_SHA] [--archive-direct-submit-unknown SHA256]"
+    "usage: $PROGRAM_NAME local|local-resume|fresh|resume|publish|ship [--notes FILE] [--publish --confirm vX.Y.Z@FULL_SHA] [--discard-direct-submit-unknown]"
   print -u2 -- \
     "       $PROGRAM_NAME publish --confirm vX.Y.Z@FULL_SHA"
   exit 2
@@ -87,8 +87,7 @@ typeset NOTES_SEEN=0
 typeset PUBLISH_REQUESTED=0
 typeset CONFIRMATION=""
 typeset CONFIRMATION_SEEN=0
-typeset ARCHIVE_DIRECT_SUBMIT_UNKNOWN_SHA256=""
-typeset ARCHIVE_DIRECT_SUBMIT_UNKNOWN_SEEN=0
+typeset DISCARD_DIRECT_SUBMIT_UNKNOWN=0
 while (( $# > 0 )); do
   case "$1" in
     --notes)
@@ -111,13 +110,11 @@ while (( $# > 0 )); do
       CONFIRMATION="$2"
       shift 2
       ;;
-    --archive-direct-submit-unknown)
-      (( $# >= 2 )) || usage
-      (( ARCHIVE_DIRECT_SUBMIT_UNKNOWN_SEEN == 0 )) ||
-        fail "--archive-direct-submit-unknown may be supplied only once"
-      ARCHIVE_DIRECT_SUBMIT_UNKNOWN_SEEN=1
-      ARCHIVE_DIRECT_SUBMIT_UNKNOWN_SHA256="$2"
-      shift 2
+    --discard-direct-submit-unknown)
+      (( DISCARD_DIRECT_SUBMIT_UNKNOWN == 0 )) ||
+        fail "--discard-direct-submit-unknown may be supplied only once"
+      DISCARD_DIRECT_SUBMIT_UNKNOWN=1
+      shift
       ;;
     *) usage ;;
   esac
@@ -139,11 +136,9 @@ elif (( PUBLISH_REQUESTED )); then
 elif [[ -n "$CONFIRMATION" ]]; then
   fail "--confirm is valid only with --publish or publish mode"
 fi
-if [[ -n "$ARCHIVE_DIRECT_SUBMIT_UNKNOWN_SHA256" ]]; then
+if (( DISCARD_DIRECT_SUBMIT_UNKNOWN )); then
   [[ "$MODE" == "local" ]] ||
-    fail "--archive-direct-submit-unknown is valid only with local mode"
-  [[ "$ARCHIVE_DIRECT_SUBMIT_UNKNOWN_SHA256" =~ '^[0-9a-f]{64}$' ]] ||
-    fail "--archive-direct-submit-unknown requires one lower-case SHA-256"
+    fail "--discard-direct-submit-unknown is valid only with local mode"
 fi
 
 readonly SCRIPT_PATH="${0:A}"
@@ -359,9 +354,11 @@ acquire_product_lock() {
 acquire_product_lock
 
 archive_direct_submit_unknown() {
-  local sha256="$ARCHIVE_DIRECT_SUBMIT_UNKNOWN_SHA256"
+  local sha256=""
   local direct_signed_state="$STATE_ROOT/MihomoBox-$VERSION-signed-app.json"
   local direct_notary_state=""
+  local direct_notary_states=""
+  local direct_notary_state_count="0"
   local direct_submit_log=""
   local direct_archive="$DIST_ROOT/MihomoBox-$VERSION-macos.zip"
   local recovery_root="$STATE_ROOT/recovery"
@@ -371,21 +368,31 @@ archive_direct_submit_unknown() {
   local state_status=""
   local upload_confirmed=""
   local submission_id=""
-  local first_direct_notary_state=""
-
-  first_direct_notary_state="$({
+  direct_notary_states="$(
     /usr/bin/find "$STATE_ROOT" -mindepth 1 -maxdepth 1 -type f \
-      -name "MihomoBox-$VERSION-macos.zip.*.json" -print -quit
-  })" || fail "could not inspect direct release state"
+      -name "MihomoBox-$VERSION-macos.zip.*.json" -print
+  )" || fail "could not inspect direct release state"
+  direct_notary_state_count="$(
+    /usr/bin/printf '%s\n' "$direct_notary_states" |
+      /usr/bin/sed '/^[[:space:]]*$/d' |
+      /usr/bin/wc -l |
+      /usr/bin/tr -d '[:space:]'
+  )" || fail "could not count direct release state"
 
-  if [[ -z "$sha256" ]]; then
-    if [[ -e "$direct_signed_state" || -n "$first_direct_notary_state" ]]; then
-      fail "direct $VERSION release state exists; reconcile it or use --archive-direct-submit-unknown with the exact unsubmitted artifact SHA-256"
+  if (( DISCARD_DIRECT_SUBMIT_UNKNOWN == 0 )); then
+    if [[ -e "$direct_signed_state" || "$direct_notary_state_count" != "0" ]]; then
+      fail "direct $VERSION release state exists; reconcile it or use local --discard-direct-submit-unknown after proving Apple accepted no upload"
     fi
     return 0
   fi
 
-  direct_notary_state="$STATE_ROOT/MihomoBox-$VERSION-macos.zip.$sha256.json"
+  [[ "$direct_notary_state_count" == "1" ]] ||
+    fail "discard requires exactly one direct submit-unknown state for $VERSION"
+  direct_notary_state="$direct_notary_states"
+  sha256="$(/usr/bin/plutil -extract artifact_sha256 raw -o - "$direct_notary_state")" ||
+    fail "direct notarization state has no artifact SHA-256"
+  [[ "$sha256" =~ '^[0-9a-f]{64}$' ]] ||
+    fail "direct notarization state has an invalid artifact SHA-256"
   direct_submit_log="$direct_notary_state.submit.log"
   recovery_directory="$recovery_root/direct-$VERSION-submit-unknown-$sha256"
 
@@ -399,8 +406,7 @@ archive_direct_submit_unknown() {
 
   actual_sha256="$(/usr/bin/shasum -a 256 "$direct_archive" | /usr/bin/awk '{print $1}')" ||
     fail "could not hash the direct notarization archive"
-  state_sha256="$(/usr/bin/plutil -extract artifact_sha256 raw -o - "$direct_notary_state")" ||
-    fail "direct notarization state has no artifact SHA-256"
+  state_sha256="$sha256"
   state_status="$(/usr/bin/plutil -extract status raw -o - "$direct_notary_state")" ||
     fail "direct notarization state has no status"
   upload_confirmed="$(/usr/bin/plutil -extract upload_confirmed raw -o - "$direct_notary_state")" ||
@@ -408,8 +414,8 @@ archive_direct_submit_unknown() {
   submission_id="$(
     /usr/bin/plutil -extract submission_id raw -o - "$direct_notary_state" 2>/dev/null || true
   )"
-  [[ "$actual_sha256" == "$sha256" && "$state_sha256" == "$sha256" ]] ||
-    fail "direct submit-unknown archive does not match the confirmed SHA-256"
+  [[ "$actual_sha256" == "$state_sha256" ]] ||
+    fail "direct submit-unknown archive does not match its recorded SHA-256"
   [[ "$state_status" == "submit_unknown" && "$upload_confirmed" == "false" &&
     -z "$submission_id" ]] ||
     fail "direct notarization state is not an unconfirmed submission without an ID"

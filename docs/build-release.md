@@ -64,16 +64,17 @@ helper. Existing state remains fail-closed and must be resumed or reconciled;
 the command never silently deletes or replaces an ambiguous submission.
 When an earlier direct `release-macos.sh` attempt crashed before exposing any
 submission ID, the operator must first prove from Apple history that no upload
-was accepted. Only then may the exact unsubmitted SHA-256 be supplied once so
-`local` archives that direct state and its ZIP before creating a new artifact:
+was accepted. Only then may the one-time discard switch be used so `local`
+automatically verifies and archives that direct state and ZIP before creating a
+new artifact:
 
 ```bash
-./scripts/release-product.zsh local \
-  --archive-direct-submit-unknown EXACT_64_HEX_SHA256
+./scripts/release-product.zsh local --discard-direct-submit-unknown
 ```
 
-The option accepts only `submit_unknown`, `upload_confirmed=false`, no-ID state
-whose file bytes match that SHA-256. Other or ambiguous state remains blocked.
+The option accepts exactly one `submit_unknown`, `upload_confirmed=false`,
+no-ID state whose ZIP bytes match its recorded SHA-256. Other or ambiguous
+state remains blocked; the SHA-256 never needs to be entered manually.
 If signing, upload, waiting, or stapling is interrupted after state has been
 created, inspect the recorded log and resume only that exact local artifact:
 
