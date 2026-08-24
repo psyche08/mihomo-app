@@ -54,6 +54,17 @@ use bounded request/readback calls and keep no stream open. Moving between
 pages cancels both inactive streams and their retry timers, so a hidden or
 static page cannot keep polling the controller in the background.
 
+Connections uses a native two-pane dashboard. The left pane groups clients by
+the reported process name, falls back to the executable basename, and always
+offers `All Clients`; each group shows its active count and aggregate live
+throughput, or its retained recent count when inactive. The right pane shows
+newest-first recent connections for the selected client and can narrow them to
+Recent, Active, or Closed without opening another controller stream. Recent is
+the de-duplicated union of the live set and the session's bounded history of up
+to 500 closed connections. Search, transferring-only filtering, per-connection
+close, filtered active close, pause/resume, and the full connection detail
+sheet remain available.
+
 The check mark always represents agent/controller state returned over XPC, not
 the last click. The tray polls every five seconds and immediately after a mutation, but replaces the
 native menu only when its semantic state or structure changes. Delay-only
@@ -123,6 +134,11 @@ Daemon…`. Once installed, TUN enable/disable, service start/stop/restart,
 profile import/switch/reload, outbound mode, proxy selection, and delay tests
 all use the native typed client and authenticated XPC. None of those paths
 reinvoke the installer or request another administrator dialog.
+
+Tray reload re-reads the active regular YAML file from the current user's
+profile mirror and sends its bounded bytes over authenticated XPC for the same
+transactional validation and activation as import. If no safe local mirror is
+available, it falls back to reloading the daemon's root-owned copy.
 
 ## XPC Control Mapping
 

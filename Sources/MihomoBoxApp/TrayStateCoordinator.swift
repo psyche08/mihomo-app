@@ -317,7 +317,11 @@ final class TrayStateCoordinator: TrayService {
   }
 
   func reloadProfile() async throws {
-    try await profileAction { try await self.profiles.reload() }
+    try await profileAction {
+      try await self.profiles.reload(
+        daemonInstalled: Self.daemonInstalled(fileManager: self.fileManager)
+      )
+    }
   }
 
   func installOrRepairDaemon(requireLegacy: Bool) async throws {

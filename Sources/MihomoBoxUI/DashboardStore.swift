@@ -1404,7 +1404,33 @@ public final class DashboardStore: ObservableObject {
         startedAt: now.addingTimeInterval(-74)
       ),
     ]
-    closedConnections = []
+    closedConnections = [
+      DashboardConnection(
+        id: "preview-closed-1", host: "cdn.jsdelivr.net", destination: "151.101.1.229:443",
+        network: "TCP", connectionType: "HTTPS", source: "192.168.1.24",
+        sourcePort: "49982", destinationIP: "151.101.1.229", destinationPort: "443",
+        user: "local", process: "Safari",
+        processPath: "/Applications/Safari.app/Contents/MacOS/Safari",
+        sniffHost: "cdn.jsdelivr.net", inboundName: "TUN",
+        dnsMode: "fake-ip", inboundIP: "198.18.0.1", inboundPort: "0", uid: 501,
+        rule: "DomainSuffix", rulePayload: "jsdelivr.net", specialProxy: "Auto Select",
+        specialRules: "DOMAIN-SUFFIX,jsdelivr.net", chains: ["Singapore", "Auto Select"],
+        uploadBytes: 62_000, downloadBytes: 1_240_000,
+        startedAt: now.addingTimeInterval(-842)
+      ),
+      DashboardConnection(
+        id: "preview-closed-2", host: "developer.apple.com", destination: "17.253.144.10:443",
+        network: "TCP", connectionType: "HTTPS", source: "192.168.1.24",
+        sourcePort: "49874", destinationIP: "17.253.144.10", destinationPort: "443",
+        user: "local", process: "Terminal",
+        processPath: "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal",
+        sniffHost: "developer.apple.com", inboundName: "TUN",
+        dnsMode: "fake-ip", inboundIP: "198.18.0.1", inboundPort: "0", uid: 501,
+        rule: "GeoSite", rulePayload: "apple", specialRules: "GEOSITE,apple",
+        chains: ["DIRECT"], uploadBytes: 14_000, downloadBytes: 286_000,
+        startedAt: now.addingTimeInterval(-1_460)
+      ),
+    ]
     logs = [
       DashboardLogEntry(
         id: 1, timestamp: now.addingTimeInterval(-24), level: .info,

@@ -111,7 +111,7 @@ actor ProfileCoordinator {
 
       var request = URLRequest(url: url, timeoutInterval: 30)
       request.cachePolicy = .reloadIgnoringLocalCacheData
-      request.setValue("MihomoBox/0.8", forHTTPHeaderField: "User-Agent")
+      request.setValue("MihomoBox/0.9", forHTTPHeaderField: "User-Agent")
       switch authentication {
       case .none:
         break
@@ -188,8 +188,18 @@ actor ProfileCoordinator {
     }
   }
 
-  func reload() async throws -> ProfileList {
-    try await withOperation { try await control.reloadProfile() }
+  func reload(daemonInstalled: Bool) async throws -> ProfileList {
+    try await withOperation {
+      guard daemonInstalled else { return localList() }
+      if let candidate = try localReloadCandidate() {
+        return try await control.importProfile(
+          name: candidate.name,
+          bytes: candidate.bytes,
+          activate: true
+        )
+      }
+      return try await control.reloadProfile()
+    }
   }
 
   func localState() -> ProfileList { localList() }
@@ -205,6 +215,17 @@ actor ProfileCoordinator {
 
   private var profilesDirectory: URL { root.appendingPathComponent("profiles", isDirectory: true) }
   private var activeURL: URL { root.appendingPathComponent("active-profile") }
+
+  /// Returns the current user-owned profile when it can safely cross the
+  /// authenticated XPC boundary again. Reload must not silently re-read only
+  /// the daemon's older root-owned mirror after the user replaces this file.
+  func localReloadCandidate() throws -> (name: String, bytes: Data)? {
+    guard let name = localList().activeProfile else { return nil }
+    let validated = try Self.validatedName(name)
+    let source = profilesDirectory.appendingPathComponent(validated)
+    guard Self.isRegularNonSymlink(source) else { return nil }
+    return (validated, try Self.boundedBytes(at: source))
+  }
 
   private struct LocalFileBackup {
     var data: Data

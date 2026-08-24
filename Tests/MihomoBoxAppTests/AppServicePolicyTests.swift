@@ -709,6 +709,41 @@ final class AppServicePolicyTests: XCTestCase {
     XCTAssertNil(invalidSelection.activeProfile)
   }
 
+  func testProfileReloadCandidateUsesCurrentUserMirrorBytes() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("mihomobox-profile-reload-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let profiles = root.appendingPathComponent("profiles")
+    try FileManager.default.createDirectory(at: profiles, withIntermediateDirectories: true)
+    let expected = Data("mode: rule\n".utf8)
+    try expected.write(to: profiles.appendingPathComponent("current.yaml"))
+    try Data("current.yaml\n".utf8).write(to: root.appendingPathComponent("active-profile"))
+
+    let coordinator = ProfileCoordinator(control: TrayControlClient(), root: root)
+    let candidate = try await coordinator.localReloadCandidate()
+    XCTAssertEqual(candidate?.name, "current.yaml")
+    XCTAssertEqual(candidate?.bytes, expected)
+  }
+
+  func testProfileReloadCandidateRejectsUnsafeActiveMirror() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("mihomobox-profile-reload-link-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let profiles = root.appendingPathComponent("profiles")
+    try FileManager.default.createDirectory(at: profiles, withIntermediateDirectories: true)
+    let target = root.appendingPathComponent("target.yaml")
+    try Data("mode: rule\n".utf8).write(to: target)
+    try FileManager.default.createSymbolicLink(
+      at: profiles.appendingPathComponent("current.yaml"),
+      withDestinationURL: target
+    )
+    try Data("current.yaml\n".utf8).write(to: root.appendingPathComponent("active-profile"))
+
+    let coordinator = ProfileCoordinator(control: TrayControlClient(), root: root)
+    let candidate = try await coordinator.localReloadCandidate()
+    XCTAssertNil(candidate)
+  }
+
   func testProfileSymlinkIsNotARegularCandidate() throws {
     let root = FileManager.default.temporaryDirectory
       .appendingPathComponent("mihomobox-profile-symlink-\(UUID().uuidString)")

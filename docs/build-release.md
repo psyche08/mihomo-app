@@ -143,11 +143,11 @@ paths documented below. A new `VERSION` does not require creating or editing a
 `NOTARY_TEAM_ID`; when the team has multiple valid identities,
 `CODESIGN_IDENTITY_FINGERPRINT` must still resolve the ambiguity.
 
-Version `0.8.3` is already public. Version `0.8.4` is a separate performance
-and observability release: it uses its own source commit, annotated tag, state
+Versions `0.8.3` and `0.8.4` are already public. Version `0.9.0` is a separate
+native-dashboard release: it uses its own source commit, annotated tag, state
 directory, notarization submissions and five assets. Preparing or publishing
-`0.8.4` must not delete, resume, replace, upload to, or otherwise alter any
-`0.8.3` state or GitHub assets.
+`0.9.0` must not delete, resume, replace, upload to, or otherwise alter any
+`0.8.x` state or GitHub assets.
 
 The bundle gate must find exactly these product executables:
 

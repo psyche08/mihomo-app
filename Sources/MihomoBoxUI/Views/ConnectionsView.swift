@@ -4,31 +4,18 @@ import SwiftUI
 @MainActor
 public struct ConnectionsView: View {
   private enum Scope: String, CaseIterable, Identifiable {
+    case recent = "Recent"
     case active = "Active"
     case closed = "Closed"
 
     var id: String { rawValue }
   }
 
-  private enum SortColumn: String, CaseIterable, Identifiable {
-    case time = "Time"
-    case host = "Host"
-    case downloadSpeed = "Download speed"
-    case uploadSpeed = "Upload speed"
-    case traffic = "Traffic"
-
-    var id: String { rawValue }
-  }
-
   @ObservedObject private var store: DashboardStore
-  @State private var scope: Scope = .active
+  @State private var scope: Scope = .recent
+  @State private var selectedClientID: String?
   @State private var search = ""
   @State private var quickFilterEnabled = false
-  @State private var sourceFilter = "All"
-  @State private var sortColumn: SortColumn = .time
-  @State private var sortDescending = true
-  @State private var currentPage = 0
-  @State private var pageSize = 50
   @State private var selectedConnection: DashboardConnection?
   @State private var showingSettings = false
   @State private var compactRows = true
@@ -39,9 +26,7 @@ public struct ConnectionsView: View {
   }
 
   public var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      toolbar
-
+    Group {
       switch store.connectionsState {
       case .loaded:
         loadedContent
@@ -54,19 +39,17 @@ public struct ConnectionsView: View {
         }
       }
     }
-    .padding(DashboardTheme.spacing)
+    .padding(DashboardTheme.sectionSpacing)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .background(DashboardTheme.background)
     .sheet(item: $selectedConnection) { connection in
       connectionDetail(connection)
     }
-    .onChange(of: scope) { _, _ in currentPage = 0 }
-    .onChange(of: search) { _, _ in currentPage = 0 }
-    .onChange(of: quickFilterEnabled) { _, _ in currentPage = 0 }
-    .onChange(of: sourceFilter) { _, _ in currentPage = 0 }
-    .onChange(of: sortColumn) { _, _ in currentPage = 0 }
-    .onChange(of: pageSize) { _, _ in currentPage = 0 }
-    .onChange(of: filteredConnections.count) { _, _ in clampCurrentPage() }
+    .onChange(of: clientGroups.map(\.id)) { _, ids in
+      if let selectedClientID, !ids.contains(selectedClientID) {
+        self.selectedClientID = nil
+      }
+    }
   }
 
   private var toolbar: some View {
@@ -74,9 +57,6 @@ public struct ConnectionsView: View {
       HStack(spacing: 8) {
         scopeTabs
         quickFilterControl
-        networkMenu
-        sortMenu
-        sortDirectionButton
         DashboardSearchField("Search", text: $search)
           .frame(maxWidth: .infinity)
         streamActions
@@ -86,16 +66,10 @@ public struct ConnectionsView: View {
         HStack(spacing: 8) {
           scopeTabs
           quickFilterControl
-          networkMenu
           Spacer(minLength: 2)
           streamActions
         }
-        HStack(spacing: 8) {
-          sortMenu
-          sortDirectionButton
-          DashboardSearchField("Search", text: $search)
-            .frame(maxWidth: .infinity)
-        }
+        DashboardSearchField("Search", text: $search)
       }
     }
   }
@@ -139,66 +113,13 @@ public struct ConnectionsView: View {
   }
 
   private var quickFilterControl: some View {
-    Toggle("Quick Filter", isOn: $quickFilterEnabled)
+    Toggle("Transferring", isOn: $quickFilterEnabled)
       .toggleStyle(.switch)
       .controlSize(.mini)
       .font(.system(size: 11, weight: .medium))
       .foregroundStyle(DashboardTheme.muted)
       .fixedSize()
       .help("Show connections currently transferring data")
-  }
-
-  private var networkMenu: some View {
-    Menu {
-      Button("All") { sourceFilter = "All" }
-      ForEach(sourceOptions, id: \.self) { source in
-        Button(source) { sourceFilter = source }
-      }
-    } label: {
-      HStack(spacing: 7) {
-        Image(systemName: "desktopcomputer")
-        Text(sourceFilter)
-          .lineLimit(1)
-      }
-      .toolbarControl()
-    }
-    .menuStyle(.borderlessButton)
-    .menuIndicator(.hidden)
-    .fixedSize()
-    .help("Filter by source")
-  }
-
-  private var sortMenu: some View {
-    Menu {
-      Picker("Sort connections", selection: $sortColumn) {
-        ForEach(SortColumn.allCases) { column in
-          Text(column.rawValue).tag(column)
-        }
-      }
-    } label: {
-      HStack(spacing: 7) {
-        Image(systemName: "arrow.up.arrow.down")
-        Text("Sort by")
-          .foregroundStyle(DashboardTheme.muted)
-        Text(sortColumn.rawValue)
-          .lineLimit(1)
-      }
-      .toolbarControl()
-    }
-    .menuStyle(.borderlessButton)
-    .menuIndicator(.hidden)
-    .fixedSize()
-  }
-
-  private var sortDirectionButton: some View {
-    Button {
-      sortDescending.toggle()
-    } label: {
-      toolbarIcon(
-        sortDescending ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle")
-    }
-    .buttonStyle(.plain)
-    .help(sortDescending ? "Descending" : "Ascending")
   }
 
   private var streamActions: some View {
@@ -218,8 +139,8 @@ public struct ConnectionsView: View {
         toolbarIcon("xmark", danger: true, active: closingConnections)
       }
       .buttonStyle(.plain)
-      .disabled(scope != .active || filteredConnections.isEmpty || closingConnections)
-      .help(hasConnectionFilters ? "Close filtered connections" : "Close all connections")
+      .disabled(activeVisibleConnections.isEmpty || closingConnections)
+      .help(hasConnectionFilters ? "Close filtered active connections" : "Close all connections")
 
       settingsButton
     }
@@ -234,14 +155,13 @@ public struct ConnectionsView: View {
     .buttonStyle(.plain)
     .popover(isPresented: $showingSettings, arrowEdge: .top) {
       VStack(alignment: .leading, spacing: 14) {
-        Text("Connections table")
+        Text("Recent connections")
           .font(.system(size: 14, weight: .semibold))
         Toggle("Compact rows", isOn: $compactRows)
-        Picker("Rows per page", selection: $pageSize) {
-          ForEach([20, 50, 100, 200], id: \.self) { size in
-            Text("\(size) rows").tag(size)
-          }
-        }
+        Text("Up to 500 recently closed connections are kept for this UI session.")
+          .font(.system(size: 10))
+          .foregroundStyle(DashboardTheme.muted)
+          .fixedSize(horizontal: false, vertical: true)
         Divider()
         Button {
           showingSettings = false
@@ -289,145 +209,277 @@ public struct ConnectionsView: View {
 
   @ViewBuilder
   private var loadedContent: some View {
-    if filteredConnections.isEmpty {
+    if recentConnections.isEmpty {
       DashboardPageStateView(
         state: .empty(
-          message: sourceConnections.isEmpty
-            ? "There are no \(scope.rawValue.lowercased()) connections."
-            : "No connection matches the current filters."
+          message: "Recent active and closed connections will appear here."
         ),
-        emptyTitle: "No matching connections"
+        emptyTitle: "No recent connections"
       ) {
-        clearFilters()
+        Task { await store.refresh(.connections) }
       }
     } else {
-      VStack(spacing: 10) {
-        connectionTable
-        paginationBar
+      HStack(spacing: 0) {
+        clientsPane
+          .frame(minWidth: 205, idealWidth: 230, maxWidth: 260)
+        Divider().overlay(DashboardTheme.divider)
+        recentPane
       }
+      .background(DashboardTheme.surface.opacity(0.72), in: RoundedRectangle(cornerRadius: 12))
+      .overlay {
+        RoundedRectangle(cornerRadius: 12)
+          .stroke(DashboardTheme.divider, lineWidth: 1)
+      }
+      .clipShape(RoundedRectangle(cornerRadius: 12))
     }
   }
 
-  private var connectionTable: some View {
-    GeometryReader { geometry in
-      ScrollView([.horizontal, .vertical]) {
-        LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-          Section {
-            ForEach(pagedConnections) { connection in
+  private var clientsPane: some View {
+    VStack(spacing: 0) {
+      HStack(alignment: .firstTextBaseline) {
+        VStack(alignment: .leading, spacing: 3) {
+          Text("CLIENTS")
+            .font(.system(size: 10, weight: .black))
+            .tracking(0.9)
+            .foregroundStyle(DashboardTheme.primary)
+          Text("Grouped by process")
+            .font(.system(size: 10))
+            .foregroundStyle(DashboardTheme.muted)
+        }
+        Spacer(minLength: 8)
+        Text(clientGroups.count.formatted())
+          .font(.system(size: 10, weight: .bold, design: .rounded))
+          .monospacedDigit()
+          .foregroundStyle(DashboardTheme.muted)
+      }
+      .padding(.horizontal, 14)
+      .frame(height: 58)
+
+      Divider().overlay(DashboardTheme.divider)
+
+      ScrollView {
+        LazyVStack(spacing: 5) {
+          clientButton(
+            id: nil,
+            name: "All Clients",
+            symbol: "square.grid.2x2.fill",
+            activeCount: store.presentedActiveConnections.count,
+            recentCount: recentConnections.count,
+            uploadSpeed: totalActiveUploadSpeed,
+            downloadSpeed: totalActiveDownloadSpeed
+          )
+
+          ForEach(clientGroups) { group in
+            clientButton(
+              id: group.id,
+              name: group.name,
+              symbol: clientSymbol(group.name),
+              activeCount: group.activeCount,
+              recentCount: group.recentCount,
+              uploadSpeed: group.uploadSpeed,
+              downloadSpeed: group.downloadSpeed
+            )
+          }
+        }
+        .padding(8)
+      }
+
+      Divider().overlay(DashboardTheme.divider)
+
+      HStack(spacing: 7) {
+        Circle()
+          .fill(store.connectionsPaused ? DashboardTheme.warning : DashboardTheme.success)
+          .frame(width: 7, height: 7)
+        Text(store.connectionsPaused ? "Stream paused" : "Live stream")
+          .font(.system(size: 10, weight: .medium))
+          .foregroundStyle(DashboardTheme.muted)
+        Spacer()
+      }
+      .padding(.horizontal, 14)
+      .frame(height: 36)
+    }
+  }
+
+  private func clientButton(
+    id: String?,
+    name: String,
+    symbol: String,
+    activeCount: Int,
+    recentCount: Int,
+    uploadSpeed: Int64,
+    downloadSpeed: Int64
+  ) -> some View {
+    let selected = selectedClientID == id
+    return Button {
+      selectedClientID = id
+    } label: {
+      HStack(spacing: 10) {
+        Image(systemName: symbol)
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundStyle(selected ? DashboardTheme.primaryContent : DashboardTheme.primary)
+          .frame(width: 30, height: 30)
+          .background(
+            selected ? Color.white.opacity(0.16) : DashboardTheme.primary.opacity(0.09),
+            in: RoundedRectangle(cornerRadius: 8)
+          )
+
+        VStack(alignment: .leading, spacing: 4) {
+          HStack(spacing: 6) {
+            Text(name)
+              .font(.system(size: 11, weight: .semibold))
+              .lineLimit(1)
+            Spacer(minLength: 4)
+            Text(activeCount > 0 ? activeCount.formatted() : recentCount.formatted())
+              .font(.system(size: 9, weight: .bold, design: .rounded))
+              .monospacedDigit()
+              .foregroundStyle(selected ? DashboardTheme.primaryContent : DashboardTheme.muted)
+          }
+          Text(
+            activeCount > 0
+              ? "↓ \(DashboardFormat.speed(downloadSpeed))  ↑ \(DashboardFormat.speed(uploadSpeed))"
+              : "\(recentCount.formatted()) recent"
+          )
+          .font(.system(size: 9, design: .rounded))
+          .monospacedDigit()
+          .foregroundStyle(
+            selected ? DashboardTheme.primaryContent.opacity(0.74) : DashboardTheme.muted
+          )
+          .lineLimit(1)
+        }
+      }
+      .foregroundStyle(selected ? DashboardTheme.primaryContent : DashboardTheme.content)
+      .padding(.horizontal, 9)
+      .frame(height: compactRows ? 48 : 56)
+      .background(
+        selected ? DashboardTheme.primary : Color.clear,
+        in: RoundedRectangle(cornerRadius: 9)
+      )
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel("\(name), \(activeCount) active, \(recentCount) recent")
+  }
+
+  private var recentPane: some View {
+    VStack(spacing: 0) {
+      VStack(alignment: .leading, spacing: 11) {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+          VStack(alignment: .leading, spacing: 3) {
+            Text("Recent Connections")
+              .font(.system(size: 17, weight: .bold))
+              .foregroundStyle(DashboardTheme.content)
+            Text(selectedClientName)
+              .font(.system(size: 10, weight: .medium))
+              .foregroundStyle(DashboardTheme.muted)
+          }
+          Spacer(minLength: 8)
+          Text("\(filteredConnections.count.formatted()) shown")
+            .font(.system(size: 10, weight: .semibold, design: .rounded))
+            .monospacedDigit()
+            .foregroundStyle(DashboardTheme.muted)
+        }
+        toolbar
+      }
+      .padding(14)
+
+      Divider().overlay(DashboardTheme.divider)
+
+      if filteredConnections.isEmpty {
+        DashboardPageStateView(
+          state: .empty(message: "No connection matches this client and the current filters."),
+          emptyTitle: "No matching connections"
+        ) {
+          clearFilters()
+        }
+      } else {
+        ScrollView {
+          LazyVStack(spacing: 0) {
+            ForEach(filteredConnections) { connection in
               connectionRow(connection)
               Divider().overlay(DashboardTheme.divider)
             }
-          } header: {
-            connectionHeader
-              .background(DashboardTheme.surface)
           }
         }
-        .frame(
-          minWidth: 980,
-          minHeight: geometry.size.height,
-          alignment: .topLeading
-        )
       }
     }
-    .background(DashboardTheme.surface.opacity(0.72), in: RoundedRectangle(cornerRadius: 11))
-    .overlay {
-      RoundedRectangle(cornerRadius: 11)
-        .stroke(DashboardTheme.divider, lineWidth: 1)
-    }
-  }
-
-  private var connectionHeader: some View {
-    HStack(spacing: 10) {
-      Text("CLOSE").frame(width: 42, alignment: .leading)
-      sortableHeader("TIME", column: .time).frame(width: 110, alignment: .leading)
-      sortableHeader("HOST / PROCESS", column: .host).frame(width: 220, alignment: .leading)
-      Text("RULE / CHAINS").frame(width: 230, alignment: .leading)
-      sortableHeader("TRAFFIC", column: .downloadSpeed).frame(width: 190, alignment: .leading)
-      Text("FLOW").frame(width: 170, alignment: .leading)
-    }
-    .font(.system(size: 10, weight: .bold))
-    .foregroundStyle(DashboardTheme.muted)
-    .padding(.horizontal, 10)
-    .frame(height: 35)
-    .accessibilityHidden(true)
-  }
-
-  private func sortableHeader(_ title: String, column: SortColumn) -> some View {
-    Button {
-      if sortColumn == column {
-        sortDescending.toggle()
-      } else {
-        sortColumn = column
-        sortDescending = true
-      }
-    } label: {
-      HStack(spacing: 5) {
-        Text(title)
-        if sortColumn == column {
-          Image(systemName: sortDescending ? "arrow.down" : "arrow.up")
-            .foregroundStyle(DashboardTheme.primary)
-        }
-      }
-    }
-    .buttonStyle(.plain)
   }
 
   private func connectionRow(_ connection: DashboardConnection) -> some View {
-    HStack(spacing: 10) {
-      Group {
-        if scope == .active {
-          Button {
-            Task { await store.closeConnection(connection.id) }
-          } label: {
-            Image(systemName: "xmark")
-              .font(.system(size: 10, weight: .bold))
-              .foregroundStyle(DashboardTheme.error)
-              .frame(width: 24, height: 24)
-              .background(DashboardTheme.error.opacity(0.1), in: Circle())
-          }
-          .buttonStyle(.plain)
-          .accessibilityLabel("Close connection to \(hostLabel(connection))")
-        } else {
-          Color.clear.frame(width: 24, height: 24)
-        }
-      }
-      .frame(width: 42, alignment: .leading)
+    HStack(spacing: 12) {
+      Image(systemName: clientSymbol(processLabel(connection)))
+        .font(.system(size: 12, weight: .semibold))
+        .foregroundStyle(
+          isConnectionActive(connection.id) ? DashboardTheme.success : DashboardTheme.muted
+        )
+        .frame(width: 30, height: 30)
+        .background(
+          (isConnectionActive(connection.id) ? DashboardTheme.success : DashboardTheme.muted)
+            .opacity(0.09),
+          in: RoundedRectangle(cornerRadius: 8)
+        )
 
-      Text(relativeTime(connection.startedAt))
-        .font(.system(size: 10, weight: .medium))
+      VStack(alignment: .leading, spacing: 4) {
+        Text(hostLabel(connection))
+          .font(.system(size: 11, weight: .semibold))
+          .foregroundStyle(DashboardTheme.content)
+          .lineLimit(1)
+        Text("\(processLabel(connection)) · \(connection.network.uppercased())")
+          .font(.system(size: 9))
+          .foregroundStyle(DashboardTheme.muted)
+          .lineLimit(1)
+      }
+      .frame(minWidth: 125, maxWidth: .infinity, alignment: .leading)
+
+      VStack(alignment: .leading, spacing: 4) {
+        Text(chainLabel(connection))
+          .font(.system(size: 10, weight: .semibold))
+          .foregroundStyle(DashboardTheme.content)
+          .lineLimit(1)
+        Text(connection.rule.isEmpty ? "No rule" : connection.rule)
+          .font(.system(size: 9))
+          .foregroundStyle(DashboardTheme.muted)
+          .lineLimit(1)
+      }
+      .frame(width: 115, alignment: .leading)
+
+      VStack(alignment: .trailing, spacing: 4) {
+        Text(
+          "↓ \(DashboardFormat.speed(connection.downloadSpeed))  ↑ \(DashboardFormat.speed(connection.uploadSpeed))"
+        )
+        .font(.system(size: 9, weight: .semibold, design: .rounded))
+        .monospacedDigit()
         .foregroundStyle(DashboardTheme.content)
         .lineLimit(1)
-        .frame(width: 110, alignment: .leading)
+        Text(
+          "\(DashboardFormat.bytes(connection.downloadBytes + connection.uploadBytes)) · \(relativeTime(connection.startedAt))"
+        )
+        .font(.system(size: 9, design: .rounded))
+        .monospacedDigit()
+        .foregroundStyle(DashboardTheme.muted)
+        .lineLimit(1)
+      }
+      .frame(width: 155, alignment: .trailing)
 
-      twoLineCell(
-        primary: hostLabel(connection),
-        secondary: processLabel(connection)
-      )
-      .frame(width: 220, alignment: .leading)
-
-      twoLineCell(
-        primary: connection.rule.isEmpty ? "—" : connection.rule,
-        secondary: chainLabel(connection)
-      )
-      .frame(width: 230, alignment: .leading)
-
-      twoLineCell(
-        primary:
-          "↓ \(DashboardFormat.speed(connection.downloadSpeed)) · ↑ \(DashboardFormat.speed(connection.uploadSpeed))",
-        secondary:
-          "∑ ↓\(DashboardFormat.bytes(connection.downloadBytes)) · ↑\(DashboardFormat.bytes(connection.uploadBytes))"
-      )
-      .frame(width: 190, alignment: .leading)
-      .monospacedDigit()
-
-      twoLineCell(
-        primary: flowSource(connection),
-        secondary: "→ \(destinationLabel(connection))"
-      )
-      .frame(width: 170, alignment: .leading)
+      if isConnectionActive(connection.id) {
+        Button {
+          Task { await store.closeConnection(connection.id) }
+        } label: {
+          Image(systemName: "xmark")
+            .font(.system(size: 9, weight: .bold))
+            .foregroundStyle(DashboardTheme.error)
+            .frame(width: 26, height: 26)
+            .background(DashboardTheme.error.opacity(0.09), in: Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Close connection to \(hostLabel(connection))")
+      } else {
+        Text("CLOSED")
+          .font(.system(size: 8, weight: .bold))
+          .foregroundStyle(DashboardTheme.muted)
+          .frame(width: 42)
+      }
     }
-    .padding(.horizontal, 10)
-    .frame(height: compactRows ? 52 : 64)
+    .padding(.horizontal, 14)
+    .frame(height: compactRows ? 56 : 68)
     .contentShape(Rectangle())
     .onTapGesture { selectedConnection = connection }
     .accessibilityElement(children: .combine)
@@ -435,85 +487,22 @@ public struct ConnectionsView: View {
     .accessibilityHint("Show connection details")
   }
 
-  private func twoLineCell(primary: String, secondary: String) -> some View {
-    VStack(alignment: .leading, spacing: 3) {
-      Text(primary)
-        .font(.system(size: 10, weight: .semibold))
-        .foregroundStyle(DashboardTheme.content)
-        .lineLimit(1)
-      Text(secondary.isEmpty ? "—" : secondary)
-        .font(.system(size: 9))
-        .foregroundStyle(DashboardTheme.muted)
-        .lineLimit(1)
+  private func clientSymbol(_ name: String) -> String {
+    let normalized = name.lowercased()
+    if normalized.contains("safari") || normalized.contains("chrome")
+      || normalized.contains("firefox")
+    {
+      return "safari.fill"
     }
-  }
-
-  private var paginationBar: some View {
-    HStack(spacing: 12) {
-      Picker("Rows per page", selection: $pageSize) {
-        ForEach([20, 50, 100, 200], id: \.self) { size in
-          Text(size.formatted()).tag(size)
-        }
-      }
-      .labelsHidden()
-      .frame(width: 72)
-
-      Text(paginationInfo)
-        .font(.system(size: 10))
-        .monospacedDigit()
-        .foregroundStyle(DashboardTheme.muted)
-
-      Spacer(minLength: 8)
-      paginationControls
+    if normalized.contains("terminal") || normalized.contains("iterm")
+      || normalized.contains("ssh")
+    {
+      return "terminal.fill"
     }
-  }
-
-  private var paginationControls: some View {
-    HStack(spacing: 0) {
-      pageButton("chevron.left.2", disabled: currentPage == 0) { currentPage = 0 }
-      pageButton("chevron.left", disabled: currentPage == 0) { currentPage -= 1 }
-      ForEach(visiblePages, id: \.self) { page in
-        Button {
-          currentPage = page
-        } label: {
-          Text((page + 1).formatted())
-            .font(.system(size: 10, weight: .semibold))
-            .monospacedDigit()
-            .foregroundStyle(
-              currentPage == page ? DashboardTheme.primaryContent : DashboardTheme.muted
-            )
-            .frame(minWidth: 29, minHeight: 28)
-            .background(currentPage == page ? DashboardTheme.primary : DashboardTheme.surface)
-        }
-        .buttonStyle(.plain)
-      }
-      pageButton("chevron.right", disabled: currentPage >= totalPages - 1) { currentPage += 1 }
-      pageButton("chevron.right.2", disabled: currentPage >= totalPages - 1) {
-        currentPage = totalPages - 1
-      }
+    if normalized.contains("code") || normalized.contains("xcode") {
+      return "chevron.left.forwardslash.chevron.right"
     }
-    .clipShape(RoundedRectangle(cornerRadius: 8))
-    .overlay {
-      RoundedRectangle(cornerRadius: 8)
-        .stroke(DashboardTheme.divider, lineWidth: 1)
-    }
-  }
-
-  private func pageButton(
-    _ symbol: String,
-    disabled: Bool,
-    action: @escaping () -> Void
-  ) -> some View {
-    Button(action: action) {
-      Image(systemName: symbol)
-        .font(.system(size: 9, weight: .bold))
-        .foregroundStyle(DashboardTheme.muted)
-        .frame(width: 28, height: 28)
-        .background(DashboardTheme.surface)
-    }
-    .buttonStyle(.plain)
-    .disabled(disabled)
-    .opacity(disabled ? 0.38 : 1)
+    return "app.fill"
   }
 
   private func connectionDetail(_ selection: DashboardConnection) -> some View {
@@ -667,86 +656,73 @@ public struct ConnectionsView: View {
     .accessibilityElement(children: .combine)
   }
 
-  private var sourceConnections: [DashboardConnection] {
-    scope == .active ? store.presentedActiveConnections : store.presentedClosedConnections
+  private var recentConnections: [DashboardConnection] {
+    ConnectionsPresentation.recent(
+      active: store.presentedActiveConnections,
+      closed: store.presentedClosedConnections
+    )
+  }
+
+  private var clientGroups: [ConnectionClientGroup] {
+    ConnectionsPresentation.clientGroups(
+      active: store.presentedActiveConnections,
+      closed: store.presentedClosedConnections
+    )
+  }
+
+  private var scopeConnections: [DashboardConnection] {
+    switch scope {
+    case .recent: recentConnections
+    case .active: store.presentedActiveConnections
+    case .closed: store.presentedClosedConnections
+    }
   }
 
   private var filteredConnections: [DashboardConnection] {
-    var result = sourceConnections.filter { connection in
-      let sourceMatches =
-        sourceFilter == "All"
-        || connection.source.caseInsensitiveCompare(sourceFilter) == .orderedSame
+    scopeConnections.filter { connection in
+      let clientMatches =
+        selectedClientID == nil
+        || ConnectionsPresentation.clientID(for: connection) == selectedClientID
       let quickMatches =
         !quickFilterEnabled
         || connection.downloadSpeed > 0
         || connection.uploadSpeed > 0
       let searchMatches =
         search.isEmpty
-        || searchableText(connection)
-          .localizedCaseInsensitiveContains(search)
-      return sourceMatches && quickMatches && searchMatches
+        || searchableText(connection).localizedCaseInsensitiveContains(search)
+      return clientMatches && quickMatches && searchMatches
     }
-
-    result.sort { lhs, rhs in
-      let comparison: ComparisonResult
-      switch sortColumn {
-      case .time:
-        comparison = lhs.startedAt.compare(rhs.startedAt)
-      case .host:
-        comparison = hostLabel(lhs).localizedStandardCompare(hostLabel(rhs))
-      case .downloadSpeed:
-        comparison = compare(lhs.downloadSpeed, rhs.downloadSpeed)
-      case .uploadSpeed:
-        comparison = compare(lhs.uploadSpeed, rhs.uploadSpeed)
-      case .traffic:
-        comparison = compare(
-          lhs.downloadBytes + lhs.uploadBytes,
-          rhs.downloadBytes + rhs.uploadBytes
-        )
-      }
-      if comparison == .orderedSame {
-        return lhs.id.localizedStandardCompare(rhs.id) == .orderedAscending
-      }
-      return sortDescending
-        ? comparison == .orderedDescending
-        : comparison == .orderedAscending
+    .sorted { lhs, rhs in
+      if lhs.startedAt != rhs.startedAt { return lhs.startedAt > rhs.startedAt }
+      return lhs.id.localizedStandardCompare(rhs.id) == .orderedAscending
     }
-    return result
   }
 
-  private var pagedConnections: [DashboardConnection] {
-    let start = min(currentPage * pageSize, filteredConnections.count)
-    let end = min(start + pageSize, filteredConnections.count)
-    return Array(filteredConnections[start..<end])
+  private var activeVisibleConnections: [DashboardConnection] {
+    let activeIDs = Set(store.presentedActiveConnections.map(\.id))
+    return filteredConnections.filter { activeIDs.contains($0.id) }
   }
 
-  private var totalPages: Int {
-    max(1, Int(ceil(Double(filteredConnections.count) / Double(pageSize))))
+  private var totalActiveUploadSpeed: Int64 {
+    store.presentedActiveConnections.reduce(0) { $0 + max($1.uploadSpeed, 0) }
   }
 
-  private var visiblePages: [Int] {
-    let lower = max(0, currentPage - 1)
-    let upper = min(totalPages - 1, currentPage + 1)
-    return Array(lower...upper)
+  private var totalActiveDownloadSpeed: Int64 {
+    store.presentedActiveConnections.reduce(0) { $0 + max($1.downloadSpeed, 0) }
   }
 
-  private var paginationInfo: String {
-    guard !filteredConnections.isEmpty else { return "0 / 0" }
-    let start = currentPage * pageSize + 1
-    let end = min((currentPage + 1) * pageSize, filteredConnections.count)
-    return "\(start)–\(end) / \(filteredConnections.count)"
-  }
-
-  private var sourceOptions: [String] {
-    Array(Set(sourceConnections.map(\.source).filter { !$0.isEmpty })).sorted()
+  private var selectedClientName: String {
+    guard let selectedClientID else { return "All Clients" }
+    return clientGroups.first(where: { $0.id == selectedClientID })?.name ?? "All Clients"
   }
 
   private var hasConnectionFilters: Bool {
-    !search.isEmpty || quickFilterEnabled || sourceFilter != "All"
+    !search.isEmpty || quickFilterEnabled || selectedClientID != nil || scope != .recent
   }
 
   private func scopeCount(_ item: Scope) -> Int {
     switch item {
+    case .recent: recentConnections.count
     case .active: store.presentedActiveConnections.count
     case .closed: store.presentedClosedConnections.count
     }
@@ -785,11 +761,7 @@ public struct ConnectionsView: View {
   }
 
   private func processLabel(_ connection: DashboardConnection) -> String {
-    if let process = connection.process, !process.isEmpty { return process }
-    if let path = connection.processPath, !path.isEmpty {
-      return (path as NSString).lastPathComponent
-    }
-    return "—"
+    ConnectionsPresentation.clientName(for: connection)
   }
 
   private func destinationLabel(_ connection: DashboardConnection) -> String {
@@ -846,43 +818,20 @@ public struct ConnectionsView: View {
   private func clearFilters() {
     search = ""
     quickFilterEnabled = false
-    sourceFilter = "All"
-  }
-
-  private func compare(_ lhs: Int64, _ rhs: Int64) -> ComparisonResult {
-    if lhs < rhs { return .orderedAscending }
-    if lhs > rhs { return .orderedDescending }
-    return .orderedSame
-  }
-
-  private func clampCurrentPage() {
-    currentPage = min(currentPage, totalPages - 1)
+    selectedClientID = nil
+    scope = .recent
   }
 
   private func closeVisibleConnections() async {
-    guard scope == .active, !closingConnections else { return }
+    guard !activeVisibleConnections.isEmpty, !closingConnections else { return }
     closingConnections = true
     defer { closingConnections = false }
     if hasConnectionFilters {
-      for connection in filteredConnections {
+      for connection in activeVisibleConnections {
         await store.closeConnection(connection.id)
       }
     } else {
       await store.closeAllConnections()
     }
-  }
-}
-
-extension View {
-  fileprivate func toolbarControl() -> some View {
-    font(.system(size: 11, weight: .semibold))
-      .foregroundStyle(DashboardTheme.content)
-      .padding(.horizontal, 10)
-      .frame(height: 34)
-      .background(DashboardTheme.surface, in: RoundedRectangle(cornerRadius: 8))
-      .overlay {
-        RoundedRectangle(cornerRadius: 8)
-          .stroke(DashboardTheme.divider, lineWidth: 1)
-      }
   }
 }
