@@ -1,5 +1,21 @@
+import AppKit
 import Foundation
 import SwiftUI
+
+@MainActor
+private final class ConnectionApplicationIconStore: ObservableObject {
+  private let cache = NSCache<NSString, NSImage>()
+
+  func icon(for applicationBundlePath: String?) -> NSImage? {
+    guard let applicationBundlePath, !applicationBundlePath.isEmpty else { return nil }
+    let key = applicationBundlePath as NSString
+    if let cached = cache.object(forKey: key) { return cached }
+    guard FileManager.default.fileExists(atPath: applicationBundlePath) else { return nil }
+    let icon = NSWorkspace.shared.icon(forFile: applicationBundlePath)
+    cache.setObject(icon, forKey: key)
+    return icon
+  }
+}
 
 @MainActor
 public struct ConnectionsView: View {
@@ -20,6 +36,7 @@ public struct ConnectionsView: View {
   @State private var showingSettings = false
   @State private var compactRows = true
   @State private var closingConnections = false
+  @StateObject private var applicationIcons = ConnectionApplicationIconStore()
 
   public init(store: DashboardStore) {
     self.store = store
@@ -242,7 +259,7 @@ public struct ConnectionsView: View {
             .font(.system(size: 10, weight: .black))
             .tracking(0.9)
             .foregroundStyle(DashboardTheme.primary)
-          Text("Grouped by process")
+          Text("Grouped by application")
             .font(.system(size: 10))
             .foregroundStyle(DashboardTheme.muted)
         }
@@ -262,6 +279,7 @@ public struct ConnectionsView: View {
           clientButton(
             id: nil,
             name: "All Clients",
+            applicationBundlePath: nil,
             symbol: "square.grid.2x2.fill",
             activeCount: store.presentedActiveConnections.count,
             recentCount: recentConnections.count,
@@ -273,6 +291,7 @@ public struct ConnectionsView: View {
             clientButton(
               id: group.id,
               name: group.name,
+              applicationBundlePath: group.applicationBundlePath,
               symbol: clientSymbol(group.name),
               activeCount: group.activeCount,
               recentCount: group.recentCount,
@@ -303,6 +322,7 @@ public struct ConnectionsView: View {
   private func clientButton(
     id: String?,
     name: String,
+    applicationBundlePath: String?,
     symbol: String,
     activeCount: Int,
     recentCount: Int,
@@ -314,14 +334,16 @@ public struct ConnectionsView: View {
       selectedClientID = id
     } label: {
       HStack(spacing: 10) {
-        Image(systemName: symbol)
-          .font(.system(size: 13, weight: .semibold))
-          .foregroundStyle(selected ? DashboardTheme.primaryContent : DashboardTheme.primary)
-          .frame(width: 30, height: 30)
-          .background(
-            selected ? Color.white.opacity(0.16) : DashboardTheme.primary.opacity(0.09),
-            in: RoundedRectangle(cornerRadius: 8)
-          )
+        clientIcon(
+          applicationBundlePath: applicationBundlePath,
+          fallbackSymbol: symbol,
+          fallbackColor: selected ? DashboardTheme.primaryContent : DashboardTheme.primary
+        )
+        .frame(width: 30, height: 30)
+        .background(
+          selected ? Color.white.opacity(0.16) : DashboardTheme.primary.opacity(0.09),
+          in: RoundedRectangle(cornerRadius: 8)
+        )
 
         VStack(alignment: .leading, spacing: 4) {
           HStack(spacing: 6) {
@@ -404,18 +426,18 @@ public struct ConnectionsView: View {
   }
 
   private func connectionRow(_ connection: DashboardConnection) -> some View {
+    let active = isConnectionActive(connection.id)
     HStack(spacing: 12) {
-      Image(systemName: clientSymbol(processLabel(connection)))
-        .font(.system(size: 12, weight: .semibold))
-        .foregroundStyle(
-          isConnectionActive(connection.id) ? DashboardTheme.success : DashboardTheme.muted
-        )
-        .frame(width: 30, height: 30)
-        .background(
-          (isConnectionActive(connection.id) ? DashboardTheme.success : DashboardTheme.muted)
-            .opacity(0.09),
-          in: RoundedRectangle(cornerRadius: 8)
-        )
+      clientIcon(
+        applicationBundlePath: ConnectionsPresentation.applicationBundlePath(for: connection),
+        fallbackSymbol: clientSymbol(processLabel(connection)),
+        fallbackColor: active ? DashboardTheme.success : DashboardTheme.muted
+      )
+      .frame(width: 30, height: 30)
+      .background(
+        (active ? DashboardTheme.success : DashboardTheme.muted).opacity(0.09),
+        in: RoundedRectangle(cornerRadius: 8)
+      )
 
       VStack(alignment: .leading, spacing: 4) {
         Text(hostLabel(connection))
@@ -503,6 +525,24 @@ public struct ConnectionsView: View {
       return "chevron.left.forwardslash.chevron.right"
     }
     return "app.fill"
+  }
+
+  @ViewBuilder
+  private func clientIcon(
+    applicationBundlePath: String?,
+    fallbackSymbol: String,
+    fallbackColor: Color
+  ) -> some View {
+    if let icon = applicationIcons.icon(for: applicationBundlePath) {
+      Image(nsImage: icon)
+        .resizable()
+        .scaledToFit()
+        .padding(3)
+    } else {
+      Image(systemName: fallbackSymbol)
+        .font(.system(size: 13, weight: .semibold))
+        .foregroundStyle(fallbackColor)
+    }
   }
 
   private func connectionDetail(_ selection: DashboardConnection) -> some View {
@@ -761,7 +801,7 @@ public struct ConnectionsView: View {
   }
 
   private func processLabel(_ connection: DashboardConnection) -> String {
-    ConnectionsPresentation.clientName(for: connection)
+    ConnectionsPresentation.processName(for: connection)
   }
 
   private func destinationLabel(_ connection: DashboardConnection) -> String {

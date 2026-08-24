@@ -3,6 +3,7 @@ import Foundation
 struct ConnectionClientGroup: Identifiable, Equatable, Sendable {
   var id: String
   var name: String
+  var applicationBundlePath: String?
   var activeCount: Int
   var recentCount: Int
   var uploadSpeed: Int64
@@ -33,11 +34,13 @@ enum ConnectionsPresentation {
     for connection in recent(active: active, closed: closed) {
       let name = clientName(for: connection)
       let id = clientID(for: connection)
+      let applicationBundlePath = applicationBundlePath(for: connection)
       var group =
         groups[id]
         ?? ConnectionClientGroup(
           id: id,
           name: name,
+          applicationBundlePath: applicationBundlePath,
           activeCount: 0,
           recentCount: 0,
           uploadSpeed: 0,
@@ -60,13 +63,23 @@ enum ConnectionsPresentation {
   }
 
   static func clientID(for connection: DashboardConnection) -> String {
-    clientName(for: connection).folding(
-      options: [.caseInsensitive, .diacriticInsensitive],
-      locale: .current
-    )
+    if let applicationBundlePath = applicationBundlePath(for: connection) {
+      return "application:\(normalizedIdentity(applicationBundlePath))"
+    }
+    return "process:\(normalizedIdentity(processName(for: connection)))"
   }
 
   static func clientName(for connection: DashboardConnection) -> String {
+    if let applicationBundlePath = applicationBundlePath(for: connection) {
+      let bundleName = ((applicationBundlePath as NSString).lastPathComponent as NSString)
+        .deletingPathExtension
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+      if !bundleName.isEmpty { return bundleName }
+    }
+    return processName(for: connection)
+  }
+
+  static func processName(for connection: DashboardConnection) -> String {
     if let process = connection.process?.trimmingCharacters(in: .whitespacesAndNewlines),
       !process.isEmpty
     {
@@ -79,5 +92,33 @@ enum ConnectionsPresentation {
       if !name.isEmpty { return name }
     }
     return unknownClientName
+  }
+
+  /// Returns the outermost App bundle that owns the reported executable. Helper
+  /// executables frequently live in a nested `Helper.app`; using the first
+  /// `.app` component keeps the main process and every helper in one client.
+  static func applicationBundlePath(for connection: DashboardConnection) -> String? {
+    guard
+      let rawPath = connection.processPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+      !rawPath.isEmpty
+    else { return nil }
+
+    let standardizedPath = (rawPath as NSString).standardizingPath
+    let components = (standardizedPath as NSString).pathComponents
+    var candidate = components.first == "/" ? "/" : ""
+    for component in components where component != "/" {
+      candidate = (candidate as NSString).appendingPathComponent(component)
+      if (component as NSString).pathExtension.caseInsensitiveCompare("app") == .orderedSame {
+        return candidate
+      }
+    }
+    return nil
+  }
+
+  private static func normalizedIdentity(_ value: String) -> String {
+    value.folding(
+      options: [.caseInsensitive, .diacriticInsensitive],
+      locale: Locale(identifier: "en_US_POSIX")
+    )
   }
 }

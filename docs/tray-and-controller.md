@@ -55,13 +55,16 @@ pages cancels both inactive streams and their retry timers, so a hidden or
 static page cannot keep polling the controller in the background.
 
 Connections uses a native two-pane dashboard. The left pane groups clients by
-the reported process name, falls back to the executable basename, and always
-offers `All Clients`; each group shows its active count and aggregate live
-throughput, or its retained recent count when inactive. The right pane shows
-newest-first recent connections for the selected client and can narrow them to
-Recent, Active, or Closed without opening another controller stream. Recent is
-the de-duplicated union of the live set and the session's bounded history of up
-to 500 closed connections. Search, transferring-only filtering, per-connection
+the outermost `.app` bundle in the reported executable path, so an App's main
+process and nested Helper Apps share one client; processes outside an App fall
+back to the reported process name and then the executable basename. App groups
+use the same icon macOS resolves for their bundle and always offer
+`All Clients`; each group shows its active count and aggregate live throughput,
+or its retained recent count when inactive. The right pane shows newest-first
+recent connections for the selected client and can narrow them to Recent,
+Active, or Closed without opening another controller stream. Recent is the
+de-duplicated union of the live set and the session's bounded history of up to
+500 closed connections. Search, transferring-only filtering, per-connection
 close, filtered active close, pause/resume, and the full connection detail
 sheet remain available.
 
