@@ -49,6 +49,38 @@ to the operator to run in a normal Terminal outside the sandbox. The wrapper
 does not unlock Keychain Access; an unavailable signing identity remains an
 operator-controlled prerequisite and fails closed.
 
+For a one-command local production package that validates and compiles with the
+published Sparkle key, signs with Developer ID, notarizes, staples, and creates
+the local artifacts without preparing or modifying GitHub, run:
+
+```bash
+./scripts/release-product.zsh local
+```
+
+`local` uses the same clean-commit, fixed-input, credential, signing identity,
+notarization-state, and immutable-artifact gates as a full release. It ends
+with `release_result=signed_notarized_local` and never invokes the GitHub
+helper. Existing state remains fail-closed and must be resumed or reconciled;
+the command never silently deletes or replaces an ambiguous submission.
+When an earlier direct `release-macos.sh` attempt crashed before exposing any
+submission ID, the operator must first prove from Apple history that no upload
+was accepted. Only then may the exact unsubmitted SHA-256 be supplied once so
+`local` archives that direct state and its ZIP before creating a new artifact:
+
+```bash
+./scripts/release-product.zsh local \
+  --archive-direct-submit-unknown EXACT_64_HEX_SHA256
+```
+
+The option accepts only `submit_unknown`, `upload_confirmed=false`, no-ID state
+whose file bytes match that SHA-256. Other or ambiguous state remains blocked.
+If signing, upload, waiting, or stapling is interrupted after state has been
+created, inspect the recorded log and resume only that exact local artifact:
+
+```bash
+./scripts/release-product.zsh local-resume
+```
+
 Start a new acceptance-gated release from a clean, committed, non-detached
 branch. The wrapper refreshes `origin/main`, requires it to be an ancestor of
 `HEAD`, and the GitHub phase atomically advances main together with the tag; an

@@ -62,7 +62,7 @@ done
 require_literal "$PRODUCT" "Operator entry point for a complete MihomoBox release"
 require_literal "$PRODUCT" 'readonly VALIDATE_SCRIPT="$ROOT/scripts/validate.sh"'
 require_literal "$PRODUCT" '/bin/bash "$VALIDATE_SCRIPT"'
-require_literal "$PRODUCT" 'fresh|ship)'
+require_literal "$PRODUCT" 'local|fresh|ship)'
 require_literal "$PRODUCT" 'run_validate'
 require_literal "$PRODUCT" 'verify_validated_app'
 require_literal "$PRODUCT" 'run_release'
@@ -70,6 +70,18 @@ require_literal "$PRODUCT" 'if [[ "$MODE" == "ship" ]]; then'
 require_literal "$PRODUCT" 'CONFIRMATION="$EXPECTED_CONFIRMATION"'
 reject_regex "$PRODUCT" '(/usr/bin/)?(swift|xcodebuild)([[:space:]]|$)|build-macos-app\.sh'
 reject_regex "$PRODUCT" '(/usr/bin/)?codesign([[:space:]]|$)|notarytool([[:space:]]|$)'
+
+# Local packaging reuses the complete validation/signing/notarization boundary
+# but must stop before every GitHub mutation.
+require_literal "$PRODUCT" 'local)'
+require_literal "$PRODUCT" '$MODE mode never publishes'
+require_literal "$PRODUCT" 'local-resume)'
+require_literal "$PRODUCT" 'release_result=signed_notarized_local'
+require_literal "$PRODUCT" '--archive-direct-submit-unknown is valid only with local mode'
+require_literal "$PRODUCT" 'state_status" == "submit_unknown"'
+require_literal "$PRODUCT" 'upload_confirmed" == "false"'
+require_literal "$PRODUCT" 'archived_direct_submit_unknown='
+require_literal "$PRODUCT" 'direct submit-unknown archive does not match the confirmed SHA-256'
 
 # Once five assets have been frozen, resume is a GitHub reconciliation only:
 # rebuilding or re-running release-macos would destroy signed provenance.

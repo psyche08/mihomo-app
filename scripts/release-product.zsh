@@ -5,7 +5,8 @@
 # prebuilt-App release pipeline, and the GitHub draft-release helper in one
 # run. `ship` is the deliberate one-command path that validates, compiles,
 # signs, notarizes, uploads and publishes the current VERSION/HEAD. The staged
-# fresh/resume/publish modes remain available for acceptance-gated releases.
+# local/local-resume/fresh/resume/publish modes remain available for
+# acceptance-gated releases.
 
 emulate -LR zsh
 unsetopt XTRACE VERBOSE
@@ -67,7 +68,7 @@ fail() {
 
 usage() {
   print -u2 -- \
-    "usage: $PROGRAM_NAME fresh|resume|publish|ship [--notes FILE] [--publish --confirm vX.Y.Z@FULL_SHA]"
+    "usage: $PROGRAM_NAME local|local-resume|fresh|resume|publish|ship [--notes FILE] [--publish --confirm vX.Y.Z@FULL_SHA] [--archive-direct-submit-unknown SHA256]"
   print -u2 -- \
     "       $PROGRAM_NAME publish --confirm vX.Y.Z@FULL_SHA"
   exit 2
@@ -77,7 +78,7 @@ usage() {
 readonly MODE="$1"
 shift
 case "$MODE" in
-  fresh|resume|publish|ship) ;;
+  local|local-resume|fresh|resume|publish|ship) ;;
   *) usage ;;
 esac
 
@@ -86,6 +87,8 @@ typeset NOTES_SEEN=0
 typeset PUBLISH_REQUESTED=0
 typeset CONFIRMATION=""
 typeset CONFIRMATION_SEEN=0
+typeset ARCHIVE_DIRECT_SUBMIT_UNKNOWN_SHA256=""
+typeset ARCHIVE_DIRECT_SUBMIT_UNKNOWN_SEEN=0
 while (( $# > 0 )); do
   case "$1" in
     --notes)
@@ -108,11 +111,23 @@ while (( $# > 0 )); do
       CONFIRMATION="$2"
       shift 2
       ;;
+    --archive-direct-submit-unknown)
+      (( $# >= 2 )) || usage
+      (( ARCHIVE_DIRECT_SUBMIT_UNKNOWN_SEEN == 0 )) ||
+        fail "--archive-direct-submit-unknown may be supplied only once"
+      ARCHIVE_DIRECT_SUBMIT_UNKNOWN_SEEN=1
+      ARCHIVE_DIRECT_SUBMIT_UNKNOWN_SHA256="$2"
+      shift 2
+      ;;
     *) usage ;;
   esac
 done
 
-if [[ "$MODE" == "ship" ]]; then
+if [[ "$MODE" == "local" || "$MODE" == "local-resume" ]]; then
+  [[ -z "$NOTES" ]] || fail "$MODE mode does not prepare release notes"
+  (( PUBLISH_REQUESTED == 0 )) || fail "$MODE mode never publishes"
+  [[ -z "$CONFIRMATION" ]] || fail "$MODE mode does not accept --confirm"
+elif [[ "$MODE" == "ship" ]]; then
   PUBLISH_REQUESTED=1
   [[ -z "$CONFIRMATION" ]] || fail "ship computes the exact confirmation; do not pass --confirm"
 elif [[ "$MODE" == "publish" ]]; then
@@ -123,6 +138,12 @@ elif (( PUBLISH_REQUESTED )); then
   [[ -n "$CONFIRMATION" ]] || fail "--publish requires --confirm"
 elif [[ -n "$CONFIRMATION" ]]; then
   fail "--confirm is valid only with --publish or publish mode"
+fi
+if [[ -n "$ARCHIVE_DIRECT_SUBMIT_UNKNOWN_SHA256" ]]; then
+  [[ "$MODE" == "local" ]] ||
+    fail "--archive-direct-submit-unknown is valid only with local mode"
+  [[ "$ARCHIVE_DIRECT_SUBMIT_UNKNOWN_SHA256" =~ '^[0-9a-f]{64}$' ]] ||
+    fail "--archive-direct-submit-unknown requires one lower-case SHA-256"
 fi
 
 readonly SCRIPT_PATH="${0:A}"
@@ -337,12 +358,84 @@ acquire_product_lock() {
 
 acquire_product_lock
 
+archive_direct_submit_unknown() {
+  local sha256="$ARCHIVE_DIRECT_SUBMIT_UNKNOWN_SHA256"
+  local direct_signed_state="$STATE_ROOT/MihomoBox-$VERSION-signed-app.json"
+  local direct_notary_state=""
+  local direct_submit_log=""
+  local direct_archive="$DIST_ROOT/MihomoBox-$VERSION-macos.zip"
+  local recovery_root="$STATE_ROOT/recovery"
+  local recovery_directory=""
+  local actual_sha256=""
+  local state_sha256=""
+  local state_status=""
+  local upload_confirmed=""
+  local submission_id=""
+  local first_direct_notary_state=""
+
+  first_direct_notary_state="$({
+    /usr/bin/find "$STATE_ROOT" -mindepth 1 -maxdepth 1 -type f \
+      -name "MihomoBox-$VERSION-macos.zip.*.json" -print -quit
+  })" || fail "could not inspect direct release state"
+
+  if [[ -z "$sha256" ]]; then
+    if [[ -e "$direct_signed_state" || -n "$first_direct_notary_state" ]]; then
+      fail "direct $VERSION release state exists; reconcile it or use --archive-direct-submit-unknown with the exact unsubmitted artifact SHA-256"
+    fi
+    return 0
+  fi
+
+  direct_notary_state="$STATE_ROOT/MihomoBox-$VERSION-macos.zip.$sha256.json"
+  direct_submit_log="$direct_notary_state.submit.log"
+  recovery_directory="$recovery_root/direct-$VERSION-submit-unknown-$sha256"
+
+  [[ ! -e "$STATE_ROOT/release.lock" ]] ||
+    fail "the shared signing lock exists; inspect it before archiving direct state"
+  for required_file in \
+    "$direct_signed_state" "$direct_notary_state" "$direct_submit_log" "$direct_archive"; do
+    [[ -f "$required_file" && ! -L "$required_file" ]] ||
+      fail "direct submit-unknown recovery file is missing or unsafe: $required_file"
+  done
+
+  actual_sha256="$(/usr/bin/shasum -a 256 "$direct_archive" | /usr/bin/awk '{print $1}')" ||
+    fail "could not hash the direct notarization archive"
+  state_sha256="$(/usr/bin/plutil -extract artifact_sha256 raw -o - "$direct_notary_state")" ||
+    fail "direct notarization state has no artifact SHA-256"
+  state_status="$(/usr/bin/plutil -extract status raw -o - "$direct_notary_state")" ||
+    fail "direct notarization state has no status"
+  upload_confirmed="$(/usr/bin/plutil -extract upload_confirmed raw -o - "$direct_notary_state")" ||
+    fail "direct notarization state has no upload confirmation"
+  submission_id="$(
+    /usr/bin/plutil -extract submission_id raw -o - "$direct_notary_state" 2>/dev/null || true
+  )"
+  [[ "$actual_sha256" == "$sha256" && "$state_sha256" == "$sha256" ]] ||
+    fail "direct submit-unknown archive does not match the confirmed SHA-256"
+  [[ "$state_status" == "submit_unknown" && "$upload_confirmed" == "false" &&
+    -z "$submission_id" ]] ||
+    fail "direct notarization state is not an unconfirmed submission without an ID"
+
+  [[ ! -L "$recovery_root" ]] || fail "release recovery directory is a symlink"
+  [[ ! -e "$recovery_directory" ]] ||
+    fail "direct submit-unknown recovery directory already exists: $recovery_directory"
+  /bin/mkdir -p "$recovery_root"
+  /bin/chmod 0700 "$recovery_root"
+  /bin/mkdir "$recovery_directory"
+  /bin/chmod 0700 "$recovery_directory"
+  /bin/mv "$direct_signed_state" "$direct_notary_state" "$direct_submit_log" \
+    "$direct_archive" "$recovery_directory/"
+  print -- "archived_direct_submit_unknown=$recovery_directory"
+}
+
+if [[ "$MODE" == "local" ]]; then
+  archive_direct_submit_unknown
+fi
+
 if [[ -L "$STATE_DIR" || ( -e "$STATE_DIR" && ! -d "$STATE_DIR" ) ]]; then
   fail "version release state path is unsafe: $STATE_DIR"
 fi
 typeset RESUME_ASSETS_FROZEN=0
 case "$MODE" in
-  fresh|ship)
+  local|fresh|ship)
     first_state_entry=""
     if [[ -d "$STATE_DIR" ]]; then
       first_state_entry="$(
@@ -352,7 +445,7 @@ case "$MODE" in
     [[ -z "$first_state_entry" ]] ||
       fail "$MODE requires an empty version state directory: $STATE_DIR"
     ;;
-  resume)
+  resume|local-resume)
     if [[ -L "$RELEASE_ASSETS_STATE" ||
       ( -e "$RELEASE_ASSETS_STATE" && ! -f "$RELEASE_ASSETS_STATE" ) ]]; then
       fail "release asset state path is unsafe: $RELEASE_ASSETS_STATE"
@@ -542,7 +635,7 @@ run_release() {
   local -a release_arguments=()
   load_release_environment
   load_notary_credentials
-  if [[ "$MODE" == "resume" ]]; then
+  if [[ "$MODE" == "resume" || "$MODE" == "local-resume" ]]; then
     release_arguments+=(--resume)
   fi
   if ! run_logged release /bin/bash "$RELEASE_SCRIPT" "${release_arguments[@]}"; then
@@ -592,6 +685,20 @@ run_github_publish() {
 cd "$ROOT"
 
 case "$MODE" in
+  local)
+    run_validate
+    verify_repository_snapshot "$EXPECTED_COMMIT" "$VERSION"
+    verify_validated_app
+    run_release
+    ;;
+  local-resume)
+    if (( RESUME_ASSETS_FROZEN )); then
+      print -- "release assets are frozen; skipping release-macos"
+    else
+      run_release
+    fi
+    verify_repository_snapshot "$EXPECTED_COMMIT" "$VERSION"
+    ;;
   fresh|ship)
     run_validate
     verify_repository_snapshot "$EXPECTED_COMMIT" "$VERSION"
@@ -622,7 +729,9 @@ print -- "release_mode=$MODE"
 print -- "release_version=$VERSION"
 print -- "release_commit=$EXPECTED_COMMIT"
 print -- "release_state=$STATE_DIR"
-if [[ "$MODE" == "publish" || PUBLISH_REQUESTED -eq 1 ]]; then
+if [[ "$MODE" == "local" || "$MODE" == "local-resume" ]]; then
+  print -- "release_result=signed_notarized_local"
+elif [[ "$MODE" == "publish" || PUBLISH_REQUESTED -eq 1 ]]; then
   print -- "release_result=published"
 else
   print -- "release_result=draft_uploaded"
