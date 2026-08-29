@@ -6,6 +6,45 @@ import XCTest
 @testable import MihomoDNSCore
 
 final class CoreTests: XCTestCase {
+    func testRuntimeDNSHealthSkipsBridgeTimeoutWhenMihomoDNSIsUnavailable() {
+        var mihomoProbes = 0
+        var bridgeProbes = 0
+
+        let unavailable = RuntimeDNSHealthProbePolicy.evaluate(
+            mihomoDNS: {
+                mihomoProbes += 1
+                return false
+            },
+            systemDNSBridge: {
+                bridgeProbes += 1
+                return true
+            }
+        )
+        XCTAssertEqual(
+            unavailable,
+            RuntimeDNSHealthProbeResult(dnsBridgeReady: false, mihomoDNSReady: false)
+        )
+        XCTAssertEqual(mihomoProbes, 1)
+        XCTAssertEqual(bridgeProbes, 0)
+
+        let ready = RuntimeDNSHealthProbePolicy.evaluate(
+            mihomoDNS: {
+                mihomoProbes += 1
+                return true
+            },
+            systemDNSBridge: {
+                bridgeProbes += 1
+                return true
+            }
+        )
+        XCTAssertEqual(
+            ready,
+            RuntimeDNSHealthProbeResult(dnsBridgeReady: true, mihomoDNSReady: true)
+        )
+        XCTAssertEqual(mihomoProbes, 2)
+        XCTAssertEqual(bridgeProbes, 1)
+    }
+
     func testDNSMetricsAggregatesHealthyTrafficButReportsDegradationPromptly() {
         let healthy = DNSForwardingMetricsSnapshot(
             requests: 20,

@@ -64,6 +64,32 @@ public struct NetworkConsistencyHealth: Codable, Equatable, Sendable {
     }
 }
 
+struct RuntimeDNSHealthProbeResult: Equatable, Sendable {
+    var dnsBridgeReady: Bool
+    var mihomoDNSReady: Bool
+}
+
+enum RuntimeDNSHealthProbePolicy {
+    /// The system bridge's exact health query is always sent to Mihomo and may
+    /// never use original-DNS fallback. If Mihomo DNS is unavailable, probing
+    /// the bridge can only wait for another timeout and still return false.
+    static func evaluate(
+        mihomoDNS: () -> Bool,
+        systemDNSBridge: () -> Bool
+    ) -> RuntimeDNSHealthProbeResult {
+        guard mihomoDNS() else {
+            return RuntimeDNSHealthProbeResult(
+                dnsBridgeReady: false,
+                mihomoDNSReady: false
+            )
+        }
+        return RuntimeDNSHealthProbeResult(
+            dnsBridgeReady: systemDNSBridge(),
+            mihomoDNSReady: true
+        )
+    }
+}
+
 enum RuntimeRecoveryDecision: Equatable {
     case none
     case debounce
@@ -131,8 +157,14 @@ public enum MihomoRuntimeInspector {
         let fakeIPMode = configuration.mihomoProcess
             .map { inspectFakeIPMode(path: $0.configPath) } ?? false
         let routeInterface = fakeIPRouteInterface()
-        let dnsBridgeReady = dnsEndpointResponds(endpoint: configuration.systemDNSListen)
-        let mihomoDNSReady = dnsEndpointResponds(endpoint: configuration.mihomoDNS)
+        let dnsHealth = RuntimeDNSHealthProbePolicy.evaluate(
+            mihomoDNS: { dnsEndpointResponds(endpoint: configuration.mihomoDNS) },
+            systemDNSBridge: {
+                dnsEndpointResponds(endpoint: configuration.systemDNSListen)
+            }
+        )
+        let dnsBridgeReady = dnsHealth.dnsBridgeReady
+        let mihomoDNSReady = dnsHealth.mihomoDNSReady
         let systemDNSManaged: Bool
         if let globalDNS {
             systemDNSManaged = ((try? globalDNS.isApplied()) == true) && globalDNS.isEffective()

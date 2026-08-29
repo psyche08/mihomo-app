@@ -51,7 +51,11 @@ domain nor the matching filter is logged.
 The internal DNS-bridge health probe is an exact wire message that is always
 sent to Mihomo DNS, including during startup before system DNS is claimed. It
 never uses original DNS. This breaks the startup dependency cycle without
-opening a fallback path for user queries while runtime safety is false.
+opening a fallback path for user queries while runtime safety is false. Runtime
+inspection probes Mihomo DNS first; when it is unavailable, the system bridge
+is necessarily unhealthy and its otherwise redundant two-second timeout is
+skipped. A successful Mihomo probe is still followed by an independent system
+bridge probe before managed DNS can be declared ready.
 
 Managed fake-IP responses use a one-second TTL. This limits stale mappings
 after a profile, TUN, or resolver transition; rollback and shutdown also flush
