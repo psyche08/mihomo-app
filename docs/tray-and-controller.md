@@ -69,15 +69,25 @@ close, filtered active close, pause/resume, and the full connection detail
 sheet remain available.
 
 The check mark always represents agent/controller state returned over XPC, not
-the last click. The tray polls every five seconds and immediately after a mutation, but replaces the
-native menu only when its semantic state or structure changes. Delay-only
-updates do not replace a menu that macOS may currently be tracking, so hovering
-a submenu is not interrupted by the polling timer. `Test Now` concurrently
+the last click. The tray refreshes immediately at startup, when its menu opens,
+and after a mutation. While the controller is unavailable it retries every 500
+milliseconds for the first ten seconds and then every ten seconds; a healthy
+background runtime is sampled every thirty seconds. It replaces the native
+menu only when its semantic state or structure changes. Delay-only updates do
+not replace a menu that macOS may currently be tracking, so hovering a submenu
+is not interrupted by the polling timer. `Test Now` concurrently
 asks the daemon to test every leaf proxy and then explicitly refreshes the
 displayed latency. Proxy groups, nested selectors, and built-in direct/reject
 targets are omitted from this flat node list. If the controller is
 unavailable, controller mutations are disabled while profile switching, daemon
 repair, and network recovery remain available.
+
+Long mutations publish their phase in the disabled network-status row
+(`Starting…`, `Stopping…`, `Applying profile…`, or `Applying change…`) and the
+tray disables conflicting actions until completion. The Config page applies
+the same presentation lock to settings, reload/restart, cache flushes, and GEO
+updates: one operation is shown with an inline spinner and duplicate clicks are
+discarded instead of queued behind the daemon transaction.
 
 An authenticated protocol-version mismatch is distinct from an unavailable
 daemon. A version-1 daemon is shown as `Network: Daemon upgrade required`; all
@@ -141,7 +151,10 @@ reinvoke the installer or request another administrator dialog.
 Tray reload re-reads the active regular YAML file from the current user's
 profile mirror and sends its bounded bytes over authenticated XPC for the same
 transactional validation and activation as import. If no safe local mirror is
-available, it falls back to reloading the daemon's root-owned copy.
+available, it falls back to reloading the daemon's root-owned copy. That
+root-owned reload keeps the agent and DNS bridge running and replaces only the
+Mihomo child; importing changed user bytes still uses the full atomic profile
+activation transaction.
 
 ## XPC Control Mapping
 
@@ -180,6 +193,14 @@ controller readback. A refused action remains visible as an in-window error.
 Preview fixtures require an explicit development flag and a checkout build
 path; an installed application cannot enter preview mode.
 
+Signed production builds enable Sparkle background checks and automatic
+downloads by default. Config exposes one `Automatic Updates` switch backed by
+Sparkle's own persisted `SUEnableAutomaticChecks` and `SUAutomaticallyUpdate`
+settings, so disabling it survives relaunch without a second preference that
+can drift. Manual `Tools > Check for Updates…` remains available. Development
+bundles without the release key keep updates unavailable and show the switch
+disabled.
+
 There is no loopback HTTP server, browser token, WebView, or `mihomoboxctl`
 child process in the desktop data path. The daemon still validates every
 method/path/body and injects the root-owned controller credential. The public
@@ -187,12 +208,19 @@ Swift gateway exposes fixed actions and safe runtime patches only; controller
 identity, DNS recursion-boundary keys, and every TUN field remain
 unrepresentable. Profile reload maps to `profile.reload`, runtime restart maps
 to `agent.restart`. The daemon accepts either restart only after a bounded,
-fresh read proves controller, TUN, Fake-IP mode and route, both DNS bridges,
-system DNS ownership, network consistency, and a safe Global selector chain.
+generation-matched agent snapshot proves controller, TUN, Fake-IP mode and
+route, both DNS bridges, system DNS ownership, and network consistency,
+followed by a safe Global selector-chain check. The daemon does not issue
+repeated DNS probes while it waits for that snapshot.
 Failure rolls the profile back when possible and otherwise stops the runtime;
 the window only waits for the resulting authoritative snapshot. Backend/UI self-upgrade
 remains blocked because bundled artifacts must stay pinned, checksummed, and
 signed.
+
+Successful `runtime.tray-state` reads are intentionally excluded from routine
+started/success audit lines. Authentication, protocol rejection, request
+failure, every mutation, and state-transition events remain logged. This keeps
+periodic presentation refreshes from dominating the root daemon log.
 
 Local YAML import copies the selected regular file into the current user's
 mode-`0700` staging directory as a mode-`0600` file so it is immediately visible

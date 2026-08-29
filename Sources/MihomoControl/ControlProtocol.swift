@@ -43,6 +43,23 @@ public enum ControlOperation: String, Codable, Sendable {
     case reloadProfile = "profile.reload"
 }
 
+/// Controls only routine successful request lifecycle logging. Every refused,
+/// malformed, or failed request is still audited by the daemon.
+///
+/// Tray state and stream-next are high-frequency read-only operations. Logging
+/// a started/success pair for every call adds no diagnostic state transition
+/// and can dominate the root daemon log during otherwise healthy operation.
+public enum ControlRequestAuditPolicy {
+    public static func logsRoutineLifecycle(for operation: ControlOperation) -> Bool {
+        switch operation {
+        case .trayState, .controllerStreamNext:
+            return false
+        default:
+            return true
+        }
+    }
+}
+
 public enum ManagedComponent: String, Codable, CaseIterable, Sendable {
     case daemon = "mihomo-daemon"
     case agent = "mihomo-agent"

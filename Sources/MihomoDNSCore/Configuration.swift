@@ -78,6 +78,17 @@ public struct ProxyConfiguration: Codable, Equatable {
             .path
     }
 
+    /// Root-only handoff used by the daemon to ask the already-running agent
+    /// to restart its owned Mihomo child. The request carries the health
+    /// generation that must appear after the restart, so a stale snapshot can
+    /// never complete the daemon transaction.
+    public var runtimeReloadRequestPath: String {
+        URL(fileURLWithPath: systemDNSBackupPath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("runtime-reload.json")
+            .path
+    }
+
     public func validate() throws {
         guard systemDNSListen.port > 0, systemDNSListen.port <= 65_535,
               mihomoDNS.port > 0, mihomoDNS.port <= 65_535,

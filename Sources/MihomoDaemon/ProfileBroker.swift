@@ -44,11 +44,34 @@ final class ProfileBroker: @unchecked Sendable {
             case .reloadProfile:
                 let active = try activeProfileName()
                 let source = root.appendingPathComponent("profiles").appendingPathComponent(active)
-                try activateProfile(name: active, data: try readStoredProfile(source))
+                let data = try readStoredProfile(source)
+                try validate(name: active, data: data)
+                try reloadActiveRuntime()
                 return try listUnlocked()
             default:
                 throw profileError("operation is not a profile operation")
             }
+        }
+    }
+
+    /// Reloading an already-active profile does not mutate its files. Keep the
+    /// agent, DNS listeners, alias, and Global DNS ownership alive and replace
+    /// only the Mihomo child. Profile import/switch still uses the full atomic
+    /// activation transaction below because those operations change files and
+    /// controller credentials.
+    private func reloadActiveRuntime() throws {
+        do {
+            if agent.isRunning {
+                try agent.restartMihomoChild()
+            } else {
+                try agent.start()
+            }
+            try validateStartedRuntime()
+        } catch {
+            guard agent.stopAndRestoreVerified() else {
+                throw ControllerBrokerCriticalError.unsafeGlobalRuntime
+            }
+            throw profileError("profile reload failed; the managed runtime was stopped safely")
         }
     }
 

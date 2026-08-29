@@ -6,6 +6,44 @@ import XCTest
 @testable import MihomoDNSCore
 
 final class CoreTests: XCTestCase {
+    func testDNSMetricsAggregatesHealthyTrafficButReportsDegradationPromptly() {
+        let healthy = DNSForwardingMetricsSnapshot(
+            requests: 20,
+            peakInFlight: 3,
+            primarySuccesses: 20,
+            primaryFailures: 0,
+            primaryBypasses: 0,
+            fallbackSuccesses: 0,
+            fallbackFailures: 0,
+            fallbackBlocked: 0
+        )
+        XCTAssertFalse(
+            DNSForwardingMetricsLogPolicy.shouldFlush(
+                healthy,
+                ticksSinceLastFlush: DNSForwardingMetricsLogPolicy.healthyTickInterval - 1
+            )
+        )
+        XCTAssertTrue(
+            DNSForwardingMetricsLogPolicy.shouldFlush(
+                healthy,
+                ticksSinceLastFlush: DNSForwardingMetricsLogPolicy.healthyTickInterval
+            )
+        )
+
+        var degraded = healthy
+        degraded.primaryFailures = 1
+        degraded.fallbackSuccesses = 1
+        XCTAssertTrue(
+            DNSForwardingMetricsLogPolicy.shouldFlush(degraded, ticksSinceLastFlush: 1)
+        )
+
+        degraded = healthy
+        degraded.primaryBypasses = 1
+        XCTAssertTrue(
+            DNSForwardingMetricsLogPolicy.shouldFlush(degraded, ticksSinceLastFlush: 1)
+        )
+    }
+
     func testDNSMessageLengthValidation() {
         XCTAssertThrowsError(try DNSMessage.validate(Data(repeating: 0, count: 11)))
         XCTAssertNoThrow(try DNSMessage.validate(Data(repeating: 0, count: 12)))
@@ -552,7 +590,15 @@ final class CoreTests: XCTestCase {
             networkConsistent: true
         )
         let captured = Date()
-        HealthSnapshotStore.publish(HealthSnapshot(health: health, capturedAt: captured), to: path)
+        let generation = UUID().uuidString
+        HealthSnapshotStore.publish(
+            HealthSnapshot(health: health, generation: generation, capturedAt: captured),
+            to: path
+        )
+        XCTAssertEqual(
+            HealthSnapshotStore.readSnapshot(from: path, now: captured)?.generation,
+            generation
+        )
 
         XCTAssertEqual(HealthSnapshotStore.read(from: path, now: captured), health)
         XCTAssertEqual(
@@ -586,6 +632,25 @@ final class CoreTests: XCTestCase {
             from: Data(legacy.utf8)
         )
         XCTAssertEqual(configuration.healthSnapshotPath, "/tmp/mihomo-test/runtime-health.json")
+        XCTAssertEqual(
+            configuration.runtimeReloadRequestPath,
+            "/tmp/mihomo-test/runtime-reload.json"
+        )
+    }
+
+    func testRuntimeReloadRequestIsRootPrivateAndConsumedOnce() throws {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("reload-\(UUID().uuidString).json")
+            .path
+        defer { RuntimeReloadRequestStore.remove(at: path) }
+        let request = RuntimeReloadRequest(generation: UUID().uuidString)
+
+        try RuntimeReloadRequestStore.publish(request, to: path)
+
+        let attributes = try FileManager.default.attributesOfItem(atPath: path)
+        XCTAssertEqual(attributes[.posixPermissions] as? NSNumber, NSNumber(value: 0o600))
+        XCTAssertEqual(RuntimeReloadRequestStore.consume(from: path), request)
+        XCTAssertNil(RuntimeReloadRequestStore.consume(from: path))
     }
 
     func testPublishedHealthIsAbsentWhenNothingWasWritten() {

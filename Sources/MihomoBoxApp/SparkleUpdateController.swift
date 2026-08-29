@@ -1,19 +1,30 @@
 import AppKit
 import Foundation
+import MihomoBoxUI
 import Sparkle
 
 /// Thin typed Sparkle 2.9.4 owner. Update verification, download, installation
 /// and relaunch remain inside Sparkle.
 @MainActor
-final class SparkleUpdateController {
+final class SparkleUpdateController: DashboardUpdatePreference {
   private let bundle: Bundle
+  private let defaults: UserDefaults
   private var controller: SPUStandardUpdaterController?
 
-  init(bundle: Bundle = .main) {
+  init(bundle: Bundle = .main, defaults: UserDefaults = .standard) {
     self.bundle = bundle
+    self.defaults = defaults
   }
 
   var isAvailable: Bool { Self.validConfiguration(in: bundle) }
+  var automaticUpdatesAvailable: Bool { isAvailable }
+  var automaticUpdatesEnabled: Bool {
+    guard isAvailable else { return false }
+    if let updater = controller?.updater {
+      return updater.automaticallyChecksForUpdates && updater.automaticallyDownloadsUpdates
+    }
+    return Self.automaticUpdatesEnabled(in: bundle, defaults: defaults)
+  }
   var canCheckForUpdates: Bool {
     guard isAvailable else { return false }
     return controller?.updater.canCheckForUpdates ?? false
@@ -40,6 +51,39 @@ final class SparkleUpdateController {
     guard isAvailable else { return }
     if controller == nil { start() }
     controller?.checkForUpdates(nil)
+  }
+
+  func setAutomaticUpdatesEnabled(_ enabled: Bool) {
+    guard isAvailable else { return }
+    if controller == nil { start() }
+    guard let updater = controller?.updater else { return }
+    // These are Sparkle's own persisted settings. Do not mirror them into a
+    // second preference, which could drift from Sparkle's scheduler.
+    if enabled {
+      // Downloads are allowed only after automatic checks are enabled.
+      updater.automaticallyChecksForUpdates = true
+      updater.automaticallyDownloadsUpdates = true
+    } else {
+      // Sparkle ignores a download-setting write once checks are already off,
+      // so persist the download preference first.
+      updater.automaticallyDownloadsUpdates = false
+      updater.automaticallyChecksForUpdates = false
+    }
+    AppLog.info("event=app_update preference=automatic enabled=\(enabled)")
+  }
+
+  nonisolated static func automaticUpdatesEnabled(
+    in bundle: Bundle,
+    defaults: UserDefaults
+  ) -> Bool {
+    func value(for key: String) -> Bool {
+      if defaults.object(forKey: key) != nil {
+        return defaults.bool(forKey: key)
+      }
+      return (bundle.infoDictionary?[key] as? NSNumber)?.boolValue == true
+    }
+    return value(for: "SUEnableAutomaticChecks")
+      && value(for: "SUAutomaticallyUpdate")
   }
 
   nonisolated static func validConfiguration(in bundle: Bundle) -> Bool {

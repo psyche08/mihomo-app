@@ -3,6 +3,14 @@ import MihomoControl
 import XCTest
 
 final class ControlProtocolTests: XCTestCase {
+    func testRoutineAuditSuppressesOnlyHighFrequencySuccessfulReads() {
+        XCTAssertFalse(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .trayState))
+        XCTAssertFalse(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .controllerStreamNext))
+        XCTAssertTrue(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .status))
+        XCTAssertTrue(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .setTUN))
+        XCTAssertTrue(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .reloadProfile))
+    }
+
     func testComponentUpdatePackageBinaryRoundTrip() throws {
         let package = ComponentUpdatePackage(
             appVersion: "0.4.0",

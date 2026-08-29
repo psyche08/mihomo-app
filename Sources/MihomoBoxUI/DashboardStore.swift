@@ -44,6 +44,36 @@ protocol DashboardControlGateway: Sendable {
 
 extension ControlGateway: DashboardControlGateway {}
 
+/// Unprivileged App-update settings exposed to the native Config page. The
+/// concrete owner remains in MihomoBoxApp, where Sparkle owns persistence,
+/// scheduling, download, verification, installation, and relaunch.
+@MainActor
+public protocol DashboardUpdatePreference: AnyObject {
+  var automaticUpdatesAvailable: Bool { get }
+  var automaticUpdatesEnabled: Bool { get }
+  func setAutomaticUpdatesEnabled(_ enabled: Bool)
+}
+
+public enum DashboardConfigAction: Equatable, Sendable {
+  case updatingSettings
+  case reloadingConfiguration
+  case restartingRuntime
+  case flushingFakeIP
+  case flushingDNS
+  case updatingGeoData
+
+  public var progressTitle: String {
+    switch self {
+    case .updatingSettings: "Applying settings…"
+    case .reloadingConfiguration: "Reloading configuration…"
+    case .restartingRuntime: "Restarting managed runtime…"
+    case .flushingFakeIP: "Flushing Fake-IP cache…"
+    case .flushingDNS: "Flushing DNS cache…"
+    case .updatingGeoData: "Updating GEO data…"
+    }
+  }
+}
+
 /// Main-actor state for the native dashboard.
 ///
 /// Host, connection and controller-log details are intentionally session-only.
@@ -85,6 +115,9 @@ public final class DashboardStore: ObservableObject {
   @Published public private(set) var runtimeStatus: DashboardRuntimeStatus = .disconnected
   @Published public private(set) var runtimeMessage = "Waiting for Mihomo"
   @Published public private(set) var actionError: String?
+  @Published public private(set) var configAction: DashboardConfigAction?
+  @Published public private(set) var automaticUpdatesAvailable = false
+  @Published public private(set) var automaticUpdatesEnabled = false
   @Published public private(set) var coreVersion = "Mihomo"
   @Published public private(set) var traffic = TrafficSnapshot()
   @Published public private(set) var trafficHistory: [TrafficPoint] = []
@@ -113,6 +146,7 @@ public final class DashboardStore: ObservableObject {
 
   private let gateway: any DashboardControlGateway
   private let previewMode: Bool
+  private weak var updatePreference: (any DashboardUpdatePreference)?
   private var streamTasks: [StreamKind: Task<Void, Never>] = [:]
   private var streamRetryTasks: [StreamKind: Task<Void, Never>] = [:]
   private var streamRetryCounts: [StreamKind: Int] = [:]
@@ -205,6 +239,24 @@ public final class DashboardStore: ObservableObject {
 
   public func dismissActionError() {
     actionError = nil
+  }
+
+  /// Connects the App-owned Sparkle policy after process composition. Keeping
+  /// this typed boundary out of `ControlGateway` prevents a user preference
+  /// from being mistaken for a privileged daemon mutation.
+  public func configureUpdatePreference(_ preference: any DashboardUpdatePreference) {
+    updatePreference = preference
+    automaticUpdatesAvailable = preference.automaticUpdatesAvailable
+    automaticUpdatesEnabled = preference.automaticUpdatesEnabled
+  }
+
+  public func setAutomaticUpdatesEnabled(_ enabled: Bool) {
+    guard automaticUpdatesAvailable, let updatePreference else { return }
+    updatePreference.setAutomaticUpdatesEnabled(enabled)
+    // Sparkle is authoritative because it may reject automatic downloads when
+    // the signed bundle policy does not permit them.
+    automaticUpdatesAvailable = updatePreference.automaticUpdatesAvailable
+    automaticUpdatesEnabled = updatePreference.automaticUpdatesEnabled
   }
 
   public func selectProxy(group: String, node: String) async {
@@ -371,7 +423,7 @@ public final class DashboardStore: ObservableObject {
     guard let requested = ControllerOutboundMode(rawValue: mode.rawValue.lowercased()) else {
       return
     }
-    await performAction {
+    await performConfigAction(.updatingSettings) {
       let snapshot = try await gateway.applyOutboundMode(requested)
       apply(snapshot: snapshot)
     }
@@ -402,7 +454,7 @@ public final class DashboardStore: ObservableObject {
   }
 
   public func reloadConfiguration() async {
-    await performAction {
+    await performConfigAction(.reloadingConfiguration) {
       try await gateway.reloadActiveProfile()
       let snapshot = try await waitForRuntimeSnapshot()
       apply(snapshot: snapshot)
@@ -412,7 +464,7 @@ public final class DashboardStore: ObservableObject {
   }
 
   public func restartRuntime() async {
-    await performAction {
+    await performConfigAction(.restartingRuntime) {
       try await gateway.restartAgent()
       let snapshot = try await waitForRuntimeSnapshot()
       apply(snapshot: snapshot)
@@ -422,15 +474,15 @@ public final class DashboardStore: ObservableObject {
   }
 
   public func flushDNSCache() async {
-    await performAction { try await gateway.flushDNSCache() }
+    await performConfigAction(.flushingDNS) { try await gateway.flushDNSCache() }
   }
 
   public func flushFakeIPCache() async {
-    await performAction { try await gateway.flushFakeIPCache() }
+    await performConfigAction(.flushingFakeIP) { try await gateway.flushFakeIPCache() }
   }
 
   public func updateGeoData() async {
-    await performAction { try await gateway.updateGeoData() }
+    await performConfigAction(.updatingGeoData) { try await gateway.updateGeoData() }
   }
 
   private func scheduleRefresh(_ page: DashboardPage) {
@@ -557,10 +609,26 @@ public final class DashboardStore: ObservableObject {
   }
 
   private func patchConfig(_ patch: RuntimeConfigPatch) async {
-    await performAction {
+    await performConfigAction(.updatingSettings) {
       try await gateway.patchConfig(patch)
       apply(config: try await gateway.fetchConfig())
     }
+  }
+
+  /// Serializes every Config-page mutation at the presentation boundary. The
+  /// XPC gateway and daemon still retain their own serialization, but this
+  /// guard prevents a second click from queueing behind a long startup while
+  /// also giving SwiftUI a stable operation phase to render.
+  @discardableResult
+  private func performConfigAction(
+    _ action: DashboardConfigAction,
+    operation: () async throws -> Void
+  ) async -> Bool {
+    guard !previewMode else { return true }
+    guard configAction == nil else { return false }
+    configAction = action
+    defer { configAction = nil }
+    return await performAction(operation)
   }
 
   private func waitForRuntimeSnapshot() async throws -> ControllerSnapshot {

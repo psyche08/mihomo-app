@@ -54,6 +54,33 @@ final class SparkleUpdatePolicyTests: XCTestCase {
     defer { fixture.remove() }
     XCTAssertFalse(SparkleUpdateController.validConfiguration(in: fixture.bundle))
   }
+
+  func testAutomaticUpdatesDefaultOnAndPersistedUserChoiceWins() throws {
+    let fixture = try BundleFixture(info: [
+      "SUEnableAutomaticChecks": true,
+      "SUAutomaticallyUpdate": true,
+    ])
+    defer { fixture.remove() }
+    let suite = "dev.linsheng.mihomo-app.tests.updates.\(UUID().uuidString)"
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+
+    XCTAssertTrue(
+      SparkleUpdateController.automaticUpdatesEnabled(
+        in: fixture.bundle,
+        defaults: defaults
+      )
+    )
+
+    defaults.set(false, forKey: "SUEnableAutomaticChecks")
+    defaults.set(false, forKey: "SUAutomaticallyUpdate")
+    XCTAssertFalse(
+      SparkleUpdateController.automaticUpdatesEnabled(
+        in: fixture.bundle,
+        defaults: defaults
+      )
+    )
+  }
 }
 
 private struct BundleFixture {

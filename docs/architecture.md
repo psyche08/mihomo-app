@@ -119,7 +119,9 @@ not a background consequence of polling or update checks.
 4. The agent binds the original-DNS listener on `127.0.0.1:1054`.
 5. The agent adds `127.0.0.53` to `lo0`, binds UDP/TCP 53, and starts Mihomo.
 6. After controller, TUN, fake-IP route, and DNS validation, the agent backs up
-   and applies DNS to the active PrimaryService.
+   and applies DNS to the active PrimaryService. Its observer publishes the
+   daemon-supplied runtime generation with the complete health result; only
+   that generation may commit the startup transaction.
 7. The Swift `NSApplication` starts with accessory activation policy, compares bundled and installed
    component digests through XPC, and synchronizes signed changes when the
    daemon protocol is compatible. A legacy version-1 reply enters the explicit

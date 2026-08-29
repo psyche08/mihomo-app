@@ -10,6 +10,7 @@ public final class ProxyService {
     private let aliasManager: LoopbackAliasManager
     private let globalDNS: GlobalDNSPreferences
     private let safetyState = NetworkSafetyState()
+    private let healthGeneration: RuntimeHealthGeneration
     private let mihomoSupervisor: MihomoSupervisor?
     private let stopLock = NSLock()
     private var stopped = false
@@ -17,8 +18,12 @@ public final class ProxyService {
     private var powerObserver: SystemPowerObserver?
     private var channels: [Channel] = []
 
-    public init(configuration: ProxyConfiguration) {
+    public init(
+        configuration: ProxyConfiguration,
+        runtimeGeneration: String = UUID().uuidString
+    ) {
         self.configuration = configuration
+        self.healthGeneration = RuntimeHealthGeneration(runtimeGeneration)
         self.group = MultiThreadedEventLoopGroup(numberOfThreads: max(2, System.coreCount / 2))
         self.networkState = NetworkDNSState(
             excludedServers: [
@@ -89,7 +94,8 @@ public final class ProxyService {
                     },
                     unsafeRuntimeHandler: { [mihomoSupervisor] in
                         mihomoSupervisor?.stop()
-                    }
+                    },
+                    healthGeneration: healthGeneration
                 )
                 consistencyController = controller
                 controller.start()
@@ -166,6 +172,36 @@ public final class ProxyService {
     public func wait() throws {
         guard let first = channels.first else { return }
         try first.closeFuture.wait()
+    }
+
+    /// Applies a profile reload without replacing the agent or either DNS
+    /// listener. The consistency observer owns publication of the requested
+    /// generation; until it sees the new child healthy, managed forwarding is
+    /// held in its safe fallback state.
+    public func reloadMihomo(generation: String) throws {
+        guard UUID(uuidString: generation) != nil, let mihomoSupervisor else {
+            throw NSError(
+                domain: "MihomoAgent",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "managed Mihomo reload is unavailable"]
+            )
+        }
+        ServiceLog.info("event=runtime_reload phase=started generation=changed")
+        if let consistencyController {
+            consistencyController.beginRuntimeReload(generation: generation)
+        } else {
+            safetyState.setRuntimeReady(false)
+            healthGeneration.replace(with: generation)
+            HealthSnapshotStore.remove(at: configuration.healthSnapshotPath)
+        }
+        do {
+            try mihomoSupervisor.restartForProfileReload()
+            consistencyController?.finishRuntimeReload()
+            ServiceLog.info("event=runtime_reload phase=child_started generation=changed")
+        } catch {
+            ServiceLog.error("event=runtime_reload result=failed reason=child_restart")
+            throw error
+        }
     }
 
     public func stop() {

@@ -42,6 +42,7 @@ if !commandMode {
 if arguments.contains("--help") || arguments.contains("-h") {
     print("""
     usage: mihomo-agent [--config PATH] [--check] [--health]
+                        [--runtime-generation UUID]
                         [--check-system-dns] [--check-system-dns-restored]
                         [--restore-system-dns]
                         [--configure-profile --profile PATH --profile-backup PATH
@@ -61,6 +62,14 @@ let expectedParentPID: Int32? = {
           arguments.indices.contains(index + 1),
           let value = Int32(arguments[index + 1]), value > 1 else { return nil }
     return value
+}()
+let runtimeGeneration: String = {
+    guard let index = arguments.firstIndex(of: "--runtime-generation"),
+          arguments.indices.contains(index + 1),
+          UUID(uuidString: arguments[index + 1]) != nil else {
+        return UUID().uuidString
+    }
+    return arguments[index + 1]
 }()
 
 if arguments.contains("--configure-profile") || arguments.contains("--restore-profile") {
@@ -142,7 +151,10 @@ do {
     }
 
     signal(SIGPIPE, SIG_IGN)
-    let service = ProxyService(configuration: configuration)
+    let service = ProxyService(
+        configuration: configuration,
+        runtimeGeneration: runtimeGeneration
+    )
     let signalQueue = DispatchQueue(label: "dev.linsheng.mihomo-app.agent.signal")
     let semaphore = DispatchSemaphore(value: 0)
     var parentWatchdog: DispatchSourceTimer?
@@ -175,6 +187,26 @@ do {
         source.resume()
         sources.append(source)
     }
+    signal(SIGUSR1, SIG_IGN)
+    let reloadSource = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: signalQueue)
+    reloadSource.setEventHandler {
+        guard let request = RuntimeReloadRequestStore.consume(
+            from: configuration.runtimeReloadRequestPath
+        ) else {
+            ServiceLog.error("event=runtime_reload result=rejected reason=request_missing")
+            return
+        }
+        do {
+            try service.reloadMihomo(generation: request.generation)
+        } catch {
+            // Let the normal service shutdown restore DNS and remove the alias.
+            // The daemon will reject the missing generation and verify the same
+            // fail-closed state from its side.
+            ServiceLog.error("event=runtime_reload result=failed action=stop_agent")
+            semaphore.signal()
+        }
+    }
+    reloadSource.resume()
 
     try service.start()
     ServiceLog.info(
@@ -184,7 +216,7 @@ do {
     parentWatchdog?.cancel()
     ServiceLog.info("event=agent_stopping")
     service.stop()
-    _ = sources
+    _ = (sources, reloadSource)
 } catch {
     ServiceLog.error("event=agent_fatal reason=startup_failed")
     exit(1)

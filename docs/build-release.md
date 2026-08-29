@@ -176,11 +176,11 @@ paths documented below. A new `VERSION` does not require creating or editing a
 `NOTARY_TEAM_ID`; when the team has multiple valid identities,
 `CODESIGN_IDENTITY_FINGERPRINT` must still resolve the ambiguity.
 
-Versions `0.8.3` and `0.8.4` are already public. Version `0.9.0` is a separate
-native-dashboard release: it uses its own source commit, annotated tag, state
-directory, notarization submissions and five assets. Preparing or publishing
-`0.9.0` must not delete, resume, replace, upload to, or otherwise alter any
-`0.8.x` state or GitHub assets.
+Versions `0.8.3`, `0.8.4`, and `0.9.0` are already public. Version `0.9.1` is a
+separate native-dashboard release: it uses its own source commit, annotated
+tag, state directory, notarization submissions and five assets. Preparing or
+publishing `0.9.1` must not delete, resume, replace, upload to, or otherwise
+alter any `0.8.x` or `0.9.0` state or GitHub assets.
 
 The bundle gate must find exactly these product executables:
 
@@ -351,6 +351,12 @@ The native 0.8 App uses Sparkle's signed `appcast.xml`, EdDSA enclosure
 signatures and Apple code signing. Sparkle performs update verification,
 permission handling, atomic replacement and relaunch. Its private EdDSA key is
 separate from the legacy updater key.
+
+Production bundles default `SUEnableAutomaticChecks` and
+`SUAutomaticallyUpdate` to true. The Config switch writes those two Sparkle
+settings through `SPUUpdater`; an explicit user choice therefore overrides the
+bundle defaults across later launches. Development bundles continue to disable
+the updater when the release public key is absent.
 
 Existing 0.7 clients only understand the previous Minisign-compatible manifest.
 During the migration window every 0.8.x GitHub Release therefore carries both

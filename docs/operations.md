@@ -151,6 +151,13 @@ LaunchDaemon directly; the relaunched App performs the existing authenticated
 three-component synchronization. Updater diagnostics must not include proxy or
 subscription configuration.
 
+Production installs default to automatic background checks and downloads.
+Users can disable or re-enable both through Config > Automatic Updates; Sparkle
+persists that choice in its native settings. A downloaded update is installed
+silently when Sparkle can safely quit and relaunch the App. Platform permission,
+authorization, or relaunch constraints may still require user interaction; the
+application does not bypass those macOS gates.
+
 Inspect without changes:
 
 ```bash
@@ -284,7 +291,9 @@ native App writes its bounded diagnostics to the macOS unified log under
 subsystem `dev.linsheng.mihomo-app`; old files under
 `~/Library/Logs/MihomoBox` are legacy artifacts and are not current 0.8 logs.
 The tray's `Tools > Open Diagnostic Logs…` command opens Console and the daemon
-log folder.
+log folder. Healthy tray-state reads do not produce per-request success lines,
+and healthy DNS forwarding is summarized once per minute; errors, degraded DNS
+windows, mutations, and lifecycle transitions retain prompt audit records.
 
 The user paths stage local tray imports before daemon installation. When a
 profile accompanies first installation, the unprivileged App freezes its

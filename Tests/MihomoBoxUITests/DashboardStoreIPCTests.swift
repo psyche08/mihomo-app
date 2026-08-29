@@ -145,6 +145,43 @@ final class DashboardStoreIPCTests: XCTestCase {
     )
   }
 
+  func testConfigActionPublishesProgressAndSuppressesDuplicateClicks() async throws {
+    let gateway = FakeDashboardGateway(reloadDelayNanoseconds: 150_000_000)
+    let store = DashboardStore(gateway: gateway)
+
+    let first = Task { @MainActor in await store.reloadConfiguration() }
+    try await eventually {
+      store.configAction == .reloadingConfiguration
+        && gateway.calls.filter { $0 == "reloadActiveProfile" }.count == 1
+    }
+
+    await store.reloadConfiguration()
+    XCTAssertEqual(
+      gateway.calls.filter { $0 == "reloadActiveProfile" }.count,
+      1
+    )
+    XCTAssertEqual(store.configAction?.progressTitle, "Reloading configuration…")
+
+    await first.value
+    XCTAssertNil(store.configAction)
+  }
+
+  func testAutomaticUpdatePreferenceUsesAppOwnerAndAuthoritativeReadback() {
+    let gateway = FakeDashboardGateway()
+    let preference = FakeDashboardUpdatePreference()
+    let store = DashboardStore(gateway: gateway)
+
+    store.configureUpdatePreference(preference)
+    XCTAssertTrue(store.automaticUpdatesAvailable)
+    XCTAssertTrue(store.automaticUpdatesEnabled)
+
+    store.setAutomaticUpdatesEnabled(false)
+    XCTAssertFalse(preference.automaticUpdatesEnabled)
+    XCTAssertFalse(store.automaticUpdatesEnabled)
+    XCTAssertEqual(preference.setValues, [false])
+    XCTAssertTrue(gateway.calls.isEmpty)
+  }
+
   private func eventually(
     timeout: TimeInterval = 2,
     condition: @MainActor () -> Bool
@@ -160,10 +197,23 @@ final class DashboardStoreIPCTests: XCTestCase {
   }
 }
 
+@MainActor
+private final class FakeDashboardUpdatePreference: DashboardUpdatePreference {
+  var automaticUpdatesAvailable = true
+  var automaticUpdatesEnabled = true
+  private(set) var setValues: [Bool] = []
+
+  func setAutomaticUpdatesEnabled(_ enabled: Bool) {
+    setValues.append(enabled)
+    automaticUpdatesEnabled = enabled
+  }
+}
+
 private final class FakeDashboardGateway: DashboardControlGateway, @unchecked Sendable {
   private let lock = NSLock()
   private let failCloseConnection: Bool
   private let retainConnectionAfterClose: Bool
+  private let reloadDelayNanoseconds: UInt64
   private var recordedCalls: [String] = []
   private var streamCancellationCount = 0
   private var selectedProxy = "Node A"
@@ -208,10 +258,12 @@ private final class FakeDashboardGateway: DashboardControlGateway, @unchecked Se
 
   init(
     failCloseConnection: Bool = false,
-    retainConnectionAfterClose: Bool = false
+    retainConnectionAfterClose: Bool = false,
+    reloadDelayNanoseconds: UInt64 = 0
   ) {
     self.failCloseConnection = failCloseConnection
     self.retainConnectionAfterClose = retainConnectionAfterClose
+    self.reloadDelayNanoseconds = reloadDelayNanoseconds
   }
 
   var calls: [String] {
@@ -377,7 +429,12 @@ private final class FakeDashboardGateway: DashboardControlGateway, @unchecked Se
   func flushFakeIPCache() async throws { record("flushFakeIPCache") }
   func flushDNSCache() async throws { record("flushDNSCache") }
   func updateGeoData() async throws { record("updateGeoData") }
-  func reloadActiveProfile() async throws { record("reloadActiveProfile") }
+  func reloadActiveProfile() async throws {
+    record("reloadActiveProfile")
+    if reloadDelayNanoseconds > 0 {
+      try await Task.sleep(nanoseconds: reloadDelayNanoseconds)
+    }
+  }
   func restartAgent() async throws { record("restartAgent") }
 
   func connectionsStream() -> AsyncThrowingStream<ControllerConnectionsFrame, Error> {

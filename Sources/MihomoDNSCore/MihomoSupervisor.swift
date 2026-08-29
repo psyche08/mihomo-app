@@ -70,6 +70,12 @@ public final class MihomoSupervisor: @unchecked Sendable {
             }
         }
         try? FileManager.default.removeItem(atPath: configuration.pidPath)
+        lock.lock()
+        if process?.processIdentifier == active?.processIdentifier {
+            process = nil
+            startedAt = nil
+        }
+        lock.unlock()
         _ = logWriter.flush()
     }
 
@@ -94,6 +100,16 @@ public final class MihomoSupervisor: @unchecked Sendable {
                 failures: failures
             )
         }
+    }
+
+    /// Replaces only the child kernel while its owning agent and DNS bridges
+    /// stay alive. The normal start path still validates the executable,
+    /// clears any orphan recorded by the PID file, and resets crash backoff.
+    public func restartForProfileReload() throws {
+        ServiceLog.info("event=mihomo_profile_reload phase=restart_started")
+        stop()
+        try start()
+        ServiceLog.info("event=mihomo_profile_reload phase=process_started")
     }
 
     private func launch() throws {

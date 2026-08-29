@@ -117,8 +117,10 @@ final class ControlDispatcher: @unchecked Sendable {
             if mutating { mutationLock.unlock() }
         }
         let operation = request.operation.rawValue
-        let auditEveryRequest = request.operation != .controllerStreamNext
-        if auditEveryRequest {
+        let auditRoutineLifecycle = ControlRequestAuditPolicy.logsRoutineLifecycle(
+            for: request.operation
+        )
+        if auditRoutineLifecycle {
             ServiceLog.info("event=control_request operation=\(operation) phase=started")
         }
         guard request.version == mihomoControlProtocolVersion else {
@@ -178,7 +180,9 @@ final class ControlDispatcher: @unchecked Sendable {
                     "agent_running": agent.isRunning,
                 ], options: [.sortedKeys])
             case .status:
-                var status = (try? JSONSerialization.jsonObject(with: agent.health())) as? [String: Any] ?? [:]
+                var status = (try? JSONSerialization.jsonObject(
+                    with: agent.diagnosticHealth()
+                )) as? [String: Any] ?? [:]
                 status["agent_running"] = agent.isRunning
                 payload = try JSONSerialization.data(withJSONObject: status, options: [.sortedKeys])
             case .trayState:
@@ -190,7 +194,7 @@ final class ControlDispatcher: @unchecked Sendable {
                     try? JSONSerialization.jsonObject(with: $0)
                 }
                 let profileState = try JSONSerialization.jsonObject(with: profiles.list())
-                let health = (try? agent.health())
+                let health = (try? agent.passiveHealth())
                     .flatMap { try? JSONSerialization.jsonObject(with: $0) }
                 payload = try JSONSerialization.data(withJSONObject: [
                     "agent_running": agentRunning,
@@ -260,7 +264,7 @@ final class ControlDispatcher: @unchecked Sendable {
                 }
                 payload = try controller.perform(request, owner: owner)
             }
-            if auditEveryRequest {
+            if auditRoutineLifecycle {
                 ServiceLog.info("event=control_request operation=\(operation) result=success")
             }
             return ControlResponse(success: true, payload: payload)
@@ -343,8 +347,9 @@ final class ControlDispatcher: @unchecked Sendable {
                 throw ControllerBrokerCriticalError.unsafeGlobalRuntime
             }
             do {
-                try controller.ensureSafeGlobalRoute()
-                let health = try agent.freshHealth()
+                guard let health = try agent.expectedHealthSnapshot()?.health else {
+                    throw serverErrorStatic("awaiting current agent health generation")
+                }
                 guard health.controllerReachable,
                       health.tunEnabled,
                       health.tunInterface?.isEmpty == false,
@@ -356,6 +361,10 @@ final class ControlDispatcher: @unchecked Sendable {
                       health.networkConsistent else {
                     throw serverErrorStatic("the managed network is not ready")
                 }
+                // Controller verification is deliberately after the matching
+                // agent snapshot. Polling while the generation is pending must
+                // not create another active DNS-probe loop in the daemon.
+                try controller.ensureSafeGlobalRoute()
                 return
             } catch ControllerBrokerCriticalError.unsafeGlobalRuntime {
                 throw ControllerBrokerCriticalError.unsafeGlobalRuntime
@@ -453,6 +462,10 @@ final class ControlServer: @unchecked Sendable {
             if let payload = xpc_dictionary_get_data(message, "payload", &payloadLength),
                payloadLength > 0 {
                 guard payloadLength <= mihomoControlMaximumPayloadBytes else {
+                    ServiceLog.error(
+                        "event=control_request operation=\(request.operation.rawValue) " +
+                        "result=payload_too_large"
+                    )
                     send(
                         ControlResponse(success: false, error: "XPC payload exceeds the size limit"),
                         replyingTo: message,
@@ -464,6 +477,7 @@ final class ControlServer: @unchecked Sendable {
             }
             response = dispatcher.dispatch(request, owner: ObjectIdentifier(peer))
         } else {
+            ServiceLog.error("event=control_request operation=unknown result=invalid_request")
             response = ControlResponse(success: false, error: "invalid XPC request")
         }
 

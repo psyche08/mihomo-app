@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import MihomoControl
+import MihomoBoxUI
 
 enum EnhancedTUNAction: Equatable {
   case requireProfile
@@ -118,12 +119,19 @@ final class TrayStateCoordinator: TrayService {
       var warmup = 0
       while !Task.isCancelled {
         guard let self else { return }
-        let fast = !self.currentSnapshot.controllerReachable && warmup < 20
-        try? await Task.sleep(for: fast ? .milliseconds(500) : .seconds(5))
+        let fast = !self.currentSnapshot.controllerReachable
+          && warmup < TrayPollingPolicy.startupFastAttempts
+        let interval = TrayPollingPolicy.interval(
+          controllerReachable: self.currentSnapshot.controllerReachable,
+          startupAttempt: warmup
+        )
+        try? await Task.sleep(for: interval)
         guard !Task.isCancelled else { return }
         self.refresh(authoritative: false)
         if fast { warmup += 1 }
-        if self.currentSnapshot.controllerReachable { warmup = 20 }
+        if self.currentSnapshot.controllerReachable {
+          warmup = TrayPollingPolicy.startupFastAttempts
+        }
       }
     }
   }
@@ -748,6 +756,7 @@ private final class LiveAppShellCoordinator: AppShellCoordinating {
   func startBackgroundServices() {
     Task { await components.start() }
     updates.start()
+    DashboardStore.shared.configureUpdatePreference(updates)
   }
 
   func stopBackgroundServices() {
@@ -761,6 +770,7 @@ enum AppComposition {
   static func live() -> any AppShellCoordinating {
     let control = TrayControlClient()
     let updates = SparkleUpdateController()
+    DashboardStore.shared.configureUpdatePreference(updates)
     let mutationGate = AppMutationGate()
     let tray = TrayStateCoordinator(
       control: control,

@@ -134,6 +134,35 @@ final class FallbackAsyncDNSForwarder: AsyncDNSForwarding, @unchecked Sendable {
     }
 }
 
+struct DNSForwardingMetricsSnapshot: Equatable, Sendable {
+    var requests: Int
+    var peakInFlight: Int
+    var primarySuccesses: Int
+    var primaryFailures: Int
+    var primaryBypasses: Int
+    var fallbackSuccesses: Int
+    var fallbackFailures: Int
+    var fallbackBlocked: Int
+
+    var requiresPromptLogging: Bool {
+        primaryFailures > 0 || primaryBypasses > 0
+            || fallbackFailures > 0 || fallbackBlocked > 0
+    }
+}
+
+enum DNSForwardingMetricsLogPolicy {
+    /// The metrics timer ticks every ten seconds. Healthy traffic is aggregated
+    /// for one minute; degraded traffic remains visible on the next tick.
+    static let healthyTickInterval = 6
+
+    static func shouldFlush(
+        _ snapshot: DNSForwardingMetricsSnapshot,
+        ticksSinceLastFlush: Int
+    ) -> Bool {
+        snapshot.requiresPromptLogging || ticksSinceLastFlush >= healthyTickInterval
+    }
+}
+
 private final class AsyncDNSMetrics: @unchecked Sendable {
     private let lock = NSLock()
     private let queue = DispatchQueue(label: "dev.linsheng.mihomo-app.dns-metrics")
@@ -147,6 +176,7 @@ private final class AsyncDNSMetrics: @unchecked Sendable {
     private var fallbackSuccesses = 0
     private var fallbackFailures = 0
     private var fallbackBlockedCount = 0
+    private var ticksSinceFlush = 0
 
     init() {
         let timer = DispatchSource.makeTimerSource(queue: queue)
@@ -206,20 +236,31 @@ private final class AsyncDNSMetrics: @unchecked Sendable {
 
     private func flush() {
         lock.lock()
+        ticksSinceFlush = min(
+            ticksSinceFlush + 1,
+            DNSForwardingMetricsLogPolicy.healthyTickInterval
+        )
         guard requests > 0 else {
             lock.unlock()
             return
         }
-        let snapshot = (
-            requests,
-            peakInFlight,
-            primarySuccesses,
-            primaryFailures,
-            primaryBypasses,
-            fallbackSuccesses,
-            fallbackFailures,
-            fallbackBlockedCount
+        let snapshot = DNSForwardingMetricsSnapshot(
+            requests: requests,
+            peakInFlight: peakInFlight,
+            primarySuccesses: primarySuccesses,
+            primaryFailures: primaryFailures,
+            primaryBypasses: primaryBypasses,
+            fallbackSuccesses: fallbackSuccesses,
+            fallbackFailures: fallbackFailures,
+            fallbackBlocked: fallbackBlockedCount
         )
+        guard DNSForwardingMetricsLogPolicy.shouldFlush(
+            snapshot,
+            ticksSinceLastFlush: ticksSinceFlush
+        ) else {
+            lock.unlock()
+            return
+        }
         requests = 0
         peakInFlight = inFlight
         primarySuccesses = 0
@@ -228,13 +269,17 @@ private final class AsyncDNSMetrics: @unchecked Sendable {
         fallbackSuccesses = 0
         fallbackFailures = 0
         fallbackBlockedCount = 0
+        ticksSinceFlush = 0
         lock.unlock()
         ServiceLog.info(
-            "event=dns_forwarding_summary requests=\(snapshot.0) " +
-            "peak_inflight=\(snapshot.1) primary_success=\(snapshot.2) " +
-            "primary_failure=\(snapshot.3) primary_bypassed=\(snapshot.4) " +
-            "fallback_success=\(snapshot.5) fallback_failure=\(snapshot.6) " +
-            "fallback_blocked=\(snapshot.7)"
+            "event=dns_forwarding_summary requests=\(snapshot.requests) " +
+            "peak_inflight=\(snapshot.peakInFlight) " +
+            "primary_success=\(snapshot.primarySuccesses) " +
+            "primary_failure=\(snapshot.primaryFailures) " +
+            "primary_bypassed=\(snapshot.primaryBypasses) " +
+            "fallback_success=\(snapshot.fallbackSuccesses) " +
+            "fallback_failure=\(snapshot.fallbackFailures) " +
+            "fallback_blocked=\(snapshot.fallbackBlocked)"
         )
     }
 }

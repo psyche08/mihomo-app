@@ -66,6 +66,24 @@ final class TrayModelTests: XCTestCase {
     XCTAssertTrue(TrayUpdateAvailabilityPolicy.isEnabled(canCheckForUpdates: true))
   }
 
+  func testTrayPollingIsFastOnlyDuringStartupAndSlowWhileHealthy() {
+    XCTAssertEqual(
+      TrayPollingPolicy.interval(controllerReachable: false, startupAttempt: 0),
+      .milliseconds(500)
+    )
+    XCTAssertEqual(
+      TrayPollingPolicy.interval(
+        controllerReachable: false,
+        startupAttempt: TrayPollingPolicy.startupFastAttempts
+      ),
+      .seconds(10)
+    )
+    XCTAssertEqual(
+      TrayPollingPolicy.interval(controllerReachable: true, startupAttempt: 0),
+      .seconds(30)
+    )
+  }
+
   func testStaleEnhancedTUNCheckmarkRefreshesInsteadOfReplayingInstallerAction() {
     XCTAssertEqual(
       TrayEnhancedTUNClickPolicy.decision(
@@ -149,6 +167,22 @@ final class TrayModelTests: XCTestCase {
     snapshot.networkHealthy = true
     snapshot.systemDNSManaged = true
     XCTAssertEqual(snapshot.networkStatusTitle, "Network: Stopped — restore unconfirmed")
+  }
+
+  func testBusyNetworkStatusNamesTheCurrentPhase() {
+    var snapshot = TraySnapshot(tunOperationInFlight: true)
+    XCTAssertEqual(snapshot.networkStatusTitle, "Network: Starting…")
+
+    snapshot.enhancedTUN = true
+    XCTAssertEqual(snapshot.networkStatusTitle, "Network: Stopping…")
+
+    snapshot.tunOperationInFlight = false
+    snapshot.profileOperationInFlight = true
+    XCTAssertEqual(snapshot.networkStatusTitle, "Network: Applying profile…")
+
+    snapshot.profileOperationInFlight = false
+    snapshot.mutationOperationInFlight = true
+    XCTAssertEqual(snapshot.networkStatusTitle, "Network: Applying change…")
   }
 
   func testProfileReloadRequiresActiveProfileAndReachableController() {

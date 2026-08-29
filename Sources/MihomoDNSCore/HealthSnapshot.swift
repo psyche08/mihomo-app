@@ -14,14 +14,91 @@ import Foundation
 /// this directory.
 public struct HealthSnapshot: Codable, Sendable {
     public var health: NetworkConsistencyHealth
+    /// Identifies the exact agent launch or Mihomo-child reload that produced
+    /// this reading. Daemon startup validation accepts only its expected
+    /// generation; an otherwise fresh snapshot from the previous runtime is
+    /// deliberately ignored.
+    public var generation: String?
     /// Wall-clock capture time, used only to decide whether the reading is
     /// still worth trusting. Consumers must treat a missing or stale file as
     /// "no reading" and fall back to inspecting.
     public var capturedAt: Date
 
-    public init(health: NetworkConsistencyHealth, capturedAt: Date = Date()) {
+    public init(
+        health: NetworkConsistencyHealth,
+        generation: String? = nil,
+        capturedAt: Date = Date()
+    ) {
         self.health = health
+        self.generation = generation
         self.capturedAt = capturedAt
+    }
+}
+
+/// A lock-protected generation shared by the agent's service and consistency
+/// observer. Profile reload advances it before the Mihomo child is replaced.
+public final class RuntimeHealthGeneration: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: String
+
+    public init(_ value: String = UUID().uuidString) {
+        self.value = value
+    }
+
+    public func current() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+
+    public func replace(with value: String) {
+        lock.lock()
+        self.value = value
+        lock.unlock()
+    }
+}
+
+public struct RuntimeReloadRequest: Codable, Equatable, Sendable {
+    public var generation: String
+
+    public init(generation: String) {
+        self.generation = generation
+    }
+}
+
+public enum RuntimeReloadRequestStore {
+    public static func publish(_ request: RuntimeReloadRequest, to path: String) throws {
+        guard UUID(uuidString: request.generation) != nil else {
+            throw NSError(
+                domain: "MihomoRuntimeReload",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "runtime generation is invalid"]
+            )
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(request)
+        try data.write(to: URL(fileURLWithPath: path), options: [.atomic])
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: path
+        )
+    }
+
+    /// Consumes the fixed-path request once. A malformed generation is never
+    /// acted on and is removed so it cannot be replayed by a later signal.
+    public static func consume(from path: String) -> RuntimeReloadRequest? {
+        guard let data = FileManager.default.contents(atPath: path) else { return nil }
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        guard let request = try? JSONDecoder().decode(RuntimeReloadRequest.self, from: data),
+              UUID(uuidString: request.generation) != nil else {
+            return nil
+        }
+        return request
+    }
+
+    public static func remove(at path: String) {
+        try? FileManager.default.removeItem(atPath: path)
     }
 }
 
@@ -60,6 +137,14 @@ public enum HealthSnapshotStore {
         now: Date = Date(),
         freshness: TimeInterval = freshnessInterval
     ) -> NetworkConsistencyHealth? {
+        readSnapshot(from: path, now: now, freshness: freshness)?.health
+    }
+
+    public static func readSnapshot(
+        from path: String,
+        now: Date = Date(),
+        freshness: TimeInterval = freshnessInterval
+    ) -> HealthSnapshot? {
         guard let data = FileManager.default.contents(atPath: path) else { return nil }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -67,7 +152,7 @@ public enum HealthSnapshotStore {
         let age = now.timeIntervalSince(snapshot.capturedAt)
         // A reading from the future is a clock change, not a fresh reading.
         guard age >= 0, age <= freshness else { return nil }
-        return snapshot.health
+        return snapshot
     }
 
     public static func remove(at path: String) {

@@ -163,6 +163,15 @@ struct TraySnapshot: Equatable, Sendable {
     if let actionError, !actionError.isEmpty {
       return actionError
     }
+    if tunOperationInFlight {
+      return enhancedTUN ? "Network: Stopping…" : "Network: Starting…"
+    }
+    if profileOperationInFlight {
+      return "Network: Applying profile…"
+    }
+    if mutationOperationInFlight {
+      return "Network: Applying change…"
+    }
     switch daemonCompatibility {
     case .legacyRepairRequired:
       return "Network: Daemon upgrade required"
@@ -295,6 +304,22 @@ enum TrayMenuUpdatePolicy {
 enum TrayUpdateAvailabilityPolicy {
   static func isEnabled(canCheckForUpdates: Bool) -> Bool {
     canCheckForUpdates
+  }
+}
+
+enum TrayPollingPolicy {
+  static let startupFastAttempts = 20
+
+  static func interval(
+    controllerReachable: Bool,
+    startupAttempt: Int
+  ) -> Duration {
+    if !controllerReachable, startupAttempt < startupFastAttempts {
+      return .milliseconds(500)
+    }
+    // Opening the menu and completing a mutation both request an immediate
+    // refresh. The background loop only keeps tooltip/state reasonably fresh.
+    return controllerReachable ? .seconds(30) : .seconds(10)
   }
 }
 

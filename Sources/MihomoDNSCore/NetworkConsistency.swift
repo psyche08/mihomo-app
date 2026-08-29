@@ -649,6 +649,8 @@ public final class NetworkConsistencyController: @unchecked Sendable {
     /// the kernel is ready enough to answer.
     private var checkedProxyServerResolution = false
     private let healthSnapshotPath: String?
+    private let healthGeneration: RuntimeHealthGeneration
+    private var runtimeReloadInProgress = false
 
     public convenience init(
         configuration: ProxyConfiguration,
@@ -656,7 +658,8 @@ public final class NetworkConsistencyController: @unchecked Sendable {
         aliasManager: LoopbackAliasManager,
         safetyState: NetworkSafetyState,
         runtimeRecoveryHandler: @escaping @Sendable () -> Void,
-        unsafeRuntimeHandler: @escaping @Sendable () -> Void
+        unsafeRuntimeHandler: @escaping @Sendable () -> Void,
+        healthGeneration: RuntimeHealthGeneration = RuntimeHealthGeneration()
     ) {
         self.init(
             configuration: configuration,
@@ -665,7 +668,8 @@ public final class NetworkConsistencyController: @unchecked Sendable {
             safetyState: safetyState,
             runtimeRecoveryHandler: runtimeRecoveryHandler,
             unsafeRuntimeHandler: unsafeRuntimeHandler,
-            egressProbe: EgressProbeCoordinator(configuration: configuration)
+            egressProbe: EgressProbeCoordinator(configuration: configuration),
+            healthGeneration: healthGeneration
         )
     }
 
@@ -676,7 +680,8 @@ public final class NetworkConsistencyController: @unchecked Sendable {
         safetyState: NetworkSafetyState,
         runtimeRecoveryHandler: @escaping @Sendable () -> Void,
         unsafeRuntimeHandler: @escaping @Sendable () -> Void,
-        egressProbe: EgressProbeCoordinator
+        egressProbe: EgressProbeCoordinator,
+        healthGeneration: RuntimeHealthGeneration = RuntimeHealthGeneration()
     ) {
         self.configuration = configuration
         self.globalDNS = globalDNS
@@ -685,7 +690,36 @@ public final class NetworkConsistencyController: @unchecked Sendable {
         self.runtimeRecoveryHandler = runtimeRecoveryHandler
         self.unsafeRuntimeHandler = unsafeRuntimeHandler
         self.egressProbe = egressProbe
+        self.healthGeneration = healthGeneration
         healthSnapshotPath = configuration.healthSnapshotPath
+    }
+
+    /// Freezes observation while the owned Mihomo child is replaced and moves
+    /// the published-health identity to the daemon-requested generation. The
+    /// DNS listeners and Global DNS ownership remain in place, but forwarding
+    /// falls back safely until the new child is observed ready.
+    public func beginRuntimeReload(generation: String) {
+        queue.sync {
+            runtimeReloadInProgress = true
+            safetyState.setRuntimeReady(false)
+            invalidateEgressMeasurement()
+            healthGeneration.replace(with: generation)
+            if let healthSnapshotPath {
+                HealthSnapshotStore.remove(at: healthSnapshotPath)
+            }
+            previous = nil
+            recoveryPolicy = RuntimeRecoveryPolicy()
+            bridgeFailurePolicy = DNSBridgeFailurePolicy()
+        }
+    }
+
+    public func finishRuntimeReload() {
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.runtimeReloadInProgress = false
+            guard self.timer != nil else { return }
+            self.evaluate(chargeFailures: false)
+        }
     }
 
     /// Runs an evaluation as soon as possible instead of waiting for the next
@@ -769,6 +803,7 @@ public final class NetworkConsistencyController: @unchecked Sendable {
     ///   and restart the kernel. Off-tick evaluations still observe and still
     ///   (re)acquire DNS; they just do not vote towards recovery.
     private func evaluate(chargeFailures: Bool = true) {
+        guard !runtimeReloadInProgress else { return }
         let before = MihomoRuntimeInspector.inspect(configuration: configuration, globalDNS: globalDNS)
         let kernelReady = before.controllerReachable && before.tunEnabled && before.tunInterface != nil
         let upstreamRuntimeReady = kernelReady && before.mihomoDNSReady
@@ -926,7 +961,10 @@ public final class NetworkConsistencyController: @unchecked Sendable {
         // Publish the reading so the daemon can answer tray polls without
         // repeating this work; it is the most expensive part of a poll.
         if let healthSnapshotPath {
-            HealthSnapshotStore.publish(HealthSnapshot(health: after), to: healthSnapshotPath)
+            HealthSnapshotStore.publish(
+                HealthSnapshot(health: after, generation: healthGeneration.current()),
+                to: healthSnapshotPath
+            )
         }
         safetyState.setRuntimeReady(
             after.controllerReachable && after.tunEnabled && after.tunInterface != nil

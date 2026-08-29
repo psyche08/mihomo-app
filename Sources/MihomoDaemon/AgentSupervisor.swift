@@ -9,6 +9,8 @@ final class AgentSupervisor: @unchecked Sendable {
     private let agentPIDPath: String
     private var process: Process?
     private var startedAt: Date?
+    private var expectedHealthGeneration: String?
+    private var verifiedStoppedHealth: NetworkConsistencyHealth?
     private var desiredRunning = false
     private var circuitOpen = false
     private var restartBackoff = RestartBackoffPolicy()
@@ -48,10 +50,12 @@ final class AgentSupervisor: @unchecked Sendable {
             desiredRunning = false
             circuitOpen = false
             restartBackoff.reset()
+            verifiedStoppedHealth = nil
             guard let process, process.isRunning else {
                 let orphanStopped = stopOwnedAgentFromPIDFile()
                 self.process = nil
                 startedAt = nil
+                expectedHealthGeneration = nil
                 ServiceLog.info("event=agent_stop_completed running=false")
                 return orphanStopped
             }
@@ -74,6 +78,7 @@ final class AgentSupervisor: @unchecked Sendable {
             }
             self.process = nil
             startedAt = nil
+            expectedHealthGeneration = nil
             removeAgentPIDIfMatching(process.processIdentifier)
             ServiceLog.info("event=agent_stop_completed running=false")
             return true
@@ -92,6 +97,7 @@ final class AgentSupervisor: @unchecked Sendable {
             MihomoSupervisor.stopOwnedProcess(configuration: mihomo)
         }
         HealthSnapshotStore.remove(at: configuration.healthSnapshotPath)
+        RuntimeReloadRequestStore.remove(at: configuration.runtimeReloadRequestPath)
         do {
             try ProxyService.restoreSystemDNS(configuration: configuration)
         } catch {
@@ -101,7 +107,7 @@ final class AgentSupervisor: @unchecked Sendable {
         guard (try? ProxyService.isSystemDNSRestored(configuration: configuration)) == true else {
             return false
         }
-        return agentStopped
+        let verified = agentStopped
             && !isRunning
             && !observed.controllerReachable
             && !observed.tunEnabled
@@ -111,6 +117,10 @@ final class AgentSupervisor: @unchecked Sendable {
             && !observed.mihomoDNSReady
             && !observed.systemDNSManaged
             && observed.networkConsistent
+        queue.sync {
+            verifiedStoppedHealth = verified ? observed : nil
+        }
+        return verified
     }
 
     func restart() throws {
@@ -121,24 +131,74 @@ final class AgentSupervisor: @unchecked Sendable {
         try start()
     }
 
-    func health() throws -> Data {
-        let configuration = try ProxyConfiguration.load(path: configPath)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        // Prefer the reading the agent's observer just took. Inspecting here
-        // repeats its most expensive work — two DNS probes with two-second
-        // timeouts, a routing lookup and a full config parse — on every tray
-        // poll. A missing or stale file means the observer is not running, and
-        // then this must inspect rather than serve something out of date.
-        if let published = HealthSnapshotStore.read(from: configuration.healthSnapshotPath) {
-            return try encoder.encode(published)
+    /// Requests a child-only reload from the supervised agent and records the
+    /// exact health generation that must become ready before the mutation can
+    /// commit. The fixed request file is root-only; SIGUSR1 is only a wakeup.
+    func restartMihomoChild() throws {
+        try queue.sync {
+            guard let process, process.isRunning else {
+                throw supervisorError("mihomo-agent is not running")
+            }
+            let configuration = try ProxyConfiguration.load(path: configPath)
+            let generation = UUID().uuidString
+            try RuntimeReloadRequestStore.publish(
+                RuntimeReloadRequest(generation: generation),
+                to: configuration.runtimeReloadRequestPath
+            )
+            guard kill(process.processIdentifier, SIGUSR1) == 0 else {
+                RuntimeReloadRequestStore.remove(at: configuration.runtimeReloadRequestPath)
+                throw supervisorError("mihomo-agent did not accept the reload request")
+            }
+            expectedHealthGeneration = generation
+            ServiceLog.info(
+                "event=agent_reload_requested pid=\(process.processIdentifier) generation=changed"
+            )
         }
-        return try encoder.encode(ProxyService.networkHealth(configuration: configuration))
     }
 
-    func freshHealth() throws -> NetworkConsistencyHealth {
+    /// Reads only the agent-published snapshot for the current launch/reload.
+    /// Unlike `diagnosticHealth()`, this never falls back to active DNS probes,
+    /// because it is called repeatedly by startup transaction validation.
+    func expectedHealthSnapshot() throws -> HealthSnapshot? {
+        let expected = queue.sync { expectedHealthGeneration }
+        guard let expected else { return nil }
         let configuration = try ProxyConfiguration.load(path: configPath)
-        return ProxyService.networkHealth(configuration: configuration)
+        guard let snapshot = HealthSnapshotStore.readSnapshot(
+            from: configuration.healthSnapshotPath
+        ), snapshot.generation == expected else {
+            return nil
+        }
+        return snapshot
+    }
+
+    /// Explicit status diagnostics may inspect live state when the observer has
+    /// not published a fresh snapshot. Do not use this from periodic UI paths.
+    func diagnosticHealth() throws -> Data {
+        let configuration = try ProxyConfiguration.load(path: configPath)
+        if let published = HealthSnapshotStore.read(from: configuration.healthSnapshotPath) {
+            return try encodeHealth(published)
+        }
+        return try encodeHealth(ProxyService.networkHealth(configuration: configuration))
+    }
+
+    /// Passive UI reads consume only the observer's fresh snapshot. They never
+    /// turn a stale/missing file into repeated DNS and route probes. A stopped
+    /// runtime may reuse the exact result already proved by stop-and-restore;
+    /// otherwise the caller receives no health rather than stale confidence.
+    func passiveHealth() throws -> Data? {
+        let configuration = try ProxyConfiguration.load(path: configPath)
+        if let published = HealthSnapshotStore.read(from: configuration.healthSnapshotPath) {
+            return try encodeHealth(published)
+        }
+        let stopped = queue.sync { process?.isRunning == true ? nil : verifiedStoppedHealth }
+        guard let stopped else { return nil }
+        return try encodeHealth(stopped)
+    }
+
+    private func encodeHealth(_ health: NetworkConsistencyHealth) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try encoder.encode(health)
     }
 
     private func launchLocked() throws {
@@ -148,11 +208,17 @@ final class AgentSupervisor: @unchecked Sendable {
         guard stopOwnedAgentFromPIDFile() else {
             throw supervisorError("a previous mihomo-agent did not stop")
         }
+        let configuration = try ProxyConfiguration.load(path: configPath)
+        let generation = UUID().uuidString
+        verifiedStoppedHealth = nil
+        HealthSnapshotStore.remove(at: configuration.healthSnapshotPath)
+        RuntimeReloadRequestStore.remove(at: configuration.runtimeReloadRequestPath)
         let child = Process()
         child.executableURL = URL(fileURLWithPath: agentPath)
         child.arguments = [
             "--config", configPath,
             "--parent-pid", String(getpid()),
+            "--runtime-generation", generation,
         ]
         child.standardInput = FileHandle.nullDevice
         child.standardOutput = FileHandle.nullDevice
@@ -166,6 +232,7 @@ final class AgentSupervisor: @unchecked Sendable {
                 } ?? 0
                 self.process = nil
                 self.startedAt = nil
+                self.expectedHealthGeneration = nil
                 self.removeAgentPIDIfMatching(terminated.processIdentifier)
                 let reason = terminated.terminationReason == .uncaughtSignal ? "signal" : "exit"
                 let decision = self.desiredRunning
@@ -197,6 +264,7 @@ final class AgentSupervisor: @unchecked Sendable {
         try child.run()
         process = child
         startedAt = Date()
+        expectedHealthGeneration = generation
         do {
             try writeAgentPID(child.processIdentifier)
         } catch {
@@ -211,6 +279,7 @@ final class AgentSupervisor: @unchecked Sendable {
             }
             process = nil
             startedAt = nil
+            expectedHealthGeneration = nil
             throw error
         }
         ServiceLog.info("event=agent_process_started pid=\(child.processIdentifier)")

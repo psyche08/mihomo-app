@@ -12,6 +12,7 @@ public struct ConfigView: View {
     ScrollView {
       VStack(alignment: .leading, spacing: DashboardTheme.sectionSpacing) {
         configHeader
+        applicationUpdatePanel
 
         switch store.configState {
         case .loaded:
@@ -62,6 +63,7 @@ public struct ConfigView: View {
       HStack(alignment: .top, spacing: DashboardTheme.spacing) {
         coreConfigPanel
           .frame(minWidth: 360, maxWidth: .infinity)
+          .disabled(store.configAction != nil)
         capabilitiesPanel
           .frame(minWidth: 360, maxWidth: .infinity)
       }
@@ -218,6 +220,36 @@ public struct ConfigView: View {
     }
   }
 
+  private var applicationUpdatePanel: some View {
+    configPanel("Application Updates", symbol: "arrow.down.app") {
+      VStack(spacing: 8) {
+        settingRow("Automatic Updates", symbol: "arrow.triangle.2.circlepath") {
+          Toggle(
+            "Automatic Updates",
+            isOn: Binding(
+              get: { store.automaticUpdatesEnabled },
+              set: { store.setAutomaticUpdatesEnabled($0) }
+            )
+          )
+          .labelsHidden()
+          .toggleStyle(.switch)
+          .controlSize(.small)
+          .disabled(!store.automaticUpdatesAvailable)
+        }
+
+        Text(
+          store.automaticUpdatesAvailable
+            ? "Checks and downloads signed updates in the background. Sparkle installs them automatically when it can safely quit and relaunch the App."
+            : "Automatic updates are unavailable in this development build."
+        )
+        .font(.system(size: 10))
+        .foregroundStyle(DashboardTheme.muted.opacity(0.72))
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.horizontal, 8)
+      }
+    }
+  }
+
   private var capabilitiesPanel: some View {
     configPanel("Capabilities & Privacy", symbol: "lock.shield") {
       VStack(spacing: 8) {
@@ -268,26 +300,60 @@ public struct ConfigView: View {
 
   private var actionsPanel: some View {
     configPanel("Core Config – Actions", symbol: "wrench.and.screwdriver") {
-      LazyVGrid(
-        columns: [GridItem(.adaptive(minimum: 145), spacing: 10)],
-        spacing: 10
-      ) {
-        actionButton("Reload Config", symbol: "arrow.clockwise", tint: DashboardTheme.primary) {
-          await store.reloadConfiguration()
+      VStack(alignment: .leading, spacing: 10) {
+        if let action = store.configAction {
+          HStack(spacing: 9) {
+            ProgressView()
+              .controlSize(.small)
+            Text(action.progressTitle)
+              .font(.system(size: 11, weight: .medium))
+              .foregroundStyle(DashboardTheme.content)
+            Spacer()
+          }
+          .padding(.horizontal, 10)
+          .frame(minHeight: 34)
+          .background(
+            DashboardTheme.primary.opacity(0.08),
+            in: RoundedRectangle(cornerRadius: 8)
+          )
+          .accessibilityElement(children: .combine)
+          .accessibilityLabel(action.progressTitle)
         }
-        actionButton("Restart Core", symbol: "play.fill", tint: DashboardTheme.warning) {
-          await store.restartRuntime()
-        }
-        actionButton("Flush Fake-IP", symbol: "cube", tint: DashboardTheme.accent) {
-          await store.flushFakeIPCache()
-        }
-        actionButton("Flush DNS Cache", symbol: "externaldrive", tint: DashboardTheme.info) {
-          await store.flushDNSCache()
-        }
-        actionButton(
-          "Update GEO Data", symbol: "globe.asia.australia", tint: DashboardTheme.secondary
+
+        LazyVGrid(
+          columns: [GridItem(.adaptive(minimum: 145), spacing: 10)],
+          spacing: 10
         ) {
-          await store.updateGeoData()
+          actionButton(
+            "Reload Config", symbol: "arrow.clockwise", tint: DashboardTheme.primary,
+            actionKind: .reloadingConfiguration
+          ) {
+            await store.reloadConfiguration()
+          }
+          actionButton(
+            "Restart Core", symbol: "play.fill", tint: DashboardTheme.warning,
+            actionKind: .restartingRuntime
+          ) {
+            await store.restartRuntime()
+          }
+          actionButton(
+            "Flush Fake-IP", symbol: "cube", tint: DashboardTheme.accent,
+            actionKind: .flushingFakeIP
+          ) {
+            await store.flushFakeIPCache()
+          }
+          actionButton(
+            "Flush DNS Cache", symbol: "externaldrive", tint: DashboardTheme.info,
+            actionKind: .flushingDNS
+          ) {
+            await store.flushDNSCache()
+          }
+          actionButton(
+            "Update GEO Data", symbol: "globe.asia.australia", tint: DashboardTheme.secondary,
+            actionKind: .updatingGeoData
+          ) {
+            await store.updateGeoData()
+          }
         }
       }
     }
@@ -422,14 +488,21 @@ public struct ConfigView: View {
     _ title: String,
     symbol: String,
     tint: Color,
+    actionKind: DashboardConfigAction,
     action: @escaping @MainActor () async -> Void
   ) -> some View {
     Button {
       Task { await action() }
     } label: {
       HStack(spacing: 8) {
-        Image(systemName: symbol)
-          .font(.system(size: 12, weight: .semibold))
+        if store.configAction == actionKind {
+          ProgressView()
+            .controlSize(.small)
+            .tint(tint)
+        } else {
+          Image(systemName: symbol)
+            .font(.system(size: 12, weight: .semibold))
+        }
         Text(title)
           .font(.system(size: 11, weight: .semibold))
           .lineLimit(1)
@@ -444,7 +517,9 @@ public struct ConfigView: View {
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
-    .accessibilityLabel(title)
+    .disabled(store.configAction != nil)
+    .opacity(store.configAction == nil || store.configAction == actionKind ? 1 : 0.48)
+    .accessibilityLabel(store.configAction == actionKind ? actionKind.progressTitle : title)
   }
 
   private func headerBadge(_ text: String) -> some View {

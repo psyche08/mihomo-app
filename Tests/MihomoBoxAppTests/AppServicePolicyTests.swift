@@ -405,6 +405,34 @@ final class AppServicePolicyTests: XCTestCase {
     XCTAssertTrue(installer.contains("managed_mihomo_pids"))
   }
 
+  func testTrayHealthUsesOnlyPassiveSnapshots() throws {
+    let repository = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+    let supervisorURL = repository.appendingPathComponent(
+      "Sources/MihomoDaemon/AgentSupervisor.swift"
+    )
+    let serverURL = repository.appendingPathComponent(
+      "Sources/MihomoDaemon/ControlServer.swift"
+    )
+    let supervisor = try String(contentsOf: supervisorURL, encoding: .utf8)
+    let server = try String(contentsOf: serverURL, encoding: .utf8)
+
+    let passiveStart = try XCTUnwrap(supervisor.range(of: "func passiveHealth()"))
+    let encoderStart = try XCTUnwrap(
+      supervisor.range(
+        of: "private func encodeHealth",
+        range: passiveStart.upperBound..<supervisor.endIndex
+      )
+    )
+    let passiveBody = supervisor[passiveStart.lowerBound..<encoderStart.lowerBound]
+    XCTAssertFalse(passiveBody.contains("ProxyService.networkHealth"))
+    XCTAssertTrue(passiveBody.contains("HealthSnapshotStore.read"))
+    XCTAssertTrue(server.contains("agent.passiveHealth()"))
+    XCTAssertTrue(server.contains("agent.diagnosticHealth()"))
+  }
+
   func testInstallerAndDaemonMutationsShareTheRootTransactionLock() throws {
     let repository = URL(fileURLWithPath: #filePath)
       .deletingLastPathComponent()

@@ -145,11 +145,27 @@ reactivated.
 The root daemon does not participate in this data plane. It authenticates XPC
 clients, serializes lifecycle/profile transactions, and supervises the agent.
 
+Each agent launch receives a daemon-generated runtime generation. The
+consistency observer includes that generation in its mode-`0600` atomic health
+snapshot. Startup validation waits for a fresh snapshot matching the exact
+generation and never repeats active DNS probes on its 250 ms transaction poll;
+a snapshot from the previous agent or Mihomo child cannot commit startup.
+
+Reloading the already-active root-owned profile uses a narrower transaction.
+The daemon writes a one-shot mode-`0600` request containing a new generation
+and wakes the existing agent with `SIGUSR1`. The agent keeps both DNS listeners,
+the loopback alias, and system-DNS ownership, temporarily closes its Fake-IP
+safety gate, and restarts only its owned Mihomo child. The transaction commits
+after the new generation reports complete health. A rejected request, child
+failure, or validation timeout still stops the agent and restores DNS.
+
 No query name, matched domain, resolver address, service identifier, or wire
 message is logged. Only interface names and aggregate resolver/route counts are
-audited. DNS forwarding emits ten-second aggregate request, peak-inflight,
-primary success/failure/bypass, fallback success/failure, and policy-blocked
-counters.
+audited. DNS forwarding retains ten-second observation windows, but healthy
+traffic is aggregated into one-minute summaries. A primary failure/bypass,
+fallback failure, or policy block emits the accumulated counters on the next
+ten-second tick so degraded behavior is not hidden by the lower healthy-log
+rate.
 
 Lifecycle, configuration commands, child exits/restarts, network transitions,
 drift detection, repair attempts, and repair outcomes are structured audit
@@ -169,3 +185,9 @@ children with exponential delays from one to thirty seconds. Six consecutive
 short-lived failures open a circuit instead of creating a restart storm; an
 agent circuit also restores safe system DNS. A process that remains healthy for
 sixty seconds resets the failure sequence.
+
+Tray-state health is passive: it consumes only the agent observer's fresh
+snapshot, or the exact safely-stopped result already proved by the restore
+transaction. A missing or stale running snapshot is reported as unknown and
+never causes the UI polling path to issue DNS or route probes. Explicit
+diagnostic `status` remains allowed to inspect live state.
