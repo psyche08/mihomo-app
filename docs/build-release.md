@@ -196,6 +196,44 @@ It must also verify `Sparkle.framework`, `@executable_path/../Frameworks`, the
 bundle identifier, `VERSION`, third-party licenses and the absence of WebView
 or Tauri runtime assets.
 
+## Xcode Cloud Developer ID transition
+
+The committed Cloud product is `XcodeCloud/MihomoBox.xcodeproj` with the shared
+`MihomoBox` scheme. It is a thin archive surface over the package-owned source:
+the App and three native helper targets consume local Swift package library
+products, while a checksum-pinned Mihomo binary and audited resources are
+embedded before Xcode's signing phase. `Package.resolved` is committed in both
+the package root and the Xcode project workspace.
+
+Xcode Cloud is configured in two stages:
+
+1. Create a macOS Archive action for the shared `MihomoBox` scheme, Developer ID
+   distribution, clean build, and the current Xcode/macOS image.
+2. Add Apple's Notarize post-action. Do not add notary credentials, a Developer
+   ID private key, the Sparkle private key, or Keychain commands to custom
+   scripts; Xcode Cloud owns Developer ID signing and the built-in post-action
+   owns App notarization.
+
+The first Cloud archive is bootstrap evidence, not a public update.
+`ci_post_xcodebuild.sh` verifies Team ID `89LGY6BD53`, requires all five product
+executables to share the App leaf, and logs exactly one
+`MIHOMOBOX_CLOUD_DEVELOPER_ID_LEAF_SHA1=...` marker when the Developer ID export
+is available. Download the archive and inspect it manually if Xcode Cloud does
+not expose that path to the post-build script.
+
+After the Cloud leaf is observed, add it beside the published
+`2E1EF531C972A15F5B5C58855001FA6FA1186383` pin in
+`SigningCertificateRequirement.migrationLeafSHA1s`. The local release script
+refuses to sign 0.9.1 until that source allowlist contains exactly two unique
+leaves. Then publish 0.9.1 with the published certificate; only a later version
+may be distributed from the Cloud certificate. Keep the Sparkle EdDSA key
+unchanged during this Developer ID rotation.
+
+Xcode Cloud's notarized App archive does not replace the separate DMG, Sparkle
+appcast, legacy 0.7 manifest, GitHub immutable-asset, or signed-machine runtime
+acceptance gates. Those remain explicit release stages until their artifact
+provenance and secret-handling contracts are migrated independently.
+
 For an explicit development-window smoke test:
 
 ```bash

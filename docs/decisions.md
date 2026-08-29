@@ -53,14 +53,18 @@ authorization, serialized profile/lifecycle transactions, and agent
 supervision. The agent owns the network data plane and has no client-facing
 service.
 
-## Exact signing certificate instead of Team ID only
+## Exact signing-certificate family instead of Team ID only
 
 The App and CLI use different signing identifiers, so requiring one identifier
 would reject a legitimate peer. Team ID alone accepts any other product signed
 by that team. Both XPC sides instead derive a peer code-signing requirement from
-their leaf certificate. This permits the signed MihomoBox family while
+their leaf certificate. During normal operation this is one leaf. The bounded
+0.9.1 Xcode Cloud transition adds only the explicitly pinned published and
+Cloud leaves so an old-signed bridge and a new-signed release can replace each
+other's privileged components. This permits the signed MihomoBox family while
 rejecting another certificate, invalid signature, ad-hoc build, or unsigned
-binary.
+binary. The Cloud leaf must be learned from an audited Developer ID archive and
+committed before publishing the bridge; Team ID is never a migration shortcut.
 
 ## Copy bundle payloads to stable system paths
 

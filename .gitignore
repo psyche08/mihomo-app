@@ -10,6 +10,8 @@
 __pycache__/
 *.pyc
 .DS_Store
+xcuserdata/
+*.xcuserstate
 
 # Runtime log exports; never source, and may contain diagnostic captures.
 /logs/

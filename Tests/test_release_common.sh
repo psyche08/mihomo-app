@@ -68,6 +68,9 @@ release_script="$ROOT/scripts/release-macos.sh"
 /usr/bin/grep -Fq 'verify_published_legacy_archive' "$release_script"
 /usr/bin/grep -Fq 'selected Developer ID leaf does not match the leaf used for published 0.7.0' \
   "$release_script"
+/usr/bin/grep -Fq \
+  '0.9.1 bridge requires exactly the published and Xcode Cloud Developer ID leaves' \
+  "$release_script"
 /usr/bin/grep -Fq 'prebuilt App Sparkle public key does not match published 0.8.0' \
   "$release_script"
 

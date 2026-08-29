@@ -123,7 +123,11 @@ the network data plane.
 - Mihomo uses a pinned release and SHA-256.
 - SwiftPM lockfiles pin the native dependency graph. The pinned Sparkle binary
   artifact is additionally protected by SwiftPM's recorded checksum.
-- Daemon, agent, CLI, Desktop, and DMG use one Developer ID certificate.
+- Daemon, agent, CLI, Desktop, and DMG in any one release use one Developer ID
+  certificate. During the bounded 0.9.1 Xcode Cloud migration, peer policy is
+  the exact union of the published leaf and the observed Cloud leaf; it never
+  falls back to Team ID. The old-signed bridge is not releasable until both
+  fingerprints are source-pinned.
 - Automatic App updates require Sparkle EdDSA verification and the Developer
   ID/notarized release chain. Signed appcasts prevent feed-field substitution.
   The Sparkle private key never ships in the App or repository. During the 0.7

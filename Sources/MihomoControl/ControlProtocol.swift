@@ -227,6 +227,15 @@ public enum ControlError: Error, LocalizedError {
 }
 
 public enum SigningCertificateRequirement {
+    /// The published Developer ID leaf retained during the Xcode Cloud
+    /// migration. The first Cloud archive derives its own leaf at runtime and
+    /// therefore trusts both that Cloud leaf and this published leaf. Before
+    /// the old-signed 0.9.1 bridge is released, the observed Cloud leaf must be
+    /// added here as a second explicit pin.
+    private static let migrationLeafSHA1s = [
+        "2E1EF531C972A15F5B5C58855001FA6FA1186383",
+    ]
+
     public static func currentProcess() throws -> String {
         var currentCode: SecCode?
         guard SecCodeCopySelf([], &currentCode) == errSecSuccess, let currentCode else {
@@ -249,13 +258,39 @@ public enum SigningCertificateRequirement {
             throw ControlError.unsignedProcess
         }
         let digest = Insecure.SHA1.hash(data: SecCertificateCopyData(leaf) as Data)
-        let hexadecimal = digest.map { String(format: "%02x", $0) }.joined()
-        let requirement = "anchor apple generic and certificate leaf = H\"\(hexadecimal)\""
+        let hexadecimal = digest.map { String(format: "%02X", $0) }.joined()
+        return try certificateFamilyRequirement(currentLeafSHA1: hexadecimal)
+    }
+
+    /// Produces a fail-closed Developer ID family requirement for the current
+    /// process plus the small, source-pinned migration allowlist. Team ID alone
+    /// is deliberately insufficient: every accepted leaf remains explicit.
+    public static func certificateFamilyRequirement(currentLeafSHA1: String) throws -> String {
+        let normalizedCurrent = try normalizedLeafSHA1(currentLeafSHA1)
+        let normalizedMigration = try migrationLeafSHA1s.map(normalizedLeafSHA1)
+        let leaves = Array(Set([normalizedCurrent] + normalizedMigration)).sorted()
+        let clauses = leaves.map { "certificate leaf = H\"\($0)\"" }
+        let leafExpression = clauses.count == 1
+            ? clauses[0]
+            : "(\(clauses.joined(separator: " or ")))"
+        let requirement = "anchor apple generic and \(leafExpression)"
         var parsed: SecRequirement?
-        guard SecRequirementCreateWithString(requirement as CFString, [], &parsed) == errSecSuccess else {
+        guard SecRequirementCreateWithString(requirement as CFString, [], &parsed) == errSecSuccess,
+              parsed != nil else {
             throw ControlError.invalidRequirement
         }
         return requirement
+    }
+
+    private static func normalizedLeafSHA1(_ value: String) throws -> String {
+        let normalized = value.uppercased()
+        guard normalized.count == 40,
+              normalized.utf8.allSatisfy({
+                  (48...57).contains($0) || (65...70).contains($0)
+              }) else {
+            throw ControlError.invalidRequirement
+        }
+        return normalized
     }
 
     public static func validateStaticCode(at url: URL, requirement: String) throws {

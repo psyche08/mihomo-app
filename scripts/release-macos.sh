@@ -254,6 +254,23 @@ PUBLISHED_070_ARCHIVE_SHA256="37a5ea188e7c95ef2e45768193c11c6a2cdd40f672135b613f
 PUBLISHED_070_DEVELOPER_ID_LEAF_SHA1="2E1EF531C972A15F5B5C58855001FA6FA1186383"
 PUBLISHED_080_ARCHIVE_SHA256="d04c8b432e39df1f2f66ed547f828c95fb490f7ff03c8719bbcbbcff25309c9b"
 PUBLISHED_080_SPARKLE_PUBLIC_ED_KEY="CL5i36xBB93GX8INJAcBAVFreeVys28Vu94mgAgTA00="
+MIGRATION_LEAF_SOURCE="$ROOT/Sources/MihomoControl/ControlProtocol.swift"
+MIGRATION_LEAFS="$(/usr/bin/sed -n \
+  '/private static let migrationLeafSHA1s = \[/,/^[[:space:]]*]/p' \
+  "$MIGRATION_LEAF_SOURCE" |
+  /usr/bin/grep -Eo '[0-9A-F]{40}' |
+  /usr/bin/sort -u)"
+MIGRATION_LEAF_COUNT="$(/usr/bin/printf '%s\n' "$MIGRATION_LEAFS" |
+  /usr/bin/sed '/^[[:space:]]*$/d' |
+  /usr/bin/wc -l |
+  /usr/bin/tr -d '[:space:]')"
+if [[ "$VERSION" == "0.9.1" ]]; then
+  if [[ "$MIGRATION_LEAF_COUNT" != "2" ]] ||
+    ! /usr/bin/grep -Fxq "$PUBLISHED_070_DEVELOPER_ID_LEAF_SHA1" <<<"$MIGRATION_LEAFS"; then
+    echo "0.9.1 bridge requires exactly the published and Xcode Cloud Developer ID leaves" >&2
+    exit 1
+  fi
+fi
 if [[ "$RELEASE_STATE_DIR" != /* ]]; then
   echo "RELEASE_STATE_DIR must be absolute" >&2
   exit 1

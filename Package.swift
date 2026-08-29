@@ -12,6 +12,11 @@ let package = Package(
     .executable(name: "mihomo-daemon", targets: ["MihomoDaemon"]),
     .executable(name: "mihomo-agent", targets: ["MihomoAgent"]),
     .executable(name: "mihomoboxctl", targets: ["MihomoBoxCLI"]),
+    // Xcode Cloud cannot archive a standalone Swift package. These library
+    // products let the thin Xcode application and helper targets reuse the
+    // package-owned implementation without creating a second source tree.
+    .library(name: "MihomoControl", type: .static, targets: ["MihomoControl"]),
+    .library(name: "MihomoDNSCore", type: .static, targets: ["MihomoDNSCore"]),
     .library(name: "MihomoBoxUI", type: .static, targets: ["MihomoBoxUI"]),
   ],
   dependencies: [
@@ -86,6 +91,7 @@ let package = Package(
       name: "MihomoBoxAppTests",
       dependencies: ["MihomoBoxApp", "MihomoBoxUI", "MihomoControl"]
     ),
+    .testTarget(name: "MihomoControlTests", dependencies: ["MihomoControl"]),
   ],
   swiftLanguageModes: [.v5]
 )

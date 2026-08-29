@@ -34,12 +34,14 @@ if [[ "$EXPECTED_SPARKLE_PUBLIC_ED_KEY" == "$DEVELOPMENT_SPARKLE_PUBLIC_ED_KEY" 
 fi
 
 /usr/bin/plutil -lint Config/Info.plist.in >/dev/null
+/usr/bin/plutil -lint Config/XcodeCloud-Info.plist >/dev/null
 if [[ "$(/usr/bin/grep -o '@VERSION@' Config/Info.plist.in | /usr/bin/wc -l | /usr/bin/tr -d '[:space:]')" != "1" ]] ||
   [[ "$(/usr/bin/grep -o '@BUILD_VERSION@' Config/Info.plist.in | /usr/bin/wc -l | /usr/bin/tr -d '[:space:]')" != "1" ]] ||
   [[ "$(/usr/bin/grep -o '@SPARKLE_PUBLIC_ED_KEY@' Config/Info.plist.in | /usr/bin/wc -l | /usr/bin/tr -d '[:space:]')" != "1" ]]; then
   echo "Info.plist template placeholders are invalid" >&2
   exit 1
 fi
+scripts/generate-xcode-cloud-project.rb --check
 
 env \
   SWIFTPM_MODULECACHE_OVERRIDE="${SWIFTPM_MODULECACHE_OVERRIDE:-/private/tmp/mihomo-app-swift-cache}" \
