@@ -221,13 +221,14 @@ executables to share the App leaf, and logs exactly one
 is available. Download the archive and inspect it manually if Xcode Cloud does
 not expose that path to the post-build script.
 
-After the Cloud leaf is observed, add it beside the published
-`2E1EF531C972A15F5B5C58855001FA6FA1186383` pin in
-`SigningCertificateRequirement.migrationLeafSHA1s`. The local release script
-refuses to sign 0.9.1 until that source allowlist contains exactly two unique
-leaves. Then publish 0.9.1 with the published certificate; only a later version
-may be distributed from the Cloud certificate. Keep the Sparkle EdDSA key
-unchanged during this Developer ID rotation.
+The first notarized Cloud archive, Build 4 from commit `d437935`, observed leaf
+`44B2EB8C6C3C6A85A3687EEDED7D85EB7C13524A` on all five product executables.
+`SigningCertificateRequirement.migrationLeafSHA1s` pins it beside the published
+`2E1EF531C972A15F5B5C58855001FA6FA1186383` leaf. The local release script
+refuses to sign 0.9.1 unless that source allowlist contains exactly those two
+unique leaves. Publish 0.9.1 with the published certificate; only a later
+version may be distributed from the Cloud certificate. Keep the Sparkle EdDSA
+key unchanged during this Developer ID rotation.
 
 Xcode Cloud's notarized App archive does not replace the separate DMG, Sparkle
 appcast, legacy 0.7 manifest, GitHub immutable-asset, or signed-machine runtime

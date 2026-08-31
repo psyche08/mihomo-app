@@ -228,12 +228,12 @@ public enum ControlError: Error, LocalizedError {
 
 public enum SigningCertificateRequirement {
     /// The published Developer ID leaf retained during the Xcode Cloud
-    /// migration. The first Cloud archive derives its own leaf at runtime and
-    /// therefore trusts both that Cloud leaf and this published leaf. Before
-    /// the old-signed 0.9.1 bridge is released, the observed Cloud leaf must be
-    /// added here as a second explicit pin.
+    /// migration. The 0.9.1 bridge trusts the published leaf and the leaf
+    /// observed from the first notarized Xcode Cloud archive. Later releases
+    /// may remove the published leaf only after the transition is complete.
     private static let migrationLeafSHA1s = [
         "2E1EF531C972A15F5B5C58855001FA6FA1186383",
+        "44B2EB8C6C3C6A85A3687EEDED7D85EB7C13524A",
     ]
 
     public static func currentProcess() throws -> String {

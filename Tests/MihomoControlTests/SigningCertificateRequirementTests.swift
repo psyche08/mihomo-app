@@ -3,28 +3,29 @@ import XCTest
 
 final class SigningCertificateRequirementTests: XCTestCase {
   private let publishedLeaf = "2E1EF531C972A15F5B5C58855001FA6FA1186383"
+  private let cloudLeaf = "44B2EB8C6C3C6A85A3687EEDED7D85EB7C13524A"
 
-  func testPublishedLeafDoesNotDuplicateMigrationClause() throws {
+  func testPublishedLeafIncludesCloudLeafExactlyOnce() throws {
     let requirement = try SigningCertificateRequirement.certificateFamilyRequirement(
       currentLeafSHA1: publishedLeaf.lowercased()
     )
 
     XCTAssertEqual(
       requirement,
-      "anchor apple generic and certificate leaf = H\"\(publishedLeaf)\""
+      "anchor apple generic and (certificate leaf = H\"\(publishedLeaf)\" or " +
+        "certificate leaf = H\"\(cloudLeaf)\")"
     )
   }
 
-  func testCloudLeafIsCombinedWithPublishedLeafExactly() throws {
-    let cloudLeaf = "0123456789ABCDEF0123456789ABCDEF01234567"
+  func testCloudLeafIncludesPublishedLeafExactlyOnce() throws {
     let requirement = try SigningCertificateRequirement.certificateFamilyRequirement(
       currentLeafSHA1: cloudLeaf
     )
 
     XCTAssertEqual(
       requirement,
-      "anchor apple generic and (certificate leaf = H\"\(cloudLeaf)\" or " +
-        "certificate leaf = H\"\(publishedLeaf)\")"
+      "anchor apple generic and (certificate leaf = H\"\(publishedLeaf)\" or " +
+        "certificate leaf = H\"\(cloudLeaf)\")"
     )
   }
 

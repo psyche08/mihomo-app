@@ -60,6 +60,9 @@ release_script="$ROOT/scripts/release-macos.sh"
   'PUBLISHED_070_DEVELOPER_ID_LEAF_SHA1="2E1EF531C972A15F5B5C58855001FA6FA1186383"' \
   "$release_script"
 /usr/bin/grep -Fq \
+  'XCODE_CLOUD_DEVELOPER_ID_LEAF_SHA1="44B2EB8C6C3C6A85A3687EEDED7D85EB7C13524A"' \
+  "$release_script"
+/usr/bin/grep -Fq \
   'PUBLISHED_080_ARCHIVE_SHA256="d04c8b432e39df1f2f66ed547f828c95fb490f7ff03c8719bbcbbcff25309c9b"' \
   "$release_script"
 /usr/bin/grep -Fq \
