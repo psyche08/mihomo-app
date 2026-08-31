@@ -57,6 +57,17 @@ if ARGV == ["--check"]
   abort "MihomoBox archive phases drifted" unless app.build_phases.map(&:display_name) == expected_phases
   abort "MihomoBox must be the only installed target" unless app.resolved_build_setting("SKIP_INSTALL").values.uniq == ["NO"]
 
+  prepare_phase = app.shell_script_build_phases.find do |phase|
+    phase.name == "Prepare pinned Mihomo and icon inputs"
+  end
+  pinned_phase = app.copy_files_build_phases.find do |phase|
+    phase.name == "Embed signed pinned Mihomo"
+  end
+  expected_mihomo_path = ".build/staging/mihomo"
+  abort "Xcode Cloud Mihomo output name drifted" unless
+    prepare_phase&.output_paths == ["$(SRCROOT)/../#{expected_mihomo_path}"] &&
+    pinned_phase&.files_references&.map(&:path) == [expected_mihomo_path]
+
   resolved = PROJECT_PATH.join("project.xcworkspace/xcshareddata/swiftpm/Package.resolved")
   abort "Xcode Cloud Package.resolved drifted" unless FileUtils.compare_file(ROOT.join("Package.resolved"), resolved)
   scheme = PROJECT_PATH.join("xcshareddata/xcschemes/MihomoBox.xcscheme")
@@ -189,6 +200,9 @@ prepare_phase.shell_path = "/bin/bash"
 prepare_phase.shell_script = <<~'SCRIPT'
   set -euo pipefail
   TARGET_TRIPLE=aarch64-apple-darwin "$SRCROOT/../scripts/fetch-mihomo.sh"
+  /usr/bin/install -m 0755 \
+    "$SRCROOT/../.build/staging/mihomo-aarch64-apple-darwin" \
+    "$SRCROOT/../.build/staging/mihomo"
   "$SRCROOT/../scripts/prepare-icons.sh"
 SCRIPT
 prepare_phase.input_paths = [
@@ -196,7 +210,7 @@ prepare_phase.input_paths = [
   "$(SRCROOT)/../scripts/prepare-icons.sh",
   "$(SRCROOT)/../Resources/AppIcon/icon.icns"
 ]
-prepare_phase.output_paths = ["$(SRCROOT)/../.build/staging/mihomo-aarch64-apple-darwin"]
+prepare_phase.output_paths = ["$(SRCROOT)/../.build/staging/mihomo"]
 prepare_phase.always_out_of_date = "1"
 
 executables_phase = app.new_copy_files_build_phase("Embed signed helper executables")
@@ -207,7 +221,7 @@ executables_phase.symbol_dst_subfolder_spec = :executables
 end
 
 pinned_group = project.main_group.new_group("Pinned Build Inputs", "..")
-mihomo = pinned_group.new_file(".build/staging/mihomo-aarch64-apple-darwin")
+mihomo = pinned_group.new_file(".build/staging/mihomo")
 mihomo.name = "mihomo"
 mihomo.last_known_file_type = "compiled.mach-o.executable"
 mihomo.include_in_index = "0"

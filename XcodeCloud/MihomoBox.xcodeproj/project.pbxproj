@@ -117,7 +117,7 @@
 		41C2006547C1940BC0116658 /* TrayControlClient.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TrayControlClient.swift; sourceTree = "<group>"; };
 		481CFD4AFFFEE7AA13347A6B /* InstallerCoordinator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = InstallerCoordinator.swift; sourceTree = "<group>"; };
 		4DD11BCE5CF49DD4C8501295 /* main.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
-		513AC5782C6ACD6C4A6F9FD2 /* mihomo */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "compiled.mach-o.executable"; name = mihomo; path = ".build/staging/mihomo-aarch64-apple-darwin"; sourceTree = "<group>"; };
+		513AC5782C6ACD6C4A6F9FD2 /* mihomo */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "compiled.mach-o.executable"; name = mihomo; path = ".build/staging/mihomo"; sourceTree = "<group>"; };
 		523E14332D8F9F26BF5BB38D /* IOKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = IOKit.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.15.sdk/System/Library/Frameworks/IOKit.framework; sourceTree = DEVELOPER_DIR; };
 		586E4D5711F05FD9C34C5443 /* SparkleUpdateController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SparkleUpdateController.swift; sourceTree = "<group>"; };
 		6800BBB4BA267C89F221FA17 /* AppKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppKit.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.15.sdk/System/Library/Frameworks/AppKit.framework; sourceTree = DEVELOPER_DIR; };
@@ -463,11 +463,11 @@
 			outputFileListPaths = (
 			);
 			outputPaths = (
-				"$(SRCROOT)/../.build/staging/mihomo-aarch64-apple-darwin",
+				"$(SRCROOT)/../.build/staging/mihomo",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
-			shellScript = "set -euo pipefail\nTARGET_TRIPLE=aarch64-apple-darwin \"$SRCROOT/../scripts/fetch-mihomo.sh\"\n\"$SRCROOT/../scripts/prepare-icons.sh\"\n";
+			shellScript = "set -euo pipefail\nTARGET_TRIPLE=aarch64-apple-darwin \"$SRCROOT/../scripts/fetch-mihomo.sh\"\n/usr/bin/install -m 0755 \\\n  \"$SRCROOT/../.build/staging/mihomo-aarch64-apple-darwin\" \\\n  \"$SRCROOT/../.build/staging/mihomo\"\n\"$SRCROOT/../scripts/prepare-icons.sh\"\n";
 		};
 		FDE748A3AAF6378F03B477C2 /* Assemble audited application resources */ = {
 			isa = PBXShellScriptBuildPhase;
