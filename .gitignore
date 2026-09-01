@@ -15,3 +15,4 @@ xcuserdata/
 
 # Runtime log exports; never source, and may contain diagnostic captures.
 /logs/
+/tools/notarytool-rs/target/

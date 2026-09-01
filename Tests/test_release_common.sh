@@ -76,5 +76,9 @@ release_script="$ROOT/scripts/release-macos.sh"
   "$release_script"
 /usr/bin/grep -Fq 'prebuilt App Sparkle public key does not match published 0.8.0' \
   "$release_script"
+/usr/bin/grep -Fq 'rust-api-key production notarization is restricted to the 0.9.1 bridge' \
+  "$release_script"
+/usr/bin/grep -Fq 'NOTARY_RS_APP_STATE' "$release_script"
+/usr/bin/grep -Fq 'notarize_with_rust_api_key' "$release_script"
 
 echo "release common tests passed"

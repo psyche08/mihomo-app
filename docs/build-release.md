@@ -1,5 +1,22 @@
 # Build and Release
 
+## Current release policy
+
+Production release artifacts originate only from Xcode Cloud after the 0.9.1
+certificate bridge. Xcode Cloud owns the release build, Developer ID signing,
+notarization and packaging. If a later artifact is published through GitHub or
+another download channel, it must be the exact Cloud-produced artifact; a
+local build must never be substituted. Local compilation, tests and validation
+use ad-hoc signing only.
+
+Version 0.9.1 is the sole migration exception. It may reuse only the already
+built App bound to source commit `acb6f380c76d5d5a8bd96d208ce6a5e3947cdb4f`,
+signed by published Developer ID leaf
+`2E1EF531C972A15F5B5C58855001FA6FA1186383`. Its exact pre-staple ZIP is
+notarized through `tools/notarytool-rs`; packaging and GitHub publication may
+then run locally. The exception does not authorize rebuilding or re-signing
+the accepted App and expires immediately after 0.9.1.
+
 ## Pinned Inputs
 
 | Component | Pin | Verification |
@@ -234,6 +251,15 @@ Xcode Cloud's notarized App archive does not replace the separate DMG, Sparkle
 appcast, legacy 0.7 manifest, GitHub immutable-asset, or signed-machine runtime
 acceptance gates. Those remain explicit release stages until their artifact
 provenance and secret-handling contracts are migrated independently.
+
+The source tree also contains the independent cross-platform Notary API client
+at `tools/notarytool-rs`. It uses App Store Connect API-key JWT authentication,
+uploads through Apple's temporary S3 credentials, and supports submission
+status, history, waiting, developer logs, and append-only recovery state. It
+does not sign or staple software. Its only production use is the explicitly
+authorized 0.9.1 bridge described above; it otherwise remains a compatibility
+and recovery tool for designated test artifacts and must not substitute for a
+Cloud production artifact.
 
 For an explicit development-window smoke test:
 

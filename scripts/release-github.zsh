@@ -720,7 +720,7 @@ validate_existing_annotated_tag() {
 atomic_push_main_and_tag() {
   /usr/bin/git -C "$ROOT" push --no-verify --atomic origin \
     'HEAD:refs/heads/main' \
-    "refs/tags/$TAG:refs/tags/$TAG"
+    "refs/tags/${TAG}:refs/tags/${TAG}"
 }
 
 inspect_remote_annotated_tag() {

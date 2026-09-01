@@ -25,12 +25,15 @@ Enhanced TUN privilege, DHCP-aware DNS forwarding, and macOS Global DNS.
 5. Pin and checksum bundled upstream artifacts. Retain third-party licenses.
 6. Validate Swift, the pinned Sparkle package and MetaCubeXD visual reference,
    installer dry-run, and the final `.app` bundle before release.
-7. Compilation is operator-executed and must run outside the sandbox. Agents
-   must not run commands that compile or rebuild code or application bundles,
-   including tests, validation, or release commands that compile as a side
-   effect. Provide the exact command for the operator to run and wait for its
-   result. Authorization to commit, tag, sign, notarize, package, publish, or
-   deploy never implies authorization to compile.
+7. Production release artifacts are built, Developer ID signed, notarized and
+   packaged only by Xcode Cloud, with one migration exception: version 0.9.1
+   may reuse the already-built App bound to commit `acb6f38`, sign with the
+   published Developer ID leaf, notarize through `tools/notarytool-rs`, package
+   locally and publish to GitHub. This exception must not rebuild or re-sign
+   the accepted App and expires after 0.9.1. Any later external publication or
+   distribution must use the exact Cloud artifacts. Local development may
+   compile, test and validate with ad-hoc signing. Compilation or validation
+   never implies authorization to publish or deploy.
 8. Never execute `security unlock-keychain`, directly or indirectly. Keychain
    availability is an operator-controlled prerequisite; scripts and agents
    must fail closed instead of unlocking it.

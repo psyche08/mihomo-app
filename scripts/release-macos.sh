@@ -29,8 +29,22 @@ while (( $# > 0 )); do
 done
 
 : "${NOTARY_TEAM_ID:?NOTARY_TEAM_ID is required}"
-: "${NOTARY_APPLE_ID:?NOTARY_APPLE_ID is required}"
-: "${NOTARY_PASSWORD:?NOTARY_PASSWORD is required}"
+NOTARY_BACKEND="${NOTARY_BACKEND:-xcrun}"
+case "$NOTARY_BACKEND" in
+  xcrun)
+    : "${NOTARY_APPLE_ID:?NOTARY_APPLE_ID is required}"
+    : "${NOTARY_PASSWORD:?NOTARY_PASSWORD is required}"
+    ;;
+  rust-api-key)
+    : "${APPLE_NOTARY_KEY_ID:?APPLE_NOTARY_KEY_ID is required}"
+    : "${APPLE_NOTARY_ISSUER_ID:?APPLE_NOTARY_ISSUER_ID is required}"
+    : "${APPLE_NOTARY_PRIVATE_KEY:?APPLE_NOTARY_PRIVATE_KEY is required}"
+    ;;
+  *)
+    echo "NOTARY_BACKEND must be xcrun or rust-api-key" >&2
+    exit 2
+    ;;
+esac
 
 IDENTITY_CANDIDATES="$(/usr/bin/security find-identity -v -p codesigning |
   /usr/bin/awk -v team="$NOTARY_TEAM_ID" '
@@ -84,7 +98,7 @@ codesign_with_retry() {
   done
 }
 
-notarize_with_retry() {
+notarize_with_xcrun() {
   local target="$1"
   local attempt=1
   local delay=5
@@ -215,12 +229,142 @@ notarize_with_retry() {
   done
 }
 
+read_rust_notary_state() {
+  local journal="$1"
+  local key="$2"
+  local last_record
+  local temporary
+  [[ -f "$journal" && ! -L "$journal" ]] || return 1
+  last_record="$(/usr/bin/tail -n 1 "$journal")"
+  [[ -n "$last_record" ]] || return 1
+  temporary="$(/usr/bin/mktemp /private/tmp/mihomobox-rust-notary-state.XXXXXX)"
+  /usr/bin/printf '%s\n' "$last_record" >"$temporary"
+  /usr/bin/plutil -extract "$key" raw -n -o - "$temporary"
+  /bin/rm -f -- "$temporary"
+}
+
+notarize_with_rust_api_key() {
+  local target="$1"
+  local artifact_sha256
+  local state_file
+  local submit_log
+  local rust_state
+  local rust_sha256=""
+  local submission_id=""
+  local status=""
+  local command_status=0
+
+  artifact_sha256="$(release_sha256 "$target")"
+  state_file="$(release_notary_state_file "$target" "$artifact_sha256")"
+  submit_log="$state_file.submit.log"
+  rust_state="$state_file.rust.jsonl"
+  if [[ "$(/usr/bin/basename "$target")" == "MihomoBox-0.9.1-macos.zip" &&
+    -n "${NOTARY_RS_APP_STATE:-}" ]]; then
+    rust_state="$NOTARY_RS_APP_STATE"
+  fi
+
+  if [[ -f "$rust_state" ]]; then
+    rust_sha256="$(read_rust_notary_state "$rust_state" artifactSha256)" || {
+      echo "could not read Rust notarization artifact binding: $rust_state" >&2
+      return 1
+    }
+    [[ "$rust_sha256" == "$artifact_sha256" ]] || {
+      echo "Rust notarization state does not match artifact SHA-256: $rust_state" >&2
+      return 1
+    }
+    submission_id="$(read_rust_notary_state "$rust_state" submissionId)" || true
+    status="$(read_rust_notary_state "$rust_state" status)" || true
+  elif [[ -f "$state_file" ]]; then
+    echo "existing notarization state has no matching Rust journal; refusing resubmission: $state_file" >&2
+    return 1
+  fi
+
+  if [[ "$status" != "Accepted" ]]; then
+    /usr/bin/printf '' >"$submit_log"
+    /bin/chmod 0600 "$submit_log"
+    set +e
+    if [[ -n "$submission_id" ]]; then
+      "$NOTARY_RS_BIN" --output-format json resume \
+        --state "$rust_state" --timeout 30m 2>&1 | /usr/bin/tee "$submit_log"
+    else
+      "$NOTARY_RS_BIN" --output-format json submit "$target" \
+        --state "$rust_state" --wait --timeout 30m 2>&1 | /usr/bin/tee "$submit_log"
+    fi
+    command_status="${PIPESTATUS[0]}"
+    set -e
+    /bin/chmod 0600 "$submit_log"
+
+    rust_sha256="$(read_rust_notary_state "$rust_state" artifactSha256)" || true
+    submission_id="$(read_rust_notary_state "$rust_state" submissionId)" || true
+    status="$(read_rust_notary_state "$rust_state" status)" || true
+    if (( command_status != 0 )) && [[ "$status" != "Accepted" ]]; then
+      if release_valid_submission_id "$submission_id"; then
+        release_write_notary_state \
+          "$state_file" "$target" "$artifact_sha256" "$submission_id" \
+          true submitted
+      fi
+      echo "Rust notarization did not reach Accepted; resume the exact journal: $rust_state" >&2
+      return "$command_status"
+    fi
+  fi
+
+  [[ "$rust_sha256" == "$artifact_sha256" ]] || {
+    echo "Rust notarization result is not bound to the current artifact" >&2
+    return 1
+  }
+  release_valid_submission_id "$submission_id" || {
+    echo "Rust notarization result has no valid submission ID" >&2
+    return 1
+  }
+  case "$status" in
+    Accepted)
+      release_write_notary_state \
+        "$state_file" "$target" "$artifact_sha256" "$submission_id" \
+        true accepted
+      echo "Rust notarization accepted submission_id=$submission_id artifact_sha256=$artifact_sha256"
+      ;;
+    Invalid|Rejected)
+      release_write_notary_state \
+        "$state_file" "$target" "$artifact_sha256" "$submission_id" \
+        true rejected
+      return 1
+      ;;
+    *)
+      echo "Rust notarization ended in non-terminal status: ${status:-unknown}" >&2
+      return 1
+      ;;
+  esac
+}
+
+notarize_with_retry() {
+  case "$NOTARY_BACKEND" in
+    xcrun) notarize_with_xcrun "$1" ;;
+    rust-api-key) notarize_with_rust_api_key "$1" ;;
+  esac
+}
+
 
 cd "$ROOT"
 VERSION="$(/usr/bin/tr -d '[:space:]' < "$ROOT/VERSION")"
 if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo "VERSION must contain one semantic version" >&2
   exit 1
+fi
+if [[ "$NOTARY_BACKEND" == "rust-api-key" ]]; then
+  if [[ "$VERSION" != "0.9.1" ]]; then
+    echo "rust-api-key production notarization is restricted to the 0.9.1 bridge" >&2
+    exit 1
+  fi
+  NOTARY_RS_BIN="${NOTARY_RS_BIN:-$ROOT/tools/notarytool-rs/target/release/notarytool-rs}"
+  if [[ ! -f "$NOTARY_RS_BIN" || -L "$NOTARY_RS_BIN" || ! -x "$NOTARY_RS_BIN" ]]; then
+    echo "NOTARY_RS_BIN must be an executable regular file: $NOTARY_RS_BIN" >&2
+    exit 1
+  fi
+  if [[ ! -f "$APPLE_NOTARY_PRIVATE_KEY" || -L "$APPLE_NOTARY_PRIVATE_KEY" ]]; then
+    echo "APPLE_NOTARY_PRIVATE_KEY must be a regular, non-symlink file" >&2
+    exit 1
+  fi
+  export APPLE_NOTARY_KEY_ID APPLE_NOTARY_ISSUER_ID APPLE_NOTARY_PRIVATE_KEY
 fi
 if [[ ! -d "$APP_INPUT" || -L "$APP_INPUT" ]]; then
   echo "prebuilt App must be a non-symlink directory: $APP_INPUT" >&2
@@ -1004,6 +1148,16 @@ else
 fi
 /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP"
 /bin/mkdir -p "$DIST"
+if [[ "$NOTARY_BACKEND" == "rust-api-key" && -n "${NOTARY_RS_APP_STATE:-}" ]]; then
+  # Bind the already accepted pre-staple ZIP before replacing it with the
+  # ticket-bearing archive. This is the only production-state import allowed
+  # by the 0.9.1 bridge exception.
+  [[ -f "$ARCHIVE" && ! -L "$ARCHIVE" ]] || {
+    echo "0.9.1 Rust notarization import requires the exact pre-staple ZIP" >&2
+    exit 1
+  }
+  notarize_with_rust_api_key "$ARCHIVE"
+fi
 if /usr/bin/xcrun stapler validate "$APP" >/dev/null 2>&1; then
   echo "App already has a valid notarization ticket"
 else

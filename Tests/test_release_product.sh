@@ -188,6 +188,7 @@ for asset in \
     fail "missing exact GitHub asset: $asset"
 done
 require_literal "$GITHUB_HELPER" '(( ${#REMOTE_ASSET_SEEN[@]} == 5 ))'
+require_literal "$GITHUB_HELPER" '"refs/tags/${TAG}:refs/tags/${TAG}"'
 require_literal "$GITHUB_HELPER" 'upload_asset_by_release_id() {'
 require_literal "$GITHUB_HELPER" \
   'https://uploads.github.com/repos/$REPOSITORY/releases/$release_id/assets?name=$name'
@@ -217,7 +218,7 @@ require_literal "$GITHUB_HELPER" 'cat-file -t "refs/tags/$TAG"'
 require_literal "$GITHUB_HELPER" '-c tag.gpgSign=false tag -a "$TAG" "$HEAD_SHA"'
 require_literal "$GITHUB_HELPER" 'push --no-verify --atomic origin \'
 require_literal "$GITHUB_HELPER" "'HEAD:refs/heads/main'"
-require_literal "$GITHUB_HELPER" '"refs/tags/$TAG:refs/tags/$TAG"'
+require_literal "$GITHUB_HELPER" '"refs/tags/${TAG}:refs/tags/${TAG}"'
 require_literal "$GITHUB_HELPER" 'inspect_remote_annotated_tag() {'
 require_literal "$GITHUB_HELPER" \
   '/usr/bin/git -C "$ROOT" ls-remote origin "$tag_ref" "$peeled_ref"'
