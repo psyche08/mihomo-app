@@ -6,6 +6,40 @@ import XCTest
 @testable import MihomoDNSCore
 
 final class CoreTests: XCTestCase {
+    func testResolverTopologyClassifiesGlobalAndScopedResolversWithoutAddresses() {
+        let topology = ResolverTopologyObservation.make(
+            managedServers: ["127.0.0.53"],
+            globalServers: ["127.0.0.53"],
+            primaryScopedServers: ["11.11.11.11", "11.11.11.12"],
+            scopedServers: [
+                ["127.0.0.53"],
+                ["11.11.11.11", "11.11.11.12"],
+                ["127.0.0.53", "11.11.11.11"],
+            ]
+        )
+
+        XCTAssertEqual(topology.global, .managed)
+        XCTAssertEqual(topology.primaryScoped, .external)
+        XCTAssertEqual(topology.scopedTotal, 3)
+        XCTAssertEqual(topology.scopedManaged, 1)
+        XCTAssertEqual(topology.scopedExternal, 1)
+        XCTAssertEqual(topology.scopedMixed, 1)
+    }
+
+    func testResolverClassificationTreatsOrderAndDuplicatesAsEquivalent() {
+        XCTAssertEqual(
+            ResolverServerClassification.classify(
+                observed: ["127.0.0.54", "127.0.0.53", "127.0.0.53"],
+                managed: ["127.0.0.53", "127.0.0.54"]
+            ),
+            .managed
+        )
+        XCTAssertEqual(
+            ResolverServerClassification.classify(observed: [], managed: ["127.0.0.53"]),
+            .missing
+        )
+    }
+
     func testRuntimeDNSHealthSkipsBridgeTimeoutWhenMihomoDNSIsUnavailable() {
         var mihomoProbes = 0
         var bridgeProbes = 0

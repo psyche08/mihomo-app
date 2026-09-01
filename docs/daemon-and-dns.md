@@ -171,6 +171,13 @@ fallback failure, or policy block emits the accumulated counters on the next
 ten-second tick so degraded behavior is not hidden by the lower healthy-log
 rate.
 
+The consistency observer also records a transition-only `resolver_topology`
+event. Global DNS, the current PrimaryService resolver, and every live scoped
+resolver are classified as `managed`, `external`, `mixed`, or `missing`, with
+only aggregate scoped counts retained. Resolver addresses and service IDs are
+never written. This makes a historical `scutil --dns` split between Global and
+scoped resolution diagnosable without persisting enterprise DNS details.
+
 Lifecycle, configuration commands, child exits/restarts, network transitions,
 drift detection, repair attempts, and repair outcomes are structured audit
 events. Startup milestones use a monotonic elapsed-millisecond clock: the

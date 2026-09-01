@@ -30,6 +30,49 @@ public enum GlobalDNSPreferencesError: Error, CustomStringConvertible {
     }
 }
 
+enum ResolverServerClassification: String, Equatable, Sendable {
+    case missing
+    case managed
+    case external
+    case mixed
+
+    static func classify(observed: [String], managed: [String]) -> Self {
+        guard !observed.isEmpty else { return .missing }
+        let observedSet = Set(observed)
+        let managedSet = Set(managed)
+        if observedSet == managedSet { return .managed }
+        return observedSet.isDisjoint(with: managedSet) ? .external : .mixed
+    }
+}
+
+struct ResolverTopologyObservation: Equatable, Sendable {
+    var global: ResolverServerClassification
+    var primaryScoped: ResolverServerClassification
+    var scopedTotal: Int
+    var scopedManaged: Int
+    var scopedExternal: Int
+    var scopedMixed: Int
+
+    static func make(
+        managedServers: [String],
+        globalServers: [String],
+        primaryScopedServers: [String],
+        scopedServers: [[String]]
+    ) -> Self {
+        let scoped = scopedServers.map {
+            ResolverServerClassification.classify(observed: $0, managed: managedServers)
+        }
+        return ResolverTopologyObservation(
+            global: .classify(observed: globalServers, managed: managedServers),
+            primaryScoped: .classify(observed: primaryScopedServers, managed: managedServers),
+            scopedTotal: scoped.count,
+            scopedManaged: scoped.count(where: { $0 == .managed }),
+            scopedExternal: scoped.count(where: { $0 == .external }),
+            scopedMixed: scoped.count(where: { $0 == .mixed })
+        )
+    }
+}
+
 public final class GlobalDNSPreferences: @unchecked Sendable {
     private let lock = NSLock()
     private let servers: [String]
@@ -159,6 +202,39 @@ public final class GlobalDNSPreferences: @unchecked Sendable {
 
     public func isEffective() -> Bool {
         effectiveServers() == servers
+    }
+
+    /// Returns a log-safe view of macOS resolver topology. It deliberately
+    /// classifies address sets instead of returning service IDs or resolver
+    /// addresses, so a field diagnostic can distinguish Global DNS from
+    /// scoped drift without persisting enterprise network details.
+    func resolverTopology() throws -> ResolverTopologyObservation {
+        let store = try createDynamicStore("dev.linsheng.mihomo-app.daemon.dns-topology")
+        let globalServers = dynamicServers(at: "State:/Network/Global/DNS", store: store)
+        let primaryServers: [String]
+        do {
+            primaryServers = try dynamicDNSContext().value?[kSCPropNetDNSServerAddresses as String]
+                as? [String] ?? []
+        } catch GlobalDNSPreferencesError.primaryServiceMissing {
+            primaryServers = []
+        }
+
+        guard let keys = SCDynamicStoreCopyKeyList(
+            store,
+            "State:/Network/Service/.*/DNS" as CFString
+        ) as? [String] else {
+            throw GlobalDNSPreferencesError.dynamicStateOperationFailed(
+                "enumerate DNS topology",
+                SCError()
+            )
+        }
+        let scopedServers = keys.sorted().map { dynamicServers(at: $0, store: store) }
+        return ResolverTopologyObservation.make(
+            managedServers: servers,
+            globalServers: globalServers,
+            primaryScopedServers: primaryServers,
+            scopedServers: scopedServers
+        )
     }
 
     public func containsManagedServerEffectively() throws -> Bool {

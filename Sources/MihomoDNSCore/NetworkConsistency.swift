@@ -666,6 +666,9 @@ public final class NetworkConsistencyController: @unchecked Sendable {
     private var recoveryPolicy = RuntimeRecoveryPolicy()
     private var bridgeFailurePolicy = DNSBridgeFailurePolicy()
     private var acquisitionPolicy = DNSAcquisitionPolicy()
+    private var previousResolverTopology: ResolverTopologyObservation?
+    private var resolverTopologyUnavailableLogged = false
+    private var resolverTopologyObservationPending = true
     private var egressPolicy = EgressProbePolicy()
     private let egressProbe: EgressProbeCoordinator
     /// Set by a wake notification; forces the next tick to re-probe egress
@@ -761,6 +764,7 @@ public final class NetworkConsistencyController: @unchecked Sendable {
     public func scheduleImmediateEvaluation(reason: String) {
         queue.async { [weak self] in
             guard let self, self.timer != nil else { return }
+            self.resolverTopologyObservationPending = true
             // SystemConfiguration can fire a burst of callbacks for a single
             // network change; coalesce them so one change costs one evaluation.
             guard !self.immediateEvaluationPending else { return }
@@ -782,6 +786,7 @@ public final class NetworkConsistencyController: @unchecked Sendable {
         queue.async { [weak self] in
             guard let self, self.timer != nil else { return }
             self.forceEgressProbe = true
+            self.resolverTopologyObservationPending = true
             self.egressPolicy.reset()
             ServiceLog.info("event=system_wake action=revalidate")
             self.evaluate(chargeFailures: false)
@@ -836,6 +841,10 @@ public final class NetworkConsistencyController: @unchecked Sendable {
     ///   (re)acquire DNS; they just do not vote towards recovery.
     private func evaluate(chargeFailures: Bool = true) {
         guard !runtimeReloadInProgress else { return }
+        if resolverTopologyObservationPending {
+            resolverTopologyObservationPending = false
+            observeResolverTopology()
+        }
         let before = MihomoRuntimeInspector.inspect(configuration: configuration, globalDNS: globalDNS)
         let kernelReady = before.controllerReachable && before.tunEnabled && before.tunInterface != nil
         let upstreamRuntimeReady = kernelReady && before.mihomoDNSReady
@@ -1020,6 +1029,29 @@ public final class NetworkConsistencyController: @unchecked Sendable {
                 "network_consistent=\(after.networkConsistent)"
             )
             previous = after
+        }
+    }
+
+    private func observeResolverTopology() {
+        do {
+            let topology = try globalDNS.resolverTopology()
+            resolverTopologyUnavailableLogged = false
+            guard topology != previousResolverTopology else { return }
+            previousResolverTopology = topology
+            ServiceLog.info(
+                "event=resolver_topology " +
+                "global=\(topology.global.rawValue) " +
+                "primary_scoped=\(topology.primaryScoped.rawValue) " +
+                "scoped_total=\(topology.scopedTotal) " +
+                "scoped_managed=\(topology.scopedManaged) " +
+                "scoped_external=\(topology.scopedExternal) " +
+                "scoped_mixed=\(topology.scopedMixed)"
+            )
+        } catch {
+            guard !resolverTopologyUnavailableLogged else { return }
+            resolverTopologyUnavailableLogged = true
+            previousResolverTopology = nil
+            ServiceLog.error("event=resolver_topology result=unavailable")
         }
     }
 
