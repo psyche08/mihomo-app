@@ -94,9 +94,21 @@ binary plist.
 Restoration is compare-before-write: an entry is restored only while its
 current `ServerAddresses` still equals the daemon-managed value. An external
 administrator change therefore wins and is never overwritten by uninstall.
+If the backup is absent after a crash or migration, restoration enumerates the
+Global dictionary and every service DNS dictionary in the current set. It
+removes only an exact managed `ServerAddresses` value and preserves search
+domains and every other DNS key; mixed or externally changed address lists are
+left untouched. The same exact-value cleanup covers all live Global/scoped
+dynamic DNS dictionaries.
 Restore operations are retried three times with bounded delay and are accepted
 only after the managed persistent/dynamic DNS state and ownership backup are
 gone.
+
+Daemon lifecycle and component-update stops also allow a bounded six-second
+quiescence window after the agent exits. During that window they inspect fresh
+controller, TUN, Fake-IP route, DNS-listener, and persistent/effective system
+DNS state every 250 milliseconds. A timeout remains fail-closed and records
+only fixed blocker names; it never logs resolver addresses or profile data.
 
 ## Loopback Alias
 
@@ -106,8 +118,25 @@ only when that marker exists; a pre-existing administrator-owned alias remains.
 
 ## Network Changes
 
-`SCDynamicStore` watches global IPv4/IPv6/DNS and per-service IPv4/IPv6/DNS
-keys. On change it:
+Three independent signals drive network revalidation:
+
+- `SCPreferences` commit/apply callbacks watch persistent `Setup:` changes;
+- `SCDynamicStore` watches effective global and per-service IPv4/IPv6/DNS
+  state;
+- a dedicated non-blocking `PF_ROUTE/SOCK_RAW` socket watches `RTM_ADD`,
+  `RTM_DELETE`, `RTM_CHANGE`, address add/delete, and interface up/down
+  messages from the kernel.
+
+The route monitor owns a separate descriptor from the route-lookup socket so
+broadcasts cannot consume lookup replies. It drains a burst into fixed
+route/address/interface bits and never parses or logs destinations, gateways,
+interface addresses, or profile data. `RTM_GET`, misses, multicast membership,
+and other lookup noise are ignored. A failed descriptor is reopened with a
+1-to-30-second bounded backoff while the two-second consistency observer
+remains available.
+
+On a System Configuration change the daemon synchronizes the observer session
+and then:
 
 1. resolves PrimaryService and PrimaryInterface;
 2. reads DHCP option 6 before service DNS state;
@@ -115,6 +144,16 @@ keys. On change it:
 4. excludes loopback, fake-IP, and managed runtime endpoints;
 5. binds original-DNS sockets using `IP_BOUND_IF`/`IPV6_BOUND_IF`;
 6. restores an old PrimaryService before managing the new service.
+
+Every persistent, effective, or kernel-route signal invalidates the cached
+end-to-end egress result and requests an immediate fresh probe. Bursts are
+coalesced before evaluation, and notifications caused by the daemon's own
+idempotent DNS apply converge without another write. This follows the same
+principle as Surge policy availability caching: a result measured on one
+interface must not be reused after the active path changes. Remote-node
+availability remains a profile policy-group responsibility (`fallback`,
+`url-test`, or compatible Mihomo groups); the agent does not reset a manual
+selection or restart the whole runtime for a pure egress failure.
 
 An independent two-second consistency observer also detects later drift. A DNS
 preference or effective-state change is reapplied while the managed runtime is
@@ -129,6 +168,13 @@ Mihomo to rebuild the complete auto-route state. During that window the
 loopback DNS bridge serves real upstream answers only for domains explicitly
 outside Fake-IP management; managed domains fail closed. Only a failed recovery
 rolls back system DNS and stops the child.
+
+The Fake-IP route is machine-wide evidence, not ownership proof. The agent
+records any tunnel already routing the probe range before it starts Mihomo and
+accepts a route only when the controller reports TUN enabled and the visible
+interface is not that pre-existing tunnel. Stopped-state inspection likewise
+ignores unrelated utun routes. This prevents another VPN or network extension
+from making Mihomo look healthy or from blocking verified shutdown.
 
 If a rollback removed the loopback alias, reacquisition is one bounded
 observer transaction: re-create the alias, immediately re-probe the system-DNS
@@ -165,7 +211,9 @@ failure, or validation timeout still stops the agent and restores DNS.
 
 No query name, matched domain, resolver address, service identifier, or wire
 message is logged. Only interface names and aggregate resolver/route counts are
-audited. DNS forwarding retains ten-second observation windows, but healthy
+audited. DNS listener faults add only a fixed category and, for POSIX failures,
+the numeric error code; arbitrary error descriptions are never persisted. DNS
+forwarding retains ten-second observation windows, but healthy
 traffic is aggregated into one-minute summaries. A primary failure/bypass,
 fallback failure, or policy block emits the accumulated counters on the next
 ten-second tick so degraded behavior is not hidden by the lower healthy-log

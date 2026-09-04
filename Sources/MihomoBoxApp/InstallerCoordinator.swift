@@ -3,6 +3,44 @@ import Foundation
 import MihomoControl
 import Security
 
+final class BoundedProcessCapture: @unchecked Sendable {
+  private let limit: Int
+  private let lock = NSLock()
+  private var data = Data()
+  private var completed = false
+
+  init(limit: Int) {
+    self.limit = limit
+  }
+
+  func append(_ newData: Data) {
+    guard !newData.isEmpty else { return }
+    lock.lock()
+    defer { lock.unlock() }
+    guard data.count < limit else { return }
+    data.append(newData.prefix(limit - data.count))
+  }
+
+  func finish(appending tail: Data = Data()) -> Data? {
+    lock.lock()
+    defer { lock.unlock() }
+    guard !completed else { return nil }
+    completed = true
+    if data.count < limit {
+      data.append(tail.prefix(limit - data.count))
+    }
+    return data
+  }
+
+  func fail() -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    guard !completed else { return false }
+    completed = true
+    return true
+  }
+}
+
 enum InstallerCoordinatorError: Error, LocalizedError {
   case appBundleUnavailable
   case installerMissing
@@ -144,6 +182,52 @@ actor InstallerCoordinator {
     AppLog.info("event=privileged_installer action=install result=success")
   }
 
+  /// Removes only the root-owned MihomoBox installation. The verified
+  /// installer restores system DNS before deleting the LaunchDaemon, helper
+  /// binaries, root configuration, logs, and managed CLI entry. The App and
+  /// current user's profile mirror are intentionally outside that scope.
+  func uninstall() async throws {
+    guard let bundleURL, bundleURL.pathExtension == "app" else {
+      throw InstallerCoordinatorError.appBundleUnavailable
+    }
+    let script = bundleURL.appendingPathComponent(
+      "Contents/Resources/scripts/install-daemon.sh"
+    )
+    guard Self.isRegularExecutable(script) else {
+      throw InstallerCoordinatorError.installerMissing
+    }
+    let requirements = try Self.exactSigningRequirements(
+      bundleURL: bundleURL,
+      callerRelativeExecutable: Self.callerRelativeExecutable
+    )
+    let command = Self.bootstrapCommand(
+      sourceBundlePath: bundleURL.standardizedFileURL.path,
+      appRequirement: requirements.app,
+      callerRequirement: requirements.caller,
+      callerRelativeExecutable: Self.callerRelativeExecutable,
+      installerArguments: ["--restore"],
+      detached: false
+    )
+    let source = "do shell script \(Self.appleScriptQuote(command)) with administrator privileges"
+    AppLog.info("event=privileged_installer action=uninstall phase=started")
+    let result = try await Self.runAppleScript(source)
+    guard result.status == 0 else {
+      let message = result.output
+      if result.status == 1
+        && (message.contains("(-128)")
+          || message.localizedCaseInsensitiveContains("User canceled"))
+      {
+        AppLog.info("event=privileged_installer action=uninstall result=cancelled")
+        throw InstallerCoordinatorError.cancelled
+      }
+      AppLog.error(
+        "event=privileged_installer action=uninstall result=failed reason=\(Self.classification(message))"
+      )
+      throw InstallerCoordinatorError.failed
+    }
+    AppLog.info("event=privileged_installer action=uninstall result=success")
+  }
+
   private static func runAppleScript(_ source: String) async throws -> (
     status: Int32, output: String
   ) {
@@ -154,32 +238,14 @@ actor InstallerCoordinator {
       let pipe = Pipe()
       process.standardOutput = pipe
       process.standardError = pipe
-      let lock = NSLock()
-      var captured = Data()
-      var completed = false
+      let capture = BoundedProcessCapture(limit: 64 * 1_024)
       pipe.fileHandleForReading.readabilityHandler = { handle in
-        let data = handle.availableData
-        guard !data.isEmpty else { return }
-        lock.lock()
-        if captured.count < 64 * 1_024 {
-          captured.append(data.prefix(64 * 1_024 - captured.count))
-        }
-        lock.unlock()
+        capture.append(handle.availableData)
       }
       process.terminationHandler = { process in
         pipe.fileHandleForReading.readabilityHandler = nil
         let tail = pipe.fileHandleForReading.readDataToEndOfFile()
-        lock.lock()
-        if captured.count < 64 * 1_024 {
-          captured.append(tail.prefix(64 * 1_024 - captured.count))
-        }
-        guard !completed else {
-          lock.unlock()
-          return
-        }
-        completed = true
-        let data = captured
-        lock.unlock()
+        guard let data = capture.finish(appending: tail) else { return }
         continuation.resume(
           returning: (
             process.terminationStatus,
@@ -188,13 +254,7 @@ actor InstallerCoordinator {
       }
       do { try process.run() } catch {
         pipe.fileHandleForReading.readabilityHandler = nil
-        lock.lock()
-        guard !completed else {
-          lock.unlock()
-          return
-        }
-        completed = true
-        lock.unlock()
+        guard capture.fail() else { return }
         continuation.resume(throwing: error)
       }
     }

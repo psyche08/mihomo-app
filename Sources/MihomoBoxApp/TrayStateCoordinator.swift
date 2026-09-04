@@ -107,6 +107,9 @@ final class TrayStateCoordinator: TrayService {
       self.installationAvailable = await installer.installationActionsAvailable
       var value = self.currentSnapshot
       value.installationActionsAvailable = self.installationAvailable
+      value.managedInstallationPresent = Self.managedInstallationPresent(
+        fileManager: self.fileManager
+      )
       self.publish(value)
     }
   }
@@ -315,6 +318,15 @@ final class TrayStateCoordinator: TrayService {
     }
   }
 
+  func editProfile(named name: String) async throws {
+    try await profileAction {
+      try await self.profiles.editProfile(
+        named: name,
+        daemonInstalled: Self.daemonInstalled(fileManager: self.fileManager)
+      )
+    }
+  }
+
   func switchProfile(named name: String) async throws {
     try await profileAction {
       try await self.profiles.switchProfile(
@@ -366,6 +378,33 @@ final class TrayStateCoordinator: TrayService {
           : self.selectedLocalProfile()
         try await self.installer.installOrRepair(initialProfile: initialProfile)
         self.apply(try await self.waitForDaemonProtocolReadiness(), retainDelays: false)
+      }
+    }
+  }
+
+  func uninstallHelper() async throws {
+    try await withShellMutation {
+      guard self.currentSnapshot.installationActionsAvailable,
+        Self.managedInstallationPresent(fileManager: self.fileManager)
+      else {
+        self.refresh(authoritative: true)
+        return
+      }
+      guard self.confirmHelperUninstall() else { return }
+      try await self.action("Action failed: the helper was not uninstalled") {
+        try await self.installer.uninstall()
+        let local = await self.profiles.localState()
+        var removed = self.offlineSnapshot(localProfiles: local)
+        removed.daemonCompatibility = .unknown
+        removed.daemonReachable = false
+        removed.controllerReachable = false
+        removed.agentRunning = false
+        removed.enhancedTUN = false
+        removed.networkHealthy = true
+        removed.systemDNSManaged = false
+        removed.healthTUNEnabled = false
+        removed.managedInstallationPresent = false
+        self.publish(removed)
       }
     }
   }
@@ -474,6 +513,9 @@ final class TrayStateCoordinator: TrayService {
         profileOperationInFlight: currentSnapshot.profileOperationInFlight,
         profileActionsAvailable: true,
         installationActionsAvailable: installationAvailable,
+        managedInstallationPresent: Self.managedInstallationPresent(
+          fileManager: fileManager
+        ),
         enhancedTUNActionAvailable: tunActionAvailable(
           enhancedTUN: poll.enhancedTUN,
           activeProfile: poll.activeProfile
@@ -510,6 +552,9 @@ final class TrayStateCoordinator: TrayService {
     value.networkHealthy = nil
     value.profiles = localProfiles.profiles
     value.activeProfile = localProfiles.activeProfile
+    value.managedInstallationPresent = Self.managedInstallationPresent(
+      fileManager: fileManager
+    )
     value.enhancedTUNActionAvailable = tunActionAvailable(
       enhancedTUN: value.enhancedTUN,
       activeProfile: value.activeProfile
@@ -544,6 +589,9 @@ final class TrayStateCoordinator: TrayService {
       profileOperationInFlight: currentSnapshot.profileOperationInFlight,
       profileActionsAvailable: false,
       installationActionsAvailable: installationAvailable,
+      managedInstallationPresent: Self.managedInstallationPresent(
+        fileManager: fileManager
+      ),
       enhancedTUNActionAvailable: false,
       actionError: currentSnapshot.actionError
     )
@@ -680,6 +728,19 @@ final class TrayStateCoordinator: TrayService {
       "The signed installer will briefly restart Mihomo, Enhanced TUN, and managed DNS."
     alert.alertStyle = .warning
     alert.addButton(withTitle: "Upgrade Daemon")
+    alert.addButton(withTitle: "Cancel")
+    return alert.runModal() == .alertFirstButtonReturn
+  }
+
+  private func confirmHelperUninstall() -> Bool {
+    let alert = NSAlert()
+    alert.messageText = "Uninstall the MihomoBox helper?"
+    alert.informativeText =
+      "Mihomo will stop, real system DNS will be restored, and the LaunchDaemon, "
+      + "root configuration, helper logs, and managed CLI entry will be removed. "
+      + "The App and your imported profiles will be preserved."
+    alert.alertStyle = .critical
+    alert.addButton(withTitle: "Uninstall Helper")
     alert.addButton(withTitle: "Cancel")
     return alert.runModal() == .alertFirstButtonReturn
   }

@@ -947,6 +947,7 @@ require_prebuilt_app() {
     [[ "$(/usr/libexec/PlistBuddy -c 'Print :SUSignedFeedFailureExpirationInterval' "$APP/Contents/Info.plist")" != "0" ]] ||
     [[ "$(/usr/libexec/PlistBuddy -c 'Print :SUEnableAutomaticChecks' "$APP/Contents/Info.plist")" != "true" ]] ||
     [[ "$(/usr/libexec/PlistBuddy -c 'Print :SUAutomaticallyUpdate' "$APP/Contents/Info.plist")" != "true" ]] ||
+    [[ "$(/usr/libexec/PlistBuddy -c 'Print :SUScheduledImpatientCheckInterval' "$APP/Contents/Info.plist")" != "43200" ]] ||
     [[ "$(/usr/libexec/PlistBuddy -c 'Print :MihomoBoxDevelopmentUpdatesDisabled' "$APP/Contents/Info.plist")" != "false" ]]; then
     echo "prebuilt App Sparkle security policy is invalid" >&2
     exit 1

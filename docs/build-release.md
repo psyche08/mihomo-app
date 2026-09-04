@@ -23,7 +23,7 @@ the accepted App and expires immediately after 0.9.1.
 |---|---|---|
 | Sparkle | `2.9.4` | SwiftPM exact version; binary artifact checksum `cb6fdbdc8884f15d62a616e79face92b08322410fd2d425edc6596ccbf4ba3b0` |
 | MetaCubeXD visual reference | tag `v1.271.0`, commit `c4622599d0a597378729a91c3b7f76c5d9803831` | exact revision check; MIT license copied |
-| Mihomo | release `v1.19.28` | architecture-specific SHA-256 |
+| Mihomo | release `v1.19.30` | architecture-specific SHA-256 |
 | App and tray icon | upstream Mihomo `Meta.png` | source, embedded tray resource and derived-output SHA-256 |
 
 `VERSION` is the sole product-version source. SwiftPM builds the user App,
@@ -421,7 +421,10 @@ Production bundles default `SUEnableAutomaticChecks` and
 `SUAutomaticallyUpdate` to true. The Config switch writes those two Sparkle
 settings through `SPUUpdater`; an explicit user choice therefore overrides the
 bundle defaults across later launches. Development bundles continue to disable
-the updater when the release public key is absent.
+the updater when the release public key is absent. Production bundles also pin
+`SUScheduledImpatientCheckInterval` to 12 hours, and the App accepts Sparkle's
+no-UI immediate-install handler after an automatic download so a long-lived
+menu-bar process cannot leave the updater pending indefinitely.
 
 Existing 0.7 clients only understand the previous Minisign-compatible manifest.
 During the migration window every 0.8.x GitHub Release therefore carries both

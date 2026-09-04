@@ -64,6 +64,30 @@ public struct NetworkConsistencyHealth: Codable, Equatable, Sendable {
     }
 }
 
+/// Describes only fixed, privacy-safe reasons why a managed runtime has not
+/// reached its fully stopped state. Callers may log these identifiers without
+/// exposing resolver addresses, profile contents, or controller credentials.
+public enum StoppedRuntimeVerification {
+    public static func blockers(
+        agentStopped: Bool,
+        systemDNSRestored: Bool,
+        health: NetworkConsistencyHealth
+    ) -> [String] {
+        var result: [String] = []
+        if !agentStopped { result.append("agent") }
+        if health.controllerReachable { result.append("controller") }
+        if health.tunEnabled { result.append("tun") }
+        if health.tunInterface != nil { result.append("tun_interface") }
+        if health.fakeIPRouteReady { result.append("fake_ip_route") }
+        if health.dnsBridgeReady { result.append("dns_bridge") }
+        if health.mihomoDNSReady { result.append("mihomo_dns") }
+        if health.systemDNSManaged { result.append("system_dns_managed") }
+        if !systemDNSRestored { result.append("system_dns_restore") }
+        if !health.networkConsistent { result.append("network_consistency") }
+        return result
+    }
+}
+
 struct RuntimeDNSHealthProbeResult: Equatable, Sendable {
     var dnsBridgeReady: Bool
     var mihomoDNSReady: Bool
@@ -151,12 +175,13 @@ public enum MihomoRuntimeInspector {
 
     public static func inspect(
         configuration: ProxyConfiguration,
-        globalDNS: GlobalDNSPreferences? = nil
+        globalDNS: GlobalDNSPreferences? = nil,
+        preexistingFakeIPRouteInterface: String? = nil
     ) -> NetworkConsistencyHealth {
         let controller = controllerConfiguration(configuration: configuration)
         let fakeIPMode = configuration.mihomoProcess
             .map { inspectFakeIPMode(path: $0.configPath) } ?? false
-        let routeInterface = fakeIPRouteInterface()
+        let visibleRouteInterface = fakeIPRouteInterface()
         let dnsHealth = RuntimeDNSHealthProbePolicy.evaluate(
             mihomoDNS: { dnsEndpointResponds(endpoint: configuration.mihomoDNS) },
             systemDNSBridge: {
@@ -165,21 +190,37 @@ public enum MihomoRuntimeInspector {
         )
         let dnsBridgeReady = dnsHealth.dnsBridgeReady
         let mihomoDNSReady = dnsHealth.mihomoDNSReady
-        let systemDNSManaged: Bool
+        let preferences: GlobalDNSPreferences
         if let globalDNS {
-            systemDNSManaged = ((try? globalDNS.isApplied()) == true) && globalDNS.isEffective()
+            preferences = globalDNS
         } else {
-            let preferences = GlobalDNSPreferences(
+            preferences = GlobalDNSPreferences(
                 servers: [configuration.systemDNSListen.host],
                 backupPath: configuration.systemDNSBackupPath
             )
-            systemDNSManaged = ((try? preferences.isApplied()) == true) && preferences.isEffective()
         }
+        let systemDNSManaged = ((try? preferences.isApplied()) == true) && preferences.isEffective()
         let tunEnabled = controller.tunEnabled
+        // A route to the Fake-IP range is a machine-wide fact, not proof that
+        // this runtime owns it. Correlate it with Mihomo's live controller and
+        // reject a tunnel that already owned the route before our child was
+        // started. This prevents an unrelated VPN/TUN from making a stopped or
+        // route-conflicted Mihomo runtime look healthy.
+        let routeInterface = RuntimeRouteOwnership.ownedInterface(
+            controllerReachable: controller.reachable,
+            tunEnabled: tunEnabled,
+            visibleInterface: visibleRouteInterface,
+            preexistingInterface: preexistingFakeIPRouteInterface
+        )
         let routeReady = routeInterface != nil
         let runtimeReady = controller.reachable && tunEnabled && routeReady
             && dnsBridgeReady && mihomoDNSReady
-        let networkConsistent = systemDNSManaged ? runtimeReady : (!tunEnabled || routeReady)
+        let systemDNSRestored = !systemDNSManaged
+            && ((try? preferences.containsManagedServerPersistently()) == false)
+            && ((try? preferences.containsManagedServerEffectively()) == false)
+        let runtimeStopped = !controller.reachable && !tunEnabled && routeInterface == nil
+            && !dnsBridgeReady && !mihomoDNSReady
+        let networkConsistent = systemDNSManaged ? runtimeReady : (runtimeStopped && systemDNSRestored)
         return NetworkConsistencyHealth(
             controllerReachable: controller.reachable,
             tunEnabled: tunEnabled,
@@ -523,6 +564,22 @@ public enum MihomoRuntimeInspector {
     }
 }
 
+enum RuntimeRouteOwnership {
+    static func ownedInterface(
+        controllerReachable: Bool,
+        tunEnabled: Bool,
+        visibleInterface: String?,
+        preexistingInterface: String?
+    ) -> String? {
+        guard controllerReachable, tunEnabled,
+              let visibleInterface,
+              visibleInterface != preexistingInterface else {
+            return nil
+        }
+        return visibleInterface
+    }
+}
+
 enum DNSBridgeFailureDecision: Equatable {
     case none
     case debounce
@@ -671,6 +728,7 @@ public final class NetworkConsistencyController: @unchecked Sendable {
     private var resolverTopologyObservationPending = true
     private var egressPolicy = EgressProbePolicy()
     private let egressProbe: EgressProbeCoordinator
+    private let preexistingFakeIPRouteInterface: String?
     /// Set by a wake notification; forces the next tick to re-probe egress
     /// immediately instead of waiting out the probe interval.
     private var forceEgressProbe = false
@@ -694,6 +752,7 @@ public final class NetworkConsistencyController: @unchecked Sendable {
         safetyState: NetworkSafetyState,
         runtimeRecoveryHandler: @escaping @Sendable () -> Void,
         unsafeRuntimeHandler: @escaping @Sendable () -> Void,
+        preexistingFakeIPRouteInterface: String? = nil,
         healthGeneration: RuntimeHealthGeneration = RuntimeHealthGeneration()
     ) {
         self.init(
@@ -704,6 +763,7 @@ public final class NetworkConsistencyController: @unchecked Sendable {
             runtimeRecoveryHandler: runtimeRecoveryHandler,
             unsafeRuntimeHandler: unsafeRuntimeHandler,
             egressProbe: EgressProbeCoordinator(configuration: configuration),
+            preexistingFakeIPRouteInterface: preexistingFakeIPRouteInterface,
             healthGeneration: healthGeneration
         )
     }
@@ -716,6 +776,7 @@ public final class NetworkConsistencyController: @unchecked Sendable {
         runtimeRecoveryHandler: @escaping @Sendable () -> Void,
         unsafeRuntimeHandler: @escaping @Sendable () -> Void,
         egressProbe: EgressProbeCoordinator,
+        preexistingFakeIPRouteInterface: String? = nil,
         healthGeneration: RuntimeHealthGeneration = RuntimeHealthGeneration()
     ) {
         self.configuration = configuration
@@ -725,6 +786,7 @@ public final class NetworkConsistencyController: @unchecked Sendable {
         self.runtimeRecoveryHandler = runtimeRecoveryHandler
         self.unsafeRuntimeHandler = unsafeRuntimeHandler
         self.egressProbe = egressProbe
+        self.preexistingFakeIPRouteInterface = preexistingFakeIPRouteInterface
         self.healthGeneration = healthGeneration
         healthSnapshotPath = configuration.healthSnapshotPath
     }
@@ -778,6 +840,19 @@ public final class NetworkConsistencyController: @unchecked Sendable {
         }
     }
 
+    /// A network-service change invalidates both resolver topology and the
+    /// previous end-to-end result. Like Surge's availability cache, a result
+    /// measured on the old path must not survive an interface transition.
+    public func handleNetworkChange(reason: NetworkChangeSignal) {
+        egressProbe.invalidate()
+        queue.async { [weak self] in
+            guard let self, self.timer != nil else { return }
+            self.forceEgressProbe = true
+            self.egressPolicy.reset()
+            self.scheduleImmediateEvaluation(reason: reason.rawValue)
+        }
+    }
+
     /// Called on system wake. The measurements taken before sleep no longer
     /// describe the current network, so the cached egress result is discarded
     /// and the next evaluation re-probes immediately.
@@ -826,7 +901,11 @@ public final class NetworkConsistencyController: @unchecked Sendable {
 
     public func currentHealth() -> NetworkConsistencyHealth {
         queue.sync {
-            MihomoRuntimeInspector.inspect(configuration: configuration, globalDNS: globalDNS)
+            MihomoRuntimeInspector.inspect(
+                configuration: configuration,
+                globalDNS: globalDNS,
+                preexistingFakeIPRouteInterface: preexistingFakeIPRouteInterface
+            )
         }
     }
 
@@ -845,7 +924,11 @@ public final class NetworkConsistencyController: @unchecked Sendable {
             resolverTopologyObservationPending = false
             observeResolverTopology()
         }
-        let before = MihomoRuntimeInspector.inspect(configuration: configuration, globalDNS: globalDNS)
+        let before = MihomoRuntimeInspector.inspect(
+            configuration: configuration,
+            globalDNS: globalDNS,
+            preexistingFakeIPRouteInterface: preexistingFakeIPRouteInterface
+        )
         let kernelReady = before.controllerReachable && before.tunEnabled && before.tunInterface != nil
         let upstreamRuntimeReady = kernelReady && before.mihomoDNSReady
         let networkOwned = ((try? globalDNS.isApplied()) == true)
@@ -997,7 +1080,11 @@ public final class NetworkConsistencyController: @unchecked Sendable {
         }
 
         let after = changed
-            ? MihomoRuntimeInspector.inspect(configuration: configuration, globalDNS: globalDNS)
+            ? MihomoRuntimeInspector.inspect(
+                configuration: configuration,
+                globalDNS: globalDNS,
+                preexistingFakeIPRouteInterface: preexistingFakeIPRouteInterface
+            )
             : before
         // Publish the reading so the daemon can answer tray polls without
         // repeating this work; it is the most expensive part of a poll.

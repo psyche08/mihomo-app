@@ -1,5 +1,18 @@
 # Operations
 
+## Uninstalling the Privileged Helper
+
+Use **Tools › Uninstall Helper…** in the menu-bar App. The action is separate
+from quitting the App and requires administrator confirmation. It executes only
+the installer copied from an exact-code-requirement-verified App snapshot. A
+successful restore stops both current and renamed LaunchDaemon labels, waits
+for managed processes to disappear, restores system DNS, restores any recorded
+legacy installation, and removes MihomoBox's root-owned support directory,
+logs, plists, and managed CLI link.
+
+The App and `~/Library/Application Support/MihomoBox/profiles` are not removed,
+so a later helper installation can reuse the user's selected profile.
+
 ## Install or Repair
 
 Use `Install / Repair Daemon…` from the tray. The App invokes the bundled
@@ -136,6 +149,12 @@ automatically when its process exits. Repair also refuses to replace files while
 the pending transaction is absent, and only then snapshots the stable rollback
 source.
 
+The in-daemon component updater publishes `component-update-pending.plist`
+only after the old runtime has reached its verified stopped state. Once the
+marker is published, its root-owned transaction directory is retained until
+commit or rollback clears both. A failed preflight therefore cannot leave a
+pending marker whose rollback directory has already been removed.
+
 The 0.8.1 and 0.8.2 installers incorrectly inspected the opened lock through
 the `/dev/fd` pathname, whose macOS device number differs from the underlying
 file. They can therefore report `privileged mutation lock changed while
@@ -153,10 +172,14 @@ subscription configuration.
 
 Production installs default to automatic background checks and downloads.
 Users can disable or re-enable both through Config > Automatic Updates; Sparkle
-persists that choice in its native settings. A downloaded update is installed
-silently when Sparkle can safely quit and relaunch the App. Platform permission,
-authorization, or relaunch constraints may still require user interaction; the
-application does not bypass those macOS gates.
+persists that choice in its native settings. Because a menu-bar App may run for
+weeks without quitting, MihomoBox accepts Sparkle's automatic-download callback
+and immediately performs its no-UI install/relaunch; the independent root
+runtime stays active during the App replacement. Sparkle's impatient interval
+is also bounded to 12 hours as a fallback if immediate installation cannot
+complete. Platform permission, authorization, or relaunch constraints may
+still require user interaction; the application does not bypass those macOS
+gates.
 
 Inspect without changes:
 

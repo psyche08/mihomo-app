@@ -164,6 +164,35 @@ actor ProfileCoordinator {
     )
   }
 
+  func editProfile(named rawName: String, daemonInstalled: Bool) async throws -> ProfileList {
+    try await withOperation {
+      let name = try Self.validatedName(rawName)
+      let source = profilesDirectory.appendingPathComponent(name)
+      guard Self.isRegularNonSymlink(source) else {
+        throw ProfileCoordinatorError.invalidFile
+      }
+      let bytes = try Self.boundedBytes(at: source)
+      guard let contents = String(data: bytes, encoding: .utf8) else {
+        throw ProfileCoordinatorError.invalidFile
+      }
+      let activate = localList().activeProfile == name
+      try await ProfileEditorPrompt.run(name: name, contents: contents) { edited in
+        do {
+          try await self.saveEditedProfile(
+            name: name,
+            bytes: Data(edited.utf8),
+            activate: activate,
+            daemonInstalled: daemonInstalled
+          )
+          return nil
+        } catch {
+          return Self.editorMessage(for: error)
+        }
+      }
+      return localList()
+    }
+  }
+
   func switchProfile(named name: String, daemonInstalled: Bool) async throws -> ProfileList {
     try await withOperation {
       let name = try Self.validatedName(name)
@@ -258,6 +287,39 @@ actor ProfileCoordinator {
           userInfo: [
             NSLocalizedDescriptionKey:
               "profile import failed and the local mirror could not be restored"
+          ]
+        )
+      }
+      throw error
+    }
+  }
+
+  func saveEditedProfile(
+    name rawName: String,
+    bytes: Data,
+    activate: Bool,
+    daemonInstalled: Bool
+  ) async throws {
+    let name = try Self.validatedName(rawName)
+    try Self.validateSize(bytes)
+    try await validateWithBundledMihomo(bytes)
+    let destination = profilesDirectory.appendingPathComponent(name)
+    let backup = try backupRegularFile(destination)
+    do {
+      try stage(name: name, bytes: bytes)
+      if daemonInstalled {
+        _ = try await control.importProfile(name: name, bytes: bytes, activate: activate)
+      }
+    } catch {
+      do {
+        try restoreLocalFile(destination, from: backup)
+      } catch {
+        throw NSError(
+          domain: "MihomoBoxProfileMirror",
+          code: 2,
+          userInfo: [
+            NSLocalizedDescriptionKey:
+              "profile edit failed and the local mirror could not be restored"
           ]
         )
       }
@@ -404,6 +466,24 @@ actor ProfileCoordinator {
     return trimmed.isEmpty ? nil : "Action failed: profile rejected by Mihomo — \(trimmed)"
   }
 
+  static func editorMessage(for error: Error) -> String {
+    if let known = error as? ProfileCoordinatorError {
+      switch known {
+      case .profileTooLarge:
+        return "The profile must be between 1 byte and 16 MiB."
+      case .validatorUnavailable:
+        return "The bundled Mihomo validator is unavailable."
+      default:
+        return "The profile could not be saved safely."
+      }
+    }
+    let cocoa = error as NSError
+    if cocoa.domain == "MihomoBoxProfileValidation" {
+      return String(cocoa.localizedDescription.prefix(240))
+    }
+    return "The profile could not be saved safely."
+  }
+
   private func localList() -> ProfileList {
     let names =
       ((try? fileManager.contentsOfDirectory(
@@ -483,42 +563,20 @@ private enum ProcessRunner {
       let pipe = Pipe()
       process.standardOutput = pipe
       process.standardError = pipe
-      let lock = NSLock()
-      var captured = Data()
-      var completed = false
+      let capture = BoundedProcessCapture(limit: maximumOutputBytes)
       pipe.fileHandleForReading.readabilityHandler = { handle in
-        let data = handle.availableData
-        lock.lock()
-        if captured.count < maximumOutputBytes {
-          captured.append(data.prefix(maximumOutputBytes - captured.count))
-        }
-        lock.unlock()
+        capture.append(handle.availableData)
       }
       process.terminationHandler = { process in
         pipe.fileHandleForReading.readabilityHandler = nil
         let tail = pipe.fileHandleForReading.readDataToEndOfFile()
-        lock.lock()
-        if captured.count < maximumOutputBytes {
-          captured.append(tail.prefix(maximumOutputBytes - captured.count))
-        }
-        guard !completed else {
-          lock.unlock()
-          return
-        }
-        completed = true
-        let output = String(decoding: captured, as: UTF8.self)
-        lock.unlock()
+        guard let data = capture.finish(appending: tail) else { return }
+        let output = String(decoding: data, as: UTF8.self)
         continuation.resume(returning: (process.terminationStatus, output))
       }
       do { try process.run() } catch {
         pipe.fileHandleForReading.readabilityHandler = nil
-        lock.lock()
-        guard !completed else {
-          lock.unlock()
-          return
-        }
-        completed = true
-        lock.unlock()
+        guard capture.fail() else { return }
         continuation.resume(throwing: error)
       }
     }

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="v1.19.28"
+VERSION="v1.19.30"
 if [[ -n "${TARGET_TRIPLE:-}" ]]; then
   TRIPLE="$TARGET_TRIPLE"
 else
@@ -18,11 +18,11 @@ CACHE="$ROOT/.cache/mihomo"
 case "$TRIPLE" in
   aarch64-apple-darwin)
     ASSET="mihomo-darwin-arm64-$VERSION.gz"
-    EXPECTED_SHA256="40cdae2fab4b18df15f40eaa9dc3af70ab3d8be7f77164ae1e5f1af3a2a4fb44"
+    EXPECTED_SHA256="2c7f3a7904fa1cee291e124123e630e7b1ebd13765dd9bf26c0a28432004d9f4"
     ;;
   x86_64-apple-darwin)
     ASSET="mihomo-darwin-amd64-compatible-$VERSION.gz"
-    EXPECTED_SHA256="a469cc2f6800e71b50eca3f74bc72a8f6f7e990a5d4aaecb81a68cf331516d9d"
+    EXPECTED_SHA256="6e75de0732e8afabe413ff7c235e8f16226ce136672371c60787cbf9607402c5"
     ;;
   *)
     echo "unsupported target triple: $TRIPLE" >&2

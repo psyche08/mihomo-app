@@ -331,6 +331,36 @@ final class AppServicePolicyTests: XCTestCase {
     XCTAssertTrue(command.contains("/private/tmp/mihomobox-bootstrap.XXXXXX"))
   }
 
+  func testUninstallUsesOnlyTheVerifiedSnapshotInstaller() {
+    let command = InstallerCoordinator.bootstrapCommand(
+      sourceBundlePath: "/Applications/MihomoBox.app",
+      appRequirement: "identifier app",
+      callerRequirement: "identifier caller",
+      callerRelativeExecutable: "Contents/MacOS/mihomo-app",
+      installerArguments: ["--restore"],
+      detached: false
+    )
+    let verification = command.range(of: "/usr/bin/codesign --verify --strict")
+    let restore = command.range(of: "--restore")
+    XCTAssertNotNil(verification)
+    XCTAssertNotNil(restore)
+    if let verification, let restore {
+      XCTAssertLessThan(verification.lowerBound, restore.lowerBound)
+    }
+    XCTAssertTrue(command.contains("--verified-app-snapshot"))
+    XCTAssertFalse(command.contains("--client-app-bundle"))
+  }
+
+  func testMihomoProfileLanguageCompletesKnownYAMLKeys() {
+    XCTAssertTrue(MihomoProfileLanguage.isKnownKey("proxy-groups"))
+    XCTAssertFalse(MihomoProfileLanguage.isKnownKey("made-up-mihomo-key"))
+    XCTAssertEqual(
+      MihomoProfileLanguage.completions(for: "proxy-p"),
+      ["proxy-providers"]
+    )
+    XCTAssertTrue(MihomoProfileLanguage.completions(for: "tun").contains("tun"))
+  }
+
   func testInstallerResourceMustBeRegularAndExecutable() throws {
     let root = FileManager.default.temporaryDirectory
       .appendingPathComponent("mihomobox-installer-policy-\(UUID().uuidString)")
@@ -376,6 +406,12 @@ final class AppServicePolicyTests: XCTestCase {
       contentsOf: repository.appendingPathComponent("Sources/MihomoDaemon/AgentSupervisor.swift"),
       encoding: .utf8
     )
+    let networkConsistency = try String(
+      contentsOf: repository.appendingPathComponent(
+        "Sources/MihomoDNSCore/NetworkConsistency.swift"
+      ),
+      encoding: .utf8
+    )
     let installer = try String(
       contentsOf: repository.appendingPathComponent("scripts/install-daemon.sh"),
       encoding: .utf8
@@ -396,10 +432,13 @@ final class AppServicePolicyTests: XCTestCase {
     XCTAssertTrue(
       supervisor.contains("ProxyService.isSystemDNSRestored(configuration: configuration)")
     )
-    XCTAssertTrue(supervisor.contains("observed.tunInterface == nil"))
-    XCTAssertTrue(supervisor.contains("!observed.fakeIPRouteReady"))
-    XCTAssertTrue(supervisor.contains("!observed.dnsBridgeReady"))
-    XCTAssertTrue(supervisor.contains("!observed.mihomoDNSReady"))
+    XCTAssertTrue(supervisor.contains("StoppedRuntimeVerification.blockers"))
+    XCTAssertTrue(supervisor.contains("stoppedVerificationTimeout"))
+    XCTAssertTrue(networkConsistency.contains("health.tunInterface != nil"))
+    XCTAssertTrue(networkConsistency.contains("health.fakeIPRouteReady"))
+    XCTAssertTrue(networkConsistency.contains("health.dnsBridgeReady"))
+    XCTAssertTrue(networkConsistency.contains("health.mihomoDNSReady"))
+    XCTAssertTrue(networkConsistency.contains("!systemDNSRestored"))
     XCTAssertTrue(agent.contains("--check-system-dns-restored"))
     XCTAssertTrue(installer.contains("--check-system-dns-restored >/dev/null 2>&1"))
     XCTAssertTrue(installer.contains("managed_mihomo_pids"))
@@ -457,6 +496,20 @@ final class AppServicePolicyTests: XCTestCase {
     )
     XCTAssertTrue(updater.contains("let fileLock = try mutationLockForTransaction()"))
     XCTAssertTrue(updater.contains("pendingBootValidationLock = fileLock"))
+    let stopVerification = try XCTUnwrap(
+      updater.range(of: "guard agent.stopAndRestoreVerified() else")
+    )
+    let pendingPublication = try XCTUnwrap(
+      updater.range(
+        of: "try writePending(pending)",
+        range: stopVerification.upperBound..<updater.endIndex
+      )
+    )
+    XCTAssertLessThan(stopVerification.lowerBound, pendingPublication.lowerBound)
+    XCTAssertTrue(
+      updater[stopVerification.lowerBound..<pendingPublication.upperBound]
+        .contains("preserveTransactionForRestart = true")
+    )
     XCTAssertTrue(updater.contains("var previousVersion: String?"))
     XCTAssertTrue(updater.contains("0.8.0 did not encode previousVersion"))
     XCTAssertTrue(updater.contains("pending.previousVersion = previousVersion"))
@@ -770,6 +823,77 @@ final class AppServicePolicyTests: XCTestCase {
     let coordinator = ProfileCoordinator(control: TrayControlClient(), root: root)
     let candidate = try await coordinator.localReloadCandidate()
     XCTAssertNil(candidate)
+  }
+
+  func testEditedOfflineProfileIsValidatedAndPreservesSelection() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("mihomobox-profile-edit-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let profiles = root.appendingPathComponent("profiles")
+    try FileManager.default.createDirectory(at: profiles, withIntermediateDirectories: true)
+    try Data("mode: rule\n".utf8).write(to: profiles.appendingPathComponent("current.yaml"))
+    try Data("current.yaml\n".utf8).write(to: root.appendingPathComponent("active-profile"))
+
+    let validator = root.appendingPathComponent("mihomo-validator")
+    try Data("#!/bin/sh\nexit 0\n".utf8).write(to: validator)
+    try FileManager.default.setAttributes(
+      [.posixPermissions: 0o700],
+      ofItemAtPath: validator.path
+    )
+    let coordinator = ProfileCoordinator(
+      control: TrayControlClient(),
+      root: root,
+      mihomoURL: validator
+    )
+    let edited = Data("mode: global\n".utf8)
+    try await coordinator.saveEditedProfile(
+      name: "current.yaml",
+      bytes: edited,
+      activate: true,
+      daemonInstalled: false
+    )
+
+    XCTAssertEqual(try Data(contentsOf: profiles.appendingPathComponent("current.yaml")), edited)
+    let state = await coordinator.localState()
+    XCTAssertEqual(state.activeProfile, "current.yaml")
+  }
+
+  func testRejectedEditLeavesOfflineProfileBytesUnchanged() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("mihomobox-profile-edit-reject-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let profiles = root.appendingPathComponent("profiles")
+    try FileManager.default.createDirectory(at: profiles, withIntermediateDirectories: true)
+    let original = Data("mode: rule\n".utf8)
+    let profile = profiles.appendingPathComponent("current.yaml")
+    try original.write(to: profile)
+
+    let validator = root.appendingPathComponent("mihomo-validator")
+    try Data("#!/bin/sh\necho 'level=error msg=invalid profile'\nexit 1\n".utf8).write(
+      to: validator
+    )
+    try FileManager.default.setAttributes(
+      [.posixPermissions: 0o700],
+      ofItemAtPath: validator.path
+    )
+    let coordinator = ProfileCoordinator(
+      control: TrayControlClient(),
+      root: root,
+      mihomoURL: validator
+    )
+
+    do {
+      try await coordinator.saveEditedProfile(
+        name: "current.yaml",
+        bytes: Data("mode: invalid\n".utf8),
+        activate: false,
+        daemonInstalled: false
+      )
+      XCTFail("a rejected Mihomo profile must not be saved")
+    } catch {
+      XCTAssertEqual((error as NSError).domain, "MihomoBoxProfileValidation")
+    }
+    XCTAssertEqual(try Data(contentsOf: profile), original)
   }
 
   func testProfileSymlinkIsNotARegularCandidate() throws {

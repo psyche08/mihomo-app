@@ -1203,7 +1203,7 @@ public final class DashboardStore: ObservableObject {
 
   private func loadPreviewFixtures() {
     runtimeStatus = .connected
-    coreVersion = "Mihomo v1.19.28"
+    coreVersion = "Mihomo v1.19.30"
     runtimeMessage = "\(coreVersion) • Rule • TUN On"
     configuration = DashboardConfiguration()
     traffic = TrafficSnapshot(

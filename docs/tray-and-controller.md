@@ -32,16 +32,33 @@ Profiles ›
   Import HTTP Subscription…
   ✓ <active profile>.yaml
     <other profile>.yaml
+  Edit Profile ›
 Reload Profiles
 ───────────────
 Tools ›
   Install / Repair Daemon…
+  Uninstall Helper…
   Open Diagnostic Logs…
   Check for Updates…
 ───────────────
 Version X.Y.Z
 Exit
 ```
+
+Each imported profile is also available under **Edit Profile**. The native
+editor keeps the user-owned YAML mirror in the current user context, provides
+Mihomo-key completion and YAML highlighting, and validates the complete draft
+with the bundled Mihomo executable before an atomic save. An installed daemon
+receives the validated bytes through authenticated XPC; editing an inactive
+profile does not activate it. The user mirror is rolled back if synchronization
+fails.
+
+**Tools › Uninstall Helper…** is available only when both the signed installer
+and managed root artifacts are present. After explicit confirmation it runs the
+verified App-snapshot installer with `--restore`: Mihomo is stopped, real system
+DNS is restored, and root-owned helpers, configuration, logs, LaunchDaemons and
+the managed CLI link are removed. The App and current-user profile mirror are
+preserved.
 
 The disabled version row is read from the signed App bundle's
 `CFBundleShortVersionString`; it is informational and never comes from daemon
@@ -199,7 +216,9 @@ Sparkle's own persisted `SUEnableAutomaticChecks` and `SUAutomaticallyUpdate`
 settings, so disabling it survives relaunch without a second preference that
 can drift. Manual `Tools > Check for Updates…` remains available. Development
 bundles without the release key keep updates unavailable and show the switch
-disabled.
+disabled. An automatically downloaded update uses Sparkle's no-UI immediate
+install/relaunch path; the daemon-owned active tunnel does not depend on the App
+process remaining alive.
 
 There is no loopback HTTP server, browser token, WebView, or `mihomoboxctl`
 child process in the desktop data path. The daemon still validates every

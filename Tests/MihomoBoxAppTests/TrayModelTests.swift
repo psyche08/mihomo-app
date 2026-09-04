@@ -113,17 +113,20 @@ final class TrayModelTests: XCTestCase {
       daemonCompatibility: .compatible,
       profileActionsAvailable: true,
       installationActionsAvailable: true,
+      managedInstallationPresent: true,
       enhancedTUNActionAvailable: true
     )
     XCTAssertTrue(TrayMenuActionPolicy.profileActionEnabled(snapshot))
     XCTAssertFalse(TrayMenuActionPolicy.profileReloadEnabled(snapshot))
     XCTAssertTrue(TrayMenuActionPolicy.installerEnabled(snapshot))
+    XCTAssertTrue(TrayMenuActionPolicy.uninstallerEnabled(snapshot))
     XCTAssertTrue(TrayMenuActionPolicy.enhancedTUNEnabled(snapshot))
 
     snapshot.mutationOperationInFlight = true
     XCTAssertFalse(TrayMenuActionPolicy.profileActionEnabled(snapshot))
     XCTAssertFalse(TrayMenuActionPolicy.profileReloadEnabled(snapshot))
     XCTAssertFalse(TrayMenuActionPolicy.installerEnabled(snapshot))
+    XCTAssertFalse(TrayMenuActionPolicy.uninstallerEnabled(snapshot))
     XCTAssertFalse(TrayMenuActionPolicy.enhancedTUNEnabled(snapshot))
 
     snapshot.mutationOperationInFlight = false
@@ -139,6 +142,18 @@ final class TrayModelTests: XCTestCase {
     snapshot.tunOperationInFlight = false
     snapshot.enhancedTUNActionAvailable = false
     XCTAssertFalse(TrayMenuActionPolicy.enhancedTUNEnabled(snapshot))
+  }
+
+  func testUninstallRequiresBothSignedInstallerAndManagedArtifacts() {
+    var snapshot = TraySnapshot(
+      installationActionsAvailable: true,
+      managedInstallationPresent: false
+    )
+    XCTAssertFalse(TrayMenuActionPolicy.uninstallerEnabled(snapshot))
+    snapshot.managedInstallationPresent = true
+    XCTAssertTrue(TrayMenuActionPolicy.uninstallerEnabled(snapshot))
+    snapshot.installationActionsAvailable = false
+    XCTAssertFalse(TrayMenuActionPolicy.uninstallerEnabled(snapshot))
   }
 
   func testUnavailableProfileOrInstallerCapabilityStaysDisabled() {

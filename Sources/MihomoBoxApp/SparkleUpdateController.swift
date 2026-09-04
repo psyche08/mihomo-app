@@ -6,7 +6,7 @@ import Sparkle
 /// Thin typed Sparkle 2.9.4 owner. Update verification, download, installation
 /// and relaunch remain inside Sparkle.
 @MainActor
-final class SparkleUpdateController: DashboardUpdatePreference {
+final class SparkleUpdateController: NSObject, DashboardUpdatePreference, SPUUpdaterDelegate {
   private let bundle: Bundle
   private let defaults: UserDefaults
   private var controller: SPUStandardUpdaterController?
@@ -14,6 +14,7 @@ final class SparkleUpdateController: DashboardUpdatePreference {
   init(bundle: Bundle = .main, defaults: UserDefaults = .standard) {
     self.bundle = bundle
     self.defaults = defaults
+    super.init()
   }
 
   var isAvailable: Bool { Self.validConfiguration(in: bundle) }
@@ -37,7 +38,7 @@ final class SparkleUpdateController: DashboardUpdatePreference {
     }
     controller = SPUStandardUpdaterController(
       startingUpdater: true,
-      updaterDelegate: nil,
+      updaterDelegate: self,
       userDriverDelegate: nil
     )
     AppLog.info("event=app_update phase=started")
@@ -72,6 +73,23 @@ final class SparkleUpdateController: DashboardUpdatePreference {
     AppLog.info("event=app_update preference=automatic enabled=\(enabled)")
   }
 
+  /// Sparkle normally leaves an automatically downloaded update pending until
+  /// a menu-bar app eventually quits. MihomoBox is designed to run for weeks,
+  /// which left helper processes waiting indefinitely and old versions in
+  /// service. The privileged network runtime is an independent LaunchDaemon,
+  /// so the App can accept Sparkle's no-UI install/relaunch opportunity without
+  /// dropping the active tunnel.
+  func updater(
+    _ updater: SPUUpdater,
+    willInstallUpdateOnQuit item: SUAppcastItem,
+    immediateInstallationBlock: @escaping () -> Void
+  ) -> Bool {
+    guard automaticUpdatesEnabled else { return false }
+    AppLog.info("event=app_update phase=installing_background")
+    immediateInstallationBlock()
+    return true
+  }
+
   nonisolated static func automaticUpdatesEnabled(
     in bundle: Bundle,
     defaults: UserDefaults
@@ -95,7 +113,11 @@ final class SparkleUpdateController: DashboardUpdatePreference {
       let url = URL(string: feed), url.scheme?.lowercased() == "https", url.host != nil,
       info["SUVerifyUpdateBeforeExtraction"] as? Bool == true,
       info["SURequireSignedFeed"] as? Bool == true,
-      (info["SUSignedFeedFailureExpirationInterval"] as? NSNumber)?.doubleValue == 0
+      (info["SUSignedFeedFailureExpirationInterval"] as? NSNumber)?.doubleValue == 0,
+      let scheduled = (info["SUScheduledCheckInterval"] as? NSNumber)?.doubleValue,
+      let impatient = (info["SUScheduledImpatientCheckInterval"] as? NSNumber)?.doubleValue,
+      scheduled > 0,
+      impatient > scheduled
     else { return false }
     return true
   }

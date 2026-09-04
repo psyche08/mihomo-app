@@ -114,6 +114,7 @@ struct TraySnapshot: Equatable, Sendable {
   var profileOperationInFlight: Bool
   var profileActionsAvailable: Bool
   var installationActionsAvailable: Bool
+  var managedInstallationPresent: Bool
   var enhancedTUNActionAvailable: Bool
   var actionError: String?
 
@@ -135,6 +136,7 @@ struct TraySnapshot: Equatable, Sendable {
     profileOperationInFlight: Bool = false,
     profileActionsAvailable: Bool = true,
     installationActionsAvailable: Bool = false,
+    managedInstallationPresent: Bool = false,
     enhancedTUNActionAvailable: Bool = true,
     actionError: String? = nil
   ) {
@@ -155,6 +157,7 @@ struct TraySnapshot: Equatable, Sendable {
     self.profileOperationInFlight = profileOperationInFlight
     self.profileActionsAvailable = profileActionsAvailable
     self.installationActionsAvailable = installationActionsAvailable
+    self.managedInstallationPresent = managedInstallationPresent
     self.enhancedTUNActionAvailable = enhancedTUNActionAvailable
     self.actionError = actionError
   }
@@ -248,6 +251,7 @@ struct TraySnapshot: Equatable, Sendable {
       profileOperationInFlight: profileOperationInFlight,
       profileActionsAvailable: profileActionsAvailable,
       installationActionsAvailable: installationActionsAvailable,
+      managedInstallationPresent: managedInstallationPresent,
       enhancedTUNActionAvailable: enhancedTUNActionAvailable,
       actionError: actionError
     )
@@ -277,6 +281,7 @@ struct TrayMenuSignature: Equatable, Sendable {
   var profileOperationInFlight: Bool
   var profileActionsAvailable: Bool
   var installationActionsAvailable: Bool
+  var managedInstallationPresent: Bool
   var enhancedTUNActionAvailable: Bool
   var actionError: String?
 }
@@ -375,6 +380,12 @@ enum TrayMenuActionPolicy {
       && snapshot.installationActionsAvailable
       && !snapshot.mutationOperationInFlight
   }
+
+  static func uninstallerEnabled(_ snapshot: TraySnapshot) -> Bool {
+    snapshot.installationActionsAvailable
+      && snapshot.managedInstallationPresent
+      && !snapshot.mutationOperationInFlight
+  }
 }
 
 enum TrayDaemonMenuPolicy {
@@ -409,9 +420,11 @@ protocol TrayService: AnyObject {
   func testProxyDelays() async throws
   func importLocalProfile() async throws
   func importHTTPProfile() async throws
+  func editProfile(named name: String) async throws
   func switchProfile(named name: String) async throws
   func reloadProfile() async throws
   func installOrRepairDaemon(requireLegacy: Bool) async throws
+  func uninstallHelper() async throws
   func openDiagnosticLogs()
   func checkForUpdates()
 }

@@ -1,4 +1,6 @@
 import Foundation
+import CMihomoDNSSystem
+import Darwin
 @preconcurrency import NIOCore
 @preconcurrency import NIOPosix
 import SystemConfiguration
@@ -6,6 +8,231 @@ import XCTest
 @testable import MihomoDNSCore
 
 final class CoreTests: XCTestCase {
+    func testPreferencesNotificationsPreferAppliedStateAndIgnoreEmptyFlags() {
+        XCTAssertEqual(
+            NetworkChangeSignal.fromPreferencesNotification(.commit),
+            .preferencesCommit
+        )
+        XCTAssertEqual(
+            NetworkChangeSignal.fromPreferencesNotification(.apply),
+            .preferencesApply
+        )
+        XCTAssertEqual(
+            NetworkChangeSignal.fromPreferencesNotification([.commit, .apply]),
+            .preferencesApply
+        )
+        XCTAssertNil(
+            NetworkChangeSignal.fromPreferencesNotification(SCPreferencesNotification(rawValue: 0))
+        )
+    }
+
+    func testSystemConfigurationObserversCanStartAndStopWithoutChangingPreferences() throws {
+        let state = NetworkDNSState(
+            excludedServers: ["127.0.0.53", "127.0.0.1"],
+            fallbackServers: ["1.1.1.1"]
+        )
+        do {
+            try state.start()
+        } catch NetworkDNSStateError.dynamicStoreUnavailable {
+            throw XCTSkip("SCDynamicStore unavailable in test sandbox")
+        }
+        state.stop()
+    }
+
+    func testPreferencesCommitCallbackFromIsolatedStore() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let preferencesPath = root.appendingPathComponent("preferences.plist").path
+        let state = NetworkDNSState(
+            excludedServers: ["127.0.0.53", "127.0.0.1"],
+            fallbackServers: ["1.1.1.1"],
+            preferencesID: preferencesPath
+        )
+        let callback = expectation(description: "SCPreferences commit callback")
+        state.setRefreshHandler { signal in
+            if signal == .preferencesCommit {
+                callback.fulfill()
+            }
+        }
+        do {
+            try state.start()
+        } catch NetworkDNSStateError.dynamicStoreUnavailable {
+            throw XCTSkip("SCDynamicStore unavailable in test sandbox")
+        }
+        defer { state.stop() }
+
+        guard let writer = SCPreferencesCreate(
+            nil,
+            "dev.linsheng.mihomo.daemon.tests.preference-writer" as CFString,
+            preferencesPath as CFString
+        ) else {
+            return XCTFail("cannot create isolated preferences writer")
+        }
+        XCTAssertTrue(SCPreferencesSetValue(writer, "TestMarker" as CFString, UUID().uuidString as CFString))
+        guard SCPreferencesCommitChanges(writer) else {
+            throw XCTSkip("isolated SCPreferences commit unavailable in test environment")
+        }
+        wait(for: [callback], timeout: 2)
+    }
+
+    func testRouteTableMonitorCanStartAndStop() throws {
+        let monitor = RouteTableMonitor { _ in }
+        do {
+            try monitor.start()
+        } catch let RouteTableMonitorError.openFailed(code) {
+            monitor.stop()
+            throw XCTSkip("PF_ROUTE monitor unavailable in test environment code=\(code)")
+        }
+        monitor.stop()
+    }
+
+    func testRouteTableMessageClassificationFiltersLookupNoise() {
+        XCTAssertEqual(
+            mihomo_dns_route_event_mask_for_type(UInt8(RTM_ADD)),
+            UInt32(MIHOMO_DNS_ROUTE_EVENT_ROUTE)
+        )
+        XCTAssertEqual(
+            mihomo_dns_route_event_mask_for_type(UInt8(RTM_REDIRECT)),
+            UInt32(MIHOMO_DNS_ROUTE_EVENT_ROUTE)
+        )
+        XCTAssertEqual(
+            mihomo_dns_route_event_mask_for_type(UInt8(RTM_NEWADDR)),
+            UInt32(MIHOMO_DNS_ROUTE_EVENT_ADDRESS)
+        )
+        XCTAssertEqual(
+            mihomo_dns_route_event_mask_for_type(UInt8(RTM_IFINFO)),
+            UInt32(MIHOMO_DNS_ROUTE_EVENT_INTERFACE)
+        )
+        XCTAssertEqual(mihomo_dns_route_event_mask_for_type(UInt8(RTM_GET)), 0)
+        XCTAssertEqual(mihomo_dns_route_event_mask_for_type(UInt8(RTM_MISS)), 0)
+    }
+
+    func testRouteOwnershipRejectsStoppedAndPreexistingTunnels() {
+        XCTAssertNil(
+            RuntimeRouteOwnership.ownedInterface(
+                controllerReachable: false,
+                tunEnabled: false,
+                visibleInterface: "utun0",
+                preexistingInterface: nil
+            )
+        )
+        XCTAssertNil(
+            RuntimeRouteOwnership.ownedInterface(
+                controllerReachable: true,
+                tunEnabled: true,
+                visibleInterface: "utun0",
+                preexistingInterface: "utun0"
+            )
+        )
+        XCTAssertEqual(
+            RuntimeRouteOwnership.ownedInterface(
+                controllerReachable: true,
+                tunEnabled: true,
+                visibleInterface: "utun3",
+                preexistingInterface: "utun0"
+            ),
+            "utun3"
+        )
+    }
+
+    func testListenerErrorClassificationNeverIncludesArbitraryErrorText() {
+        XCTAssertEqual(
+            DNSListenerErrorClassifier.fields(for: DNSMessageError.invalidLength),
+            "category=malformed_dns"
+        )
+        XCTAssertEqual(
+            DNSListenerErrorClassifier.fields(for: POSIXError(.ECONNRESET)),
+            "category=posix code=54"
+        )
+        let arbitrary = NSError(
+            domain: "secret.example.internal",
+            code: 7,
+            userInfo: [NSLocalizedDescriptionKey: "credential=do-not-log"]
+        )
+        let fields = DNSListenerErrorClassifier.fields(for: arbitrary)
+        XCTAssertEqual(fields, "category=unknown")
+        XCTAssertFalse(fields.contains("secret"))
+        XCTAssertFalse(fields.contains("credential"))
+    }
+
+    func testUnbackedDNSCleanupRequiresExactOwnershipAndPreservesOtherKeys() {
+        let addressKey = kSCPropNetDNSServerAddresses as String
+        let searchKey = kSCPropNetDNSSearchDomains as String
+        let cleaned = ManagedDNSDictionaryCleanup.removingExactServers(
+            ["127.0.0.53"],
+            from: [
+                addressKey: ["127.0.0.53"],
+                searchKey: ["corp.example"],
+            ]
+        )
+        XCTAssertNil(cleaned?[addressKey])
+        XCTAssertEqual(cleaned?[searchKey] as? [String], ["corp.example"])
+        XCTAssertEqual(
+            ManagedDNSDictionaryCleanup.removingExactServers(
+                ["127.0.0.53"],
+                from: [addressKey: ["127.0.0.53"]]
+            )?.count,
+            0
+        )
+        XCTAssertNil(
+            ManagedDNSDictionaryCleanup.removingExactServers(
+                ["127.0.0.53"],
+                from: [addressKey: ["127.0.0.53", "8.8.8.8"]]
+            )
+        )
+    }
+
+    func testStoppedRuntimeVerificationReportsOnlyUnsafeStateNames() {
+        let health = NetworkConsistencyHealth(
+            controllerReachable: true,
+            tunEnabled: true,
+            tunInterface: "utun7",
+            fakeIPMode: true,
+            fakeIPRouteReady: true,
+            dnsBridgeReady: true,
+            mihomoDNSReady: true,
+            systemDNSManaged: true,
+            networkConsistent: false
+        )
+
+        XCTAssertEqual(
+            StoppedRuntimeVerification.blockers(
+                agentStopped: false,
+                systemDNSRestored: false,
+                health: health
+            ),
+            [
+                "agent", "controller", "tun", "tun_interface", "fake_ip_route",
+                "dns_bridge", "mihomo_dns", "system_dns_managed",
+                "system_dns_restore", "network_consistency",
+            ]
+        )
+    }
+
+    func testStoppedRuntimeVerificationAcceptsFullyRestoredNetwork() {
+        let health = NetworkConsistencyHealth(
+            controllerReachable: false,
+            tunEnabled: false,
+            tunInterface: nil,
+            fakeIPMode: true,
+            fakeIPRouteReady: false,
+            dnsBridgeReady: false,
+            mihomoDNSReady: false,
+            systemDNSManaged: false,
+            networkConsistent: true
+        )
+
+        XCTAssertTrue(
+            StoppedRuntimeVerification.blockers(
+                agentStopped: true,
+                systemDNSRestored: true,
+                health: health
+            ).isEmpty
+        )
+    }
+
     func testResolverTopologyClassifiesGlobalAndScopedResolversWithoutAddresses() {
         let topology = ResolverTopologyObservation.make(
             managedServers: ["127.0.0.53"],
@@ -383,6 +610,74 @@ final class CoreTests: XCTestCase {
         XCTAssertTrue(SCPreferencesCommitChanges(preferences))
         XCTAssertFalse(try manager.containsManagedServerPersistently())
         XCTAssertEqual(restored?[kSCPropNetDNSSearchDomains as String] as? [String], ["corp.example"])
+    }
+
+    func testDNSRestoreWithoutBackupCleansEveryExactScopeAndPreservesOtherKeys() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let preferencesPath = root.appendingPathComponent("preferences.plist").path
+        let backupPath = root.appendingPathComponent("missing-backup.plist").path
+        guard let preferences = SCPreferencesCreate(
+            nil,
+            "dev.linsheng.mihomo.daemon.tests.unbacked-seed" as CFString,
+            preferencesPath as CFString
+        ) else {
+            return XCTFail("cannot create test preferences")
+        }
+        XCTAssertTrue(SCPreferencesSetValue(preferences, kSCPrefCurrentSet, "/Sets/Test" as CFString))
+        let globalPath = "/Sets/Test/Network/Global/DNS" as CFString
+        let stalePath = "/Sets/Test/Network/Service/stale-service/DNS" as CFString
+        let mixedPath = "/Sets/Test/Network/Service/mixed-service/DNS" as CFString
+        XCTAssertTrue(SCPreferencesPathSetValue(
+            preferences,
+            globalPath,
+            [kSCPropNetDNSServerAddresses as String: ["127.0.0.53"]] as CFDictionary
+        ))
+        XCTAssertTrue(SCPreferencesPathSetValue(
+            preferences,
+            stalePath,
+            [
+                kSCPropNetDNSServerAddresses as String: ["127.0.0.53"],
+                kSCPropNetDNSSearchDomains as String: ["corp.example"],
+            ] as CFDictionary
+        ))
+        XCTAssertTrue(SCPreferencesPathSetValue(
+            preferences,
+            mixedPath,
+            [kSCPropNetDNSServerAddresses as String: ["127.0.0.53", "8.8.8.8"]]
+                as CFDictionary
+        ))
+        guard SCPreferencesCommitChanges(preferences) else {
+            throw XCTSkip("SCPreferences custom-file commit requires privileged SystemConfiguration access")
+        }
+
+        let manager = GlobalDNSPreferences(
+            servers: ["127.0.0.53"],
+            backupPath: backupPath,
+            preferencesID: preferencesPath
+        )
+        try manager.restore()
+        SCPreferencesSynchronize(preferences)
+
+        XCTAssertNil(SCPreferencesPathGetValue(preferences, globalPath))
+        let cleaned = try XCTUnwrap(
+            SCPreferencesPathGetValue(preferences, stalePath) as? [String: Any]
+        )
+        XCTAssertNil(cleaned[kSCPropNetDNSServerAddresses as String])
+        XCTAssertEqual(
+            cleaned[kSCPropNetDNSSearchDomains as String] as? [String],
+            ["corp.example"]
+        )
+        let mixed = try XCTUnwrap(
+            SCPreferencesPathGetValue(preferences, mixedPath) as? [String: Any]
+        )
+        XCTAssertEqual(
+            mixed[kSCPropNetDNSServerAddresses as String] as? [String],
+            ["127.0.0.53", "8.8.8.8"]
+        )
+        XCTAssertTrue(try manager.containsManagedServerPersistently())
     }
 
     func testAsyncFallbackWaitsForEveryPrimaryRequestWithoutOverflowFallback() throws {

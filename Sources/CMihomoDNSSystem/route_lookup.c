@@ -28,6 +28,84 @@ static pthread_mutex_t route_lock = PTHREAD_MUTEX_INITIALIZER;
 static int route_descriptor = -1;
 static int route_sequence = 0;
 
+uint32_t mihomo_dns_route_event_mask_for_type(uint8_t message_type) {
+    switch (message_type) {
+        case RTM_ADD:
+        case RTM_DELETE:
+        case RTM_CHANGE:
+        case RTM_REDIRECT:
+        case RTM_OLDADD:
+        case RTM_OLDDEL:
+            return MIHOMO_DNS_ROUTE_EVENT_ROUTE;
+        case RTM_NEWADDR:
+        case RTM_DELADDR:
+            return MIHOMO_DNS_ROUTE_EVENT_ADDRESS;
+        case RTM_IFINFO:
+        case RTM_IFINFO2:
+            return MIHOMO_DNS_ROUTE_EVENT_INTERFACE;
+        default:
+            return 0;
+    }
+}
+
+int mihomo_dns_route_monitor_open(void) {
+    int descriptor = socket(PF_ROUTE, SOCK_RAW, AF_UNSPEC);
+    if (descriptor < 0) {
+        return -errno;
+    }
+    int flags = fcntl(descriptor, F_GETFL, 0);
+    if (flags < 0 || fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) < 0) {
+        int failure = -errno;
+        close(descriptor);
+        return failure;
+    }
+    int descriptor_flags = fcntl(descriptor, F_GETFD, 0);
+    if (descriptor_flags < 0 ||
+        fcntl(descriptor, F_SETFD, descriptor_flags | FD_CLOEXEC) < 0) {
+        int failure = -errno;
+        close(descriptor);
+        return failure;
+    }
+    int buffer = 64 * 1024;
+    (void)setsockopt(descriptor, SOL_SOCKET, SO_RCVBUF, &buffer, sizeof(buffer));
+    return descriptor;
+}
+
+int mihomo_dns_route_monitor_drain(int descriptor, uint32_t *out_mask) {
+    if (descriptor < 0 || out_mask == NULL) {
+        return -EINVAL;
+    }
+    *out_mask = 0;
+    unsigned char message[64 * 1024];
+    for (;;) {
+        ssize_t length = recv(descriptor, message, sizeof(message), 0);
+        if (length < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                return 0;
+            }
+            return -errno;
+        }
+        if (length == 0) {
+            return -ECONNRESET;
+        }
+        if (length < 4) {
+            continue;
+        }
+        // All Darwin routing messages start with msglen, version and type,
+        // including if_msghdr and ifa_msghdr variants.
+        uint16_t message_length = 0;
+        memcpy(&message_length, message, sizeof(message_length));
+        if (message_length < 4 || message_length > (size_t)length ||
+            message[2] != RTM_VERSION) {
+            continue;
+        }
+        *out_mask |= mihomo_dns_route_event_mask_for_type(message[3]);
+    }
+}
+
 static void route_close_locked(void) {
     if (route_descriptor >= 0) {
         close(route_descriptor);
@@ -47,6 +125,13 @@ static int route_socket_locked(void) {
     // carries traffic we did not ask for.
     int flags = fcntl(descriptor, F_GETFL, 0);
     if (flags < 0 || fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) < 0) {
+        int failure = -errno;
+        close(descriptor);
+        return failure;
+    }
+    int descriptor_flags = fcntl(descriptor, F_GETFD, 0);
+    if (descriptor_flags < 0 ||
+        fcntl(descriptor, F_SETFD, descriptor_flags | FD_CLOEXEC) < 0) {
         int failure = -errno;
         close(descriptor);
         return failure;

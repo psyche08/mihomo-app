@@ -16,6 +16,7 @@ public final class ProxyService {
     private var stopped = false
     private var consistencyController: NetworkConsistencyController?
     private var powerObserver: SystemPowerObserver?
+    private var routeTableMonitor: RouteTableMonitor?
     private var channels: [Channel] = []
 
     public init(
@@ -82,6 +83,10 @@ public final class ProxyService {
             channels.append(try startTCP(endpoint: configuration.systemDNSListen, forwarder: systemDNSForwarder))
             channels.append(try startUDP(endpoint: configuration.upstreamListen, forwarder: originalDNSForwarder))
             channels.append(try startTCP(endpoint: configuration.upstreamListen, forwarder: originalDNSForwarder))
+            // Capture a route owned by another TUN before starting Mihomo. A
+            // later controller-ready state is not sufficient ownership proof
+            // if the Fake-IP route never moved away from that interface.
+            let preexistingFakeIPRouteInterface = MihomoRuntimeInspector.fakeIPRouteInterface()
             try mihomoSupervisor?.start()
             if configuration.manageSystemDNS {
                 let controller = NetworkConsistencyController(
@@ -95,6 +100,7 @@ public final class ProxyService {
                     unsafeRuntimeHandler: { [mihomoSupervisor] in
                         mihomoSupervisor?.stop()
                     },
+                    preexistingFakeIPRouteInterface: preexistingFakeIPRouteInterface,
                     healthGeneration: healthGeneration
                 )
                 consistencyController = controller
@@ -104,8 +110,25 @@ public final class ProxyService {
                 // interface, service or DNS changes; until now nothing consumed
                 // it, so the app only noticed a network change on the next
                 // 2-second poll and never re-validated egress at all.
-                networkState.setRefreshHandler { [weak controller] in
-                    controller?.scheduleImmediateEvaluation(reason: "network_dns_changed")
+                networkState.setRefreshHandler { [weak controller] signal in
+                    controller?.handleNetworkChange(reason: signal)
+                }
+
+                // SCDynamicStore reports effective resolver/interface state,
+                // while PF_ROUTE reports route/address/interface mutations at
+                // the kernel boundary. Keep an independent routing socket so
+                // lookup replies cannot race the broadcast consumer.
+                let routeMonitor = RouteTableMonitor { [weak networkState] event in
+                    guard !event.isEmpty else { return }
+                    networkState?.handleRouteTableChange()
+                }
+                routeTableMonitor = routeMonitor
+                do {
+                    try routeMonitor.start()
+                } catch let RouteTableMonitorError.openFailed(code) {
+                    ServiceLog.error("event=route_monitor_unavailable code=\(code)")
+                } catch {
+                    ServiceLog.error("event=route_monitor_unavailable code=unknown")
                 }
 
                 // A root LaunchDaemon gets no NSWorkspace wake notification, so
@@ -219,6 +242,8 @@ public final class ProxyService {
         // Drop the notification sources before tearing the controller down so a
         // late callback cannot resurrect evaluation during shutdown.
         networkState.setRefreshHandler(nil)
+        routeTableMonitor?.stop()
+        routeTableMonitor = nil
         powerObserver?.stop()
         powerObserver = nil
         consistencyController?.stopAndRestore()

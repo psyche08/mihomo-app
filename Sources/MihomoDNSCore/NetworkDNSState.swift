@@ -91,28 +91,64 @@ private func dynamicStoreCallback(
     info: UnsafeMutableRawPointer?
 ) {
     guard let info else { return }
-    Unmanaged<NetworkDNSState>.fromOpaque(info).takeUnretainedValue().refresh()
+    Unmanaged<NetworkDNSState>.fromOpaque(info).takeUnretainedValue().refresh(signal: .dynamicStore)
+}
+
+private func preferencesCallback(
+    preferences: SCPreferences,
+    notificationType: SCPreferencesNotification,
+    info: UnsafeMutableRawPointer?
+) {
+    guard let info else { return }
+    Unmanaged<NetworkDNSState>.fromOpaque(info).takeUnretainedValue()
+        .preferencesChanged(preferences, notificationType: notificationType)
+}
+
+public enum NetworkChangeSignal: String, Sendable {
+    case dynamicStore = "dynamic_store"
+    case preferencesCommit = "preferences_commit"
+    case preferencesApply = "preferences_apply"
+    case routeTable = "route_table"
+
+    static func fromPreferencesNotification(
+        _ notificationType: SCPreferencesNotification
+    ) -> Self? {
+        if notificationType.contains(.apply) {
+            return .preferencesApply
+        }
+        if notificationType.contains(.commit) {
+            return .preferencesCommit
+        }
+        return nil
+    }
 }
 
 public final class NetworkDNSState: @unchecked Sendable {
     private let lock = NSLock()
     private let queue = DispatchQueue(label: "dev.linsheng.mihomo-app.network")
+    private let queueKey = DispatchSpecificKey<UInt8>()
     private let excludedServers: Set<String>
     private let fallbackServers: [String]
+    private let preferencesID: String?
     private var value: NetworkDNSSnapshot
     private var store: SCDynamicStore?
-    private var refreshHandler: (@Sendable () -> Void)?
+    private var preferences: SCPreferences?
+    private var refreshHandler: (@Sendable (NetworkChangeSignal) -> Void)?
 
-    public init(excludedServers: Set<String>, fallbackServers: [String]) {
+    public init(
+        excludedServers: Set<String>,
+        fallbackServers: [String],
+        preferencesID: String? = nil
+    ) {
         self.excludedServers = excludedServers
         self.fallbackServers = fallbackServers
+        self.preferencesID = preferencesID
         self.value = NetworkDNSSnapshot(interfaceName: nil, serviceID: nil, servers: fallbackServers)
+        queue.setSpecific(key: queueKey, value: 1)
     }
 
     deinit {
-        if let store {
-            SCDynamicStoreSetDispatchQueue(store, nil)
-        }
+        stop()
     }
 
     public func start() throws {
@@ -145,8 +181,30 @@ public final class NetworkDNSState: @unchecked Sendable {
               SCDynamicStoreSetDispatchQueue(store, queue) else {
             throw NetworkDNSStateError.notificationSetupFailed
         }
+        var preferencesContext = SCPreferencesContext(
+            version: 0,
+            info: Unmanaged.passUnretained(self).toOpaque(),
+            retain: nil,
+            release: nil,
+            copyDescription: nil
+        )
+        guard let preferences = SCPreferencesCreate(
+            nil,
+            "dev.linsheng.mihomo-app.daemon.observer" as CFString,
+            preferencesID as CFString?
+        ) else {
+            SCDynamicStoreSetDispatchQueue(store, nil)
+            throw NetworkDNSStateError.preferencesUnavailable
+        }
+        guard SCPreferencesSetCallback(preferences, preferencesCallback, &preferencesContext),
+              SCPreferencesSetDispatchQueue(preferences, queue) else {
+            SCPreferencesSetCallback(preferences, nil, nil)
+            SCDynamicStoreSetDispatchQueue(store, nil)
+            throw NetworkDNSStateError.preferencesNotificationSetupFailed
+        }
         self.store = store
-        refresh()
+        self.preferences = preferences
+        refresh(signal: nil)
     }
 
     public func snapshot() -> NetworkDNSSnapshot {
@@ -155,10 +213,16 @@ public final class NetworkDNSState: @unchecked Sendable {
         return value
     }
 
-    public func setRefreshHandler(_ handler: (@Sendable () -> Void)?) {
+    public func setRefreshHandler(_ handler: (@Sendable (NetworkChangeSignal) -> Void)?) {
         lock.lock()
         refreshHandler = handler
         lock.unlock()
+    }
+
+    public func handleRouteTableChange() {
+        queue.async { [weak self] in
+            self?.refresh(signal: .routeTable)
+        }
     }
 
     public func stop() {
@@ -166,11 +230,34 @@ public final class NetworkDNSState: @unchecked Sendable {
         if let store {
             SCDynamicStoreSetDispatchQueue(store, nil)
         }
-        queue.sync {}
+        if let preferences {
+            SCPreferencesSetDispatchQueue(preferences, nil)
+            SCPreferencesSetCallback(preferences, nil, nil)
+        }
+        if DispatchQueue.getSpecific(key: queueKey) == nil {
+            queue.sync {}
+        }
         store = nil
+        preferences = nil
     }
 
-    fileprivate func refresh() {
+    fileprivate func preferencesChanged(
+        _ preferences: SCPreferences,
+        notificationType: SCPreferencesNotification
+    ) {
+        // Discard the observer session's cached snapshot before the consistency
+        // controller reads Setup:/ and State:/ through its own sessions.
+        SCPreferencesSynchronize(preferences)
+        if let signal = NetworkChangeSignal.fromPreferencesNotification(notificationType) {
+            if signal == .preferencesApply {
+                refresh(signal: signal)
+            } else {
+                signalChange(signal)
+            }
+        }
+    }
+
+    fileprivate func refresh(signal: NetworkChangeSignal?) {
         guard let store else { return }
         let previous = snapshot()
         let globalIPv4 = SCDynamicStoreCopyValue(store, "State:/Network/Global/IPv4" as CFString)
@@ -245,7 +332,16 @@ public final class NetworkDNSState: @unchecked Sendable {
                 "upstream_count=\(next.servers.count) split_route_count=\(next.splitRoutes.count)"
             )
         }
-        handler?()
+        if let signal {
+            handler?(signal)
+        }
+    }
+
+    private func signalChange(_ signal: NetworkChangeSignal) {
+        lock.lock()
+        let handler = refreshHandler
+        lock.unlock()
+        handler?(signal)
     }
 
     func selectDiscoveredServers(
@@ -368,4 +464,6 @@ public final class NetworkDNSState: @unchecked Sendable {
 public enum NetworkDNSStateError: Error {
     case dynamicStoreUnavailable
     case notificationSetupFailed
+    case preferencesUnavailable
+    case preferencesNotificationSetupFailed
 }

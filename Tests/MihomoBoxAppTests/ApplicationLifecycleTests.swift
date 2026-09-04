@@ -140,9 +140,11 @@ private final class LifecycleTrayService: TrayService {
   func testProxyDelays() async throws {}
   func importLocalProfile() async throws {}
   func importHTTPProfile() async throws {}
+  func editProfile(named name: String) async throws {}
   func switchProfile(named name: String) async throws {}
   func reloadProfile() async throws {}
   func installOrRepairDaemon(requireLegacy: Bool) async throws {}
+  func uninstallHelper() async throws {}
   func openDiagnosticLogs() {}
   func checkForUpdates() {}
 }

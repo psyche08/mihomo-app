@@ -115,6 +115,8 @@ test "$(/usr/libexec/PlistBuddy -c 'Print :SUEnableAutomaticChecks' "$INFO")" = 
   "$EXPECTED_AUTOMATIC_UPDATES"
 test "$(/usr/libexec/PlistBuddy -c 'Print :SUAutomaticallyUpdate' "$INFO")" = \
   "$EXPECTED_AUTOMATIC_UPDATES"
+test "$(/usr/libexec/PlistBuddy -c 'Print :SUScheduledImpatientCheckInterval' "$INFO")" = \
+  "43200"
 test "$(/usr/libexec/PlistBuddy -c 'Print :MihomoBoxDevelopmentUpdatesDisabled' "$INFO")" = \
   "$EXPECTED_DEVELOPMENT_UPDATES_DISABLED"
 test "$(/usr/libexec/PlistBuddy -c 'Print :SUVerifyUpdateBeforeExtraction' "$INFO")" = "true"

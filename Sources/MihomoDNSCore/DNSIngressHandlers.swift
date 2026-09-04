@@ -3,6 +3,25 @@ import Foundation
 import NIOFoundationCompat
 @preconcurrency import NIOPosix
 
+enum DNSListenerErrorClassifier {
+    /// Returns a fixed, privacy-safe category. Never stringify an arbitrary
+    /// error here: channel errors can embed peer addresses and DNS payload
+    /// context, neither of which belongs in the service log.
+    static func fields(for error: Error) -> String {
+        if error is DNSMessageError {
+            return "category=malformed_dns"
+        }
+        if error is ChannelError {
+            return "category=channel"
+        }
+        let nsError = error as NSError
+        if nsError.domain == NSPOSIXErrorDomain {
+            return "category=posix code=\(nsError.code)"
+        }
+        return "category=unknown"
+    }
+}
+
 final class DNSUDPHandler: ChannelInboundHandler {
     typealias InboundIn = AddressedEnvelope<ByteBuffer>
     typealias OutboundOut = AddressedEnvelope<ByteBuffer>
@@ -27,7 +46,9 @@ final class DNSUDPHandler: ChannelInboundHandler {
     }
 
     func errorCaught(context: ChannelHandlerContext, error: Error) {
-        ServiceLog.error("event=udp_listener_error")
+        ServiceLog.error(
+            "event=udp_listener_error \(DNSListenerErrorClassifier.fields(for: error))"
+        )
     }
 }
 
@@ -84,7 +105,9 @@ final class DNSTCPHandler: ChannelInboundHandler {
     }
 
     func errorCaught(context: ChannelHandlerContext, error: Error) {
-        ServiceLog.error("event=tcp_listener_error")
+        ServiceLog.error(
+            "event=tcp_listener_error \(DNSListenerErrorClassifier.fields(for: error))"
+        )
         context.close(promise: nil)
     }
 }

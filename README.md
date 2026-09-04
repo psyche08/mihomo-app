@@ -26,7 +26,7 @@ reference, `minisign` for the temporary 0.7 updater compatibility asset, and
 Compilation is intentionally operator-executed outside agent sandboxes. Use the
 native build command documented in [docs/build-release.md](docs/build-release.md).
 
-The build pins Mihomo `v1.19.28` and verifies its release checksum before
+The build pins Mihomo `v1.19.30` and verifies its release checksum before
 bundling. MetaCubeXD `v1.271.0` remains pinned as the reproducible design and
 interaction reference for the native UI.
 

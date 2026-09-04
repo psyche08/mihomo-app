@@ -207,6 +207,10 @@ final class StatusItemController: NSObject, NSMenuDelegate, ApplicationStatusIte
     )
     install.isEnabled = TrayMenuActionPolicy.installerEnabled(snapshot)
     toolsMenu.addItem(install)
+    let uninstall = item("Uninstall Helper…", action: #selector(uninstallHelper))
+    uninstall.isEnabled = TrayMenuActionPolicy.uninstallerEnabled(snapshot)
+    toolsMenu.addItem(uninstall)
+    toolsMenu.addItem(.separator())
     toolsMenu.addItem(item("Open Diagnostic Logs…", action: #selector(openDiagnosticLogs)))
     let checkForUpdates = item("Check for Updates…", action: #selector(checkForUpdates))
     checkForUpdates.isEnabled = TrayUpdateAvailabilityPolicy.isEnabled(
@@ -303,6 +307,18 @@ final class StatusItemController: NSObject, NSMenuDelegate, ApplicationStatusIte
         row.isEnabled = TrayMenuActionPolicy.profileActionEnabled(snapshot)
         submenu.addItem(row)
       }
+      submenu.addItem(.separator())
+      let edit = NSMenuItem(title: "Edit Profile", action: nil, keyEquivalent: "")
+      let editMenu = NSMenu(title: "Edit Profile")
+      editMenu.autoenablesItems = false
+      for profile in snapshot.profiles {
+        let row = item(profile, action: #selector(editProfile(_:)))
+        row.representedObject = profile
+        row.isEnabled = TrayMenuActionPolicy.profileActionEnabled(snapshot)
+        editMenu.addItem(row)
+      }
+      edit.submenu = editMenu
+      submenu.addItem(edit)
     }
 
     parent.submenu = submenu
@@ -391,6 +407,12 @@ final class StatusItemController: NSObject, NSMenuDelegate, ApplicationStatusIte
     perform { service in try await service.switchProfile(named: name) }
   }
 
+  @objc private func editProfile(_ sender: NSMenuItem) {
+    guard TrayMenuActionPolicy.profileActionEnabled(latestSnapshot) else { return }
+    guard let name = sender.representedObject as? String else { return }
+    perform { service in try await service.editProfile(named: name) }
+  }
+
   @objc private func reloadProfile() {
     guard TrayMenuActionPolicy.profileReloadEnabled(latestSnapshot) else { return }
     perform { service in try await service.reloadProfile() }
@@ -409,6 +431,11 @@ final class StatusItemController: NSObject, NSMenuDelegate, ApplicationStatusIte
       return
     }
     perform { service in try await service.installOrRepairDaemon(requireLegacy: true) }
+  }
+
+  @objc private func uninstallHelper() {
+    guard TrayMenuActionPolicy.uninstallerEnabled(latestSnapshot) else { return }
+    perform { service in try await service.uninstallHelper() }
   }
 
   @objc private func openDiagnosticLogs() {

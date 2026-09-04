@@ -3,6 +3,8 @@ import Foundation
 import MihomoDNSCore
 
 final class AgentSupervisor: @unchecked Sendable {
+    private static let stoppedVerificationTimeout: TimeInterval = 6
+    private static let stoppedVerificationPollMicroseconds: useconds_t = 250_000
     private let queue = DispatchQueue(label: "dev.linsheng.mihomo.daemon.agent")
     private let agentPath: String
     private let configPath: String
@@ -89,8 +91,11 @@ final class AgentSupervisor: @unchecked Sendable {
     /// restores system DNS from the root-owned backup, and inspects live state
     /// without consulting the agent's six-second health cache.
     func stopAndRestoreVerified() -> Bool {
-        let agentStopped = stop()
+        let stopRequested = stop()
         guard let configuration = try? ProxyConfiguration.load(path: configPath) else {
+            ServiceLog.error(
+                "event=network_restore_verification result=failed blockers=configuration"
+            )
             return false
         }
         if let mihomo = configuration.mihomoProcess {
@@ -101,26 +106,42 @@ final class AgentSupervisor: @unchecked Sendable {
         do {
             try ProxyService.restoreSystemDNS(configuration: configuration)
         } catch {
+            ServiceLog.error(
+                "event=network_restore_verification result=failed blockers=system_dns_restore"
+            )
             return false
         }
-        let observed = ProxyService.networkHealth(configuration: configuration)
-        guard (try? ProxyService.isSystemDNSRestored(configuration: configuration)) == true else {
-            return false
+
+        let deadline = Date().addingTimeInterval(Self.stoppedVerificationTimeout)
+        var attempts = 0
+        var lastBlockers: [String] = []
+        while true {
+            attempts += 1
+            let observed = ProxyService.networkHealth(configuration: configuration)
+            let systemDNSRestored =
+                (try? ProxyService.isSystemDNSRestored(configuration: configuration)) == true
+            let agentStopped = stopRequested && !isRunning
+            lastBlockers = StoppedRuntimeVerification.blockers(
+                agentStopped: agentStopped,
+                systemDNSRestored: systemDNSRestored,
+                health: observed
+            )
+            if lastBlockers.isEmpty {
+                queue.sync { verifiedStoppedHealth = observed }
+                ServiceLog.info(
+                    "event=network_restore_verification result=success attempts=\(attempts)"
+                )
+                return true
+            }
+            guard Date() < deadline else { break }
+            usleep(Self.stoppedVerificationPollMicroseconds)
         }
-        let verified = agentStopped
-            && !isRunning
-            && !observed.controllerReachable
-            && !observed.tunEnabled
-            && observed.tunInterface == nil
-            && !observed.fakeIPRouteReady
-            && !observed.dnsBridgeReady
-            && !observed.mihomoDNSReady
-            && !observed.systemDNSManaged
-            && observed.networkConsistent
-        queue.sync {
-            verifiedStoppedHealth = verified ? observed : nil
-        }
-        return verified
+        queue.sync { verifiedStoppedHealth = nil }
+        ServiceLog.error(
+            "event=network_restore_verification result=failed attempts=\(attempts) " +
+            "blockers=\(lastBlockers.joined(separator: ","))"
+        )
+        return false
     }
 
     func restart() throws {

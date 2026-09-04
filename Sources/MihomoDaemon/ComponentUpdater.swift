@@ -368,10 +368,23 @@ final class ComponentUpdater: @unchecked Sendable {
                 previousDigests: previousDigests,
                 replacementDigests: replacementDigests
             )
-            try writePending(pending)
             let wasRunning = agent.isRunning
             guard agent.stopAndRestoreVerified() else {
                 throw ControllerBrokerCriticalError.unsafeGlobalRuntime
+            }
+            // No component bytes can change before the old runtime is proven
+            // stopped. Once pending is published, retain its transaction until
+            // clearPending removes both authorities or the replacement daemon
+            // completes boot validation. This prevents a write/permission
+            // failure from leaving pending without its rollback directory.
+            preserveTransactionForRestart = true
+            do {
+                try writePending(pending)
+            } catch {
+                if !FileManager.default.fileExists(atPath: pendingURL.path) {
+                    preserveTransactionForRestart = false
+                }
+                throw error
             }
             do {
                 for component in replacementOrder where changed.contains(component) {
@@ -405,12 +418,14 @@ final class ComponentUpdater: @unchecked Sendable {
                     }
                     try writeInstalledVersion(package.appVersion)
                     try clearPending(pending)
+                    preserveTransactionForRestart = false
                 }
             } catch {
                 _ = agent.stopAndRestoreVerified()
                 do {
                     try restore(pending)
                     try clearPending(pending)
+                    preserveTransactionForRestart = false
                 } catch {
                     preserveTransactionForRestart = true
                     recoveryRequired = true

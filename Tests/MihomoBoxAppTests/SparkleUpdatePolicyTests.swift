@@ -15,6 +15,8 @@ final class SparkleUpdatePolicyTests: XCTestCase {
       "SUVerifyUpdateBeforeExtraction": true,
       "SURequireSignedFeed": true,
       "SUSignedFeedFailureExpirationInterval": 0,
+      "SUScheduledCheckInterval": 21_600,
+      "SUScheduledImpatientCheckInterval": 43_200,
     ])
     defer { placeholder.remove() }
     XCTAssertFalse(SparkleUpdateController.validConfiguration(in: placeholder.bundle))
@@ -31,6 +33,26 @@ final class SparkleUpdatePolicyTests: XCTestCase {
     XCTAssertFalse(SparkleUpdateController.validConfiguration(in: development.bundle))
   }
 
+  func testImpatientIntervalMustExistAndExceedScheduledChecks() throws {
+    let base: [String: Any] = [
+      "SUPublicEDKey": Data(repeating: 7, count: 32).base64EncodedString(),
+      "SUFeedURL": "https://example.com/appcast.xml",
+      "SUVerifyUpdateBeforeExtraction": true,
+      "SURequireSignedFeed": true,
+      "SUSignedFeedFailureExpirationInterval": 0,
+      "SUScheduledCheckInterval": 21_600,
+    ]
+    let missing = try BundleFixture(info: base)
+    defer { missing.remove() }
+    XCTAssertFalse(SparkleUpdateController.validConfiguration(in: missing.bundle))
+
+    var tooShort = base
+    tooShort["SUScheduledImpatientCheckInterval"] = 21_600
+    let invalid = try BundleFixture(info: tooShort)
+    defer { invalid.remove() }
+    XCTAssertFalse(SparkleUpdateController.validConfiguration(in: invalid.bundle))
+  }
+
   func testSignedHTTPSFeedWithZeroFallbackIsAccepted() throws {
     let valid = try BundleFixture(info: [
       "SUPublicEDKey": Data(repeating: 7, count: 32).base64EncodedString(),
@@ -38,6 +60,8 @@ final class SparkleUpdatePolicyTests: XCTestCase {
       "SUVerifyUpdateBeforeExtraction": true,
       "SURequireSignedFeed": true,
       "SUSignedFeedFailureExpirationInterval": 0,
+      "SUScheduledCheckInterval": 21_600,
+      "SUScheduledImpatientCheckInterval": 43_200,
     ])
     defer { valid.remove() }
     XCTAssertTrue(SparkleUpdateController.validConfiguration(in: valid.bundle))

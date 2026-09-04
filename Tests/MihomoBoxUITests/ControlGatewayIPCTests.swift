@@ -7,7 +7,7 @@ import XCTest
 final class ControlGatewayIPCTests: XCTestCase {
   func testReadRequestsMapToTypedXPCOperationsAndDecodePayloads() async throws {
     let session = ScriptedControlSession(steps: [
-      .success(json: #"{"version":"v1.19.28","meta":true}"#),
+      .success(json: #"{"version":"v1.19.30","meta":true}"#),
       .success(json: #"{"mode":"rule","allow-lan":true,"tun":{"enable":true}}"#),
     ])
     let factory = ControlSessionFactoryBox(sessions: [session])
@@ -16,7 +16,7 @@ final class ControlGatewayIPCTests: XCTestCase {
     let version = try await gateway.fetchVersion()
     let config = try await gateway.fetchConfig()
 
-    XCTAssertEqual(version.version, "v1.19.28")
+    XCTAssertEqual(version.version, "v1.19.30")
     XCTAssertTrue(version.meta)
     XCTAssertEqual(config.mode, "rule")
     XCTAssertTrue(config.allowLAN)
@@ -36,14 +36,14 @@ final class ControlGatewayIPCTests: XCTestCase {
   func testReadReconnectsOnceAfterDisconnection() async throws {
     let disconnected = ScriptedControlSession(steps: [.failure(.connectionFailed)])
     let recovered = ScriptedControlSession(steps: [
-      .success(json: #"{"version":"v1.19.28"}"#)
+      .success(json: #"{"version":"v1.19.30"}"#)
     ])
     let factory = ControlSessionFactoryBox(sessions: [disconnected, recovered])
     let gateway = ControlGateway(makeSession: { try factory.makeSession() })
 
     let version = try await gateway.fetchVersion()
 
-    XCTAssertEqual(version.version, "v1.19.28")
+    XCTAssertEqual(version.version, "v1.19.30")
     XCTAssertEqual(factory.makeCount, 2)
     XCTAssertEqual(disconnected.recordedRequests.map(\.operation), [.controllerVersion])
     XCTAssertEqual(recovered.recordedRequests.map(\.operation), [.controllerVersion])
@@ -221,7 +221,7 @@ final class ControlGatewayIPCTests: XCTestCase {
 
   func testStreamUsesIndependentSessionAndClosesItOnCancellation() async throws {
     let ordinarySession = ScriptedControlSession(steps: [
-      .success(json: #"{"version":"v1.19.28"}"#)
+      .success(json: #"{"version":"v1.19.30"}"#)
     ])
     let streamClosed = expectation(description: "controller stream closed")
     let streamSession = BlockingStreamControlSession(

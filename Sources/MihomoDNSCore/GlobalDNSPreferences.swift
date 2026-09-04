@@ -73,6 +73,23 @@ struct ResolverTopologyObservation: Equatable, Sendable {
     }
 }
 
+enum ManagedDNSDictionaryCleanup {
+    /// Returns an updated dictionary only when ServerAddresses exactly matches
+    /// the managed value. An empty dictionary tells the caller to remove the
+    /// whole path; nil means ownership cannot be proved and nothing may change.
+    static func removingExactServers(
+        _ servers: [String],
+        from dictionary: [String: Any]
+    ) -> [String: Any]? {
+        guard dictionary[kSCPropNetDNSServerAddresses as String] as? [String] == servers else {
+            return nil
+        }
+        var updated = dictionary
+        updated.removeValue(forKey: kSCPropNetDNSServerAddresses as String)
+        return updated
+    }
+}
+
 public final class GlobalDNSPreferences: @unchecked Sendable {
     private let lock = NSLock()
     private let servers: [String]
@@ -286,20 +303,13 @@ public final class GlobalDNSPreferences: @unchecked Sendable {
         guard FileManager.default.fileExists(atPath: backupPath) else {
             let preferences = try createLockedPreferences()
             defer { SCPreferencesUnlock(preferences) }
-            var changed = false
-            var paths = [try currentGlobalDNSPath(preferences)]
-            let dynamicServiceID = preferencesID == nil ? (try? dynamicDNSContext().serviceID) : nil
-            let managedPath = try currentManagedDNSPath(preferences, dynamicServiceID: dynamicServiceID)
-            if !paths.contains(managedPath) { paths.append(managedPath) }
-            for path in paths {
-                let current = SCPreferencesPathGetValue(preferences, path as CFString) as? [String: Any]
-                if current?[kSCPropNetDNSServerAddresses as String] as? [String] == servers {
-                    guard SCPreferencesPathRemoveValue(preferences, path as CFString) else {
-                        throw GlobalDNSPreferencesError.pathOperationFailed("remove", SCError())
-                    }
-                    changed = true
-                }
-            }
+            // A crash, an older build, or a primary-service transition can
+            // leave our exact loopback resolver on a service that is no longer
+            // current. With no backup there is nothing safe to reconstruct, so
+            // enumerate every DNS scope and remove only the ServerAddresses
+            // value that exactly matches ours. Preserve search domains and all
+            // other externally-owned DNS keys.
+            var changed = try removeUnbackedManagedPersistentState(preferences)
             if changed {
                 try commitAndApply(preferences)
             }
@@ -335,8 +345,19 @@ public final class GlobalDNSPreferences: @unchecked Sendable {
             }
             changed = true
         }
+        let backedPaths = Set(entries.keys)
+        if try removeUnbackedManagedPersistentState(
+            preferences,
+            excluding: backedPaths
+        ) {
+            changed = true
+        }
         if changed { try commitAndApply(preferences) }
         if try restoreDynamicState(backup["DynamicEntries"]) { changed = true }
+        let backedDynamicKeys = Set(
+            (backup["DynamicEntries"] as? [String: Any])?.keys.map { $0 } ?? []
+        )
+        if try removeManagedDynamicState(excluding: backedDynamicKeys) { changed = true }
         try FileManager.default.removeItem(atPath: backupPath)
         ServiceLog.info("event=system_dns_restored changed=\(changed)")
     }
@@ -374,6 +395,58 @@ public final class GlobalDNSPreferences: @unchecked Sendable {
             return "\(currentSet)/Network/Global/DNS"
         }
         return "\(currentSet)/Network/Service/\(serviceID)/DNS"
+    }
+
+    private func allPersistentDNSPaths(_ preferences: SCPreferences) throws -> [String] {
+        guard let currentSet = SCPreferencesGetValue(preferences, kSCPrefCurrentSet) as? String else {
+            throw GlobalDNSPreferencesError.currentSetMissing
+        }
+        let servicesPath = "\(currentSet)/Network/Service"
+        let services = (
+            SCPreferencesPathGetValue(preferences, servicesPath as CFString) as? [String: Any]
+        ) ?? [:]
+        var paths = ["\(currentSet)/Network/Global/DNS"]
+        paths.append(contentsOf: services.keys.sorted().compactMap { serviceID in
+            isSafeServiceID(serviceID) ? "\(servicesPath)/\(serviceID)/DNS" : nil
+        })
+        return paths
+    }
+
+    private func removeUnbackedManagedPersistentState(
+        _ preferences: SCPreferences,
+        excluding backedPaths: Set<String> = []
+    ) throws -> Bool {
+        var changed = false
+        for path in try allPersistentDNSPaths(preferences) where !backedPaths.contains(path) {
+            guard let current = SCPreferencesPathGetValue(
+                preferences,
+                path as CFString
+            ) as? [String: Any],
+                let updated = ManagedDNSDictionaryCleanup.removingExactServers(
+                    servers,
+                    from: current
+                ) else {
+                continue
+            }
+            let succeeded: Bool
+            if updated.isEmpty {
+                succeeded = SCPreferencesPathRemoveValue(preferences, path as CFString)
+            } else {
+                succeeded = SCPreferencesPathSetValue(
+                    preferences,
+                    path as CFString,
+                    updated as CFDictionary
+                )
+            }
+            guard succeeded else {
+                throw GlobalDNSPreferencesError.pathOperationFailed(
+                    "remove unbacked managed DNS",
+                    SCError()
+                )
+            }
+            changed = true
+        }
+        return changed
     }
 
     private func isSafeServiceID(_ value: String) -> Bool {
@@ -533,26 +606,41 @@ public final class GlobalDNSPreferences: @unchecked Sendable {
         return changed
     }
 
-    private func removeManagedDynamicState() throws -> Bool {
+    private func removeManagedDynamicState(excluding backedKeys: Set<String> = []) throws -> Bool {
         guard preferencesID == nil else { return false }
-        let dynamic: (
-            store: SCDynamicStore,
-            key: String,
-            value: [String: Any]?,
-            serviceID: String
-        )
-        do {
-            dynamic = try dynamicDNSContext()
-        } catch GlobalDNSPreferencesError.primaryServiceMissing {
-            return false
+        let store = try createDynamicStore("dev.linsheng.mihomo-app.daemon.dns-cleanup")
+        var keys = ["State:/Network/Global/DNS"]
+        guard let serviceKeys = SCDynamicStoreCopyKeyList(
+            store,
+            "State:/Network/Service/.*/DNS" as CFString
+        ) as? [String] else {
+            throw GlobalDNSPreferencesError.dynamicStateOperationFailed(
+                "enumerate cleanup state",
+                SCError()
+            )
         }
-        guard dynamic.value?[kSCPropNetDNSServerAddresses as String] as? [String] == servers else {
-            return false
+        keys.append(contentsOf: serviceKeys)
+        var changed = false
+        for key in Set(keys).subtracting(backedKeys).sorted() {
+            guard let current = SCDynamicStoreCopyValue(
+                store,
+                key as CFString
+            ) as? [String: Any],
+                let updated = ManagedDNSDictionaryCleanup.removingExactServers(
+                    servers,
+                    from: current
+                ) else {
+                continue
+            }
+            let succeeded = updated.isEmpty
+                ? SCDynamicStoreRemoveValue(store, key as CFString)
+                : SCDynamicStoreSetValue(store, key as CFString, updated as CFDictionary)
+            guard succeeded else {
+                throw GlobalDNSPreferencesError.dynamicStateOperationFailed("remove", SCError())
+            }
+            changed = true
         }
-        guard SCDynamicStoreRemoveValue(dynamic.store, dynamic.key as CFString) else {
-            throw GlobalDNSPreferencesError.dynamicStateOperationFailed("remove", SCError())
-        }
-        return true
+        return changed
     }
 
     private func loadBackup(required: Bool = false) throws -> [String: Any] {
