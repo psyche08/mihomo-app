@@ -5,6 +5,22 @@ import Foundation
 /// This is intentionally independent from the view implementation so a later
 /// pinned editor engine can reuse the same completion and highlighting model.
 enum MihomoProfileLanguage {
+  static let managedPaths = [
+    "dns.listen",
+    "dns.respect-rules",
+    "dns.fake-ip-ttl",
+    "dns.nameserver",
+    "dns.direct-nameserver",
+    "dns.proxy-server-nameserver",
+    "external-controller",
+    "secret",
+    "log-level",
+  ]
+
+  static let managedFieldsNotice =
+    "MihomoBox normalizes managed networking fields when this profile is applied: "
+    + managedPaths.joined(separator: ", ") + "."
+
   static let keys = [
     "allow-lan", "authentication", "bind-address", "cgroup-auto-redir",
     "cgroup-level", "client-fingerprint", "clash-for-android",

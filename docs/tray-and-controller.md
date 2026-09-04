@@ -53,6 +53,15 @@ receives the validated bytes through authenticated XPC; editing an inactive
 profile does not activate it. The user mirror is rolled back if synchronization
 fails.
 
+The editor resolves active-profile state from the installed daemon immediately
+before saving instead of trusting a possibly stale user mirror. Active-profile
+saves are labelled **Validate & Apply**; inactive saves state that a later switch
+is required. Syntax highlighting is delayed until typing pauses and never
+rewrites text attributes while an input method has marked text, so YAML editing
+does not disturb composition or the insertion point. The editor also identifies
+the DNS forwarding, controller, secret, and log-level fields that MihomoBox
+normalizes to preserve the privilege and DNS-recursion boundaries.
+
 **Tools › Uninstall Helper…** is available only when both the signed installer
 and managed root artifacts are present. After explicit confirmation it runs the
 verified App-snapshot installer with `--restore`: Mihomo is stopped, real system

@@ -7,12 +7,18 @@ enum ProfileEditorPrompt {
 
   private static var activeControllers: [ObjectIdentifier: ProfileEditorWindowController] = [:]
 
-  static func run(name: String, contents: String, save: @escaping Save) async throws {
+  static func run(
+    name: String,
+    contents: String,
+    activatesOnSave: Bool,
+    save: @escaping Save
+  ) async throws {
     try await withCheckedThrowingContinuation { continuation in
       var controller: ProfileEditorWindowController?
       controller = ProfileEditorWindowController(
         name: name,
         contents: contents,
+        activatesOnSave: activatesOnSave,
         save: save
       ) { result in
         if let controller {
@@ -42,19 +48,24 @@ private final class ProfileEditorWindowController: NSWindowController,
   private let textView = NSTextView()
   private let errorLabel = NSTextField(wrappingLabelWithString: "")
   private let detailLabel = NSTextField(labelWithString: "")
+  private let managedFieldsLabel = NSTextField(wrappingLabelWithString: "")
   private let saveButton = NSButton(title: "Validate & Save", target: nil, action: nil)
   private let cancelButton = NSButton(title: "Cancel", target: nil, action: nil)
   private var finished = false
   private var applyingHighlight = false
   private var saving = false
+  private var pendingHighlight: DispatchWorkItem?
+  private let activatesOnSave: Bool
 
   init(
     name: String,
     contents: String,
+    activatesOnSave: Bool,
     save: @escaping ProfileEditorPrompt.Save,
     completion: @escaping (Result<Void, Error>) -> Void
   ) {
     saveOperation = save
+    self.activatesOnSave = activatesOnSave
     self.completion = completion
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 920, height: 680),
@@ -86,6 +97,11 @@ private final class ProfileEditorWindowController: NSWindowController,
       "YAML · Mihomo key completion: Option-Escape · Save runs the bundled Mihomo validator"
     detailLabel.textColor = .secondaryLabelColor
     detailLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+
+    managedFieldsLabel.stringValue = MihomoProfileLanguage.managedFieldsNotice
+    managedFieldsLabel.textColor = .systemOrange
+    managedFieldsLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+    managedFieldsLabel.maximumNumberOfLines = 2
 
     textView.string = contents
     textView.delegate = self
@@ -125,9 +141,13 @@ private final class ProfileEditorWindowController: NSWindowController,
     cancelButton.keyEquivalent = "\u{1b}"
     saveButton.target = self
     saveButton.action = #selector(save)
-    saveButton.keyEquivalent = "\r"
+    saveButton.title = activatesOnSave ? "Validate & Apply" : "Validate & Save"
+    saveButton.keyEquivalent = "s"
+    saveButton.keyEquivalentModifierMask = [.command]
 
-    for view in [title, detailLabel, scroll, errorLabel, cancelButton, saveButton] {
+    for view in [
+      title, detailLabel, managedFieldsLabel, scroll, errorLabel, cancelButton, saveButton,
+    ] {
       view.translatesAutoresizingMaskIntoConstraints = false
       contentView.addSubview(view)
     }
@@ -138,12 +158,18 @@ private final class ProfileEditorWindowController: NSWindowController,
       detailLabel.leadingAnchor.constraint(equalTo: title.leadingAnchor),
       detailLabel.trailingAnchor.constraint(equalTo: title.trailingAnchor),
       detailLabel.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 4),
+      managedFieldsLabel.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+      managedFieldsLabel.trailingAnchor.constraint(equalTo: title.trailingAnchor),
+      managedFieldsLabel.topAnchor.constraint(equalTo: detailLabel.bottomAnchor, constant: 6),
       scroll.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16),
       scroll.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
-      scroll.topAnchor.constraint(equalTo: detailLabel.bottomAnchor, constant: 10),
+      scroll.topAnchor.constraint(equalTo: managedFieldsLabel.bottomAnchor, constant: 10),
       scroll.bottomAnchor.constraint(equalTo: errorLabel.topAnchor, constant: -10),
       errorLabel.leadingAnchor.constraint(equalTo: scroll.leadingAnchor),
-      errorLabel.trailingAnchor.constraint(lessThanOrEqualTo: cancelButton.leadingAnchor, constant: -12),
+      errorLabel.trailingAnchor.constraint(
+        lessThanOrEqualTo: cancelButton.leadingAnchor,
+        constant: -12
+      ),
       errorLabel.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -16),
       cancelButton.trailingAnchor.constraint(equalTo: saveButton.leadingAnchor, constant: -8),
       cancelButton.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -14),
@@ -160,7 +186,7 @@ private final class ProfileEditorWindowController: NSWindowController,
     guard !applyingHighlight else { return }
     errorLabel.isHidden = true
     updateDetails()
-    applyHighlighting()
+    scheduleHighlighting()
   }
 
   func textView(
@@ -187,6 +213,7 @@ private final class ProfileEditorWindowController: NSWindowController,
 
   @objc private func save() {
     guard !saving else { return }
+    pendingHighlight?.cancel()
     saving = true
     saveButton.isEnabled = false
     cancelButton.isEnabled = false
@@ -213,23 +240,43 @@ private final class ProfileEditorWindowController: NSWindowController,
 
   private func finish(_ result: Result<Void, Error>) {
     guard !finished else { return }
+    pendingHighlight?.cancel()
+    pendingHighlight = nil
     finished = true
     completion(result)
   }
 
   private func updateDetails() {
-    let lineCount = max(1, textView.string.reduce(into: 1) { count, character in
-      if character == "\n" { count += 1 }
-    })
+    let lineCount = max(
+      1,
+      textView.string.reduce(into: 1) { count, character in
+        if character == "\n" { count += 1 }
+      }
+    )
     detailLabel.stringValue =
-      "YAML · \(lineCount) lines · Mihomo completion: Option-Escape · Validated before save"
+      "YAML · \(lineCount) lines · Option-Escape completion · "
+      + (activatesOnSave ? "⌘S validates and applies" : "⌘S validates and saves; switch to apply")
+  }
+
+  private func scheduleHighlighting() {
+    pendingHighlight?.cancel()
+    let work = DispatchWorkItem { [weak self] in
+      guard let self else { return }
+      self.pendingHighlight = nil
+      if self.textView.hasMarkedText() {
+        self.scheduleHighlighting()
+        return
+      }
+      self.applyHighlighting()
+    }
+    pendingHighlight = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(120), execute: work)
   }
 
   private func applyHighlighting() {
-    guard let storage = textView.textStorage else { return }
+    guard !textView.hasMarkedText(), let storage = textView.textStorage else { return }
     applyingHighlight = true
     defer { applyingHighlight = false }
-    let selection = textView.selectedRanges
     let full = NSRange(location: 0, length: storage.length)
     storage.beginEditing()
     storage.setAttributes(
@@ -256,7 +303,6 @@ private final class ProfileEditorWindowController: NSWindowController,
       storage.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: range)
     }
     storage.endEditing()
-    textView.selectedRanges = selection
     textView.typingAttributes = [
       .font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
       .foregroundColor: NSColor.textColor,

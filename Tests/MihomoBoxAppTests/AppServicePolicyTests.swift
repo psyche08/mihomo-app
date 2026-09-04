@@ -359,6 +359,21 @@ final class AppServicePolicyTests: XCTestCase {
       ["proxy-providers"]
     )
     XCTAssertTrue(MihomoProfileLanguage.completions(for: "tun").contains("tun"))
+    XCTAssertEqual(
+      MihomoProfileLanguage.managedPaths,
+      [
+        "dns.listen",
+        "dns.respect-rules",
+        "dns.fake-ip-ttl",
+        "dns.nameserver",
+        "dns.direct-nameserver",
+        "dns.proxy-server-nameserver",
+        "external-controller",
+        "secret",
+        "log-level",
+      ]
+    )
+    XCTAssertTrue(MihomoProfileLanguage.managedFieldsNotice.contains("dns.nameserver"))
   }
 
   func testInstallerResourceMustBeRegularAndExecutable() throws {

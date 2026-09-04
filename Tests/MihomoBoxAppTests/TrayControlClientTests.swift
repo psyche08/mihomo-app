@@ -80,6 +80,38 @@ final class TrayControlClientTests: XCTestCase {
     }
     XCTAssertEqual(session.operations, [.trayState])
   }
+
+  func testInstalledProfileEditUsesDaemonActiveStateInsteadOfLocalMirror() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("mihomobox-profile-authority-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let profiles = root.appendingPathComponent("profiles")
+    try FileManager.default.createDirectory(at: profiles, withIntermediateDirectories: true)
+    try Data("mode: rule\n".utf8).write(to: profiles.appendingPathComponent("local.yaml"))
+    try Data("local.yaml\n".utf8).write(to: root.appendingPathComponent("active-profile"))
+
+    let payload = Data(
+      #"{"profiles":["local.yaml","remote.yaml"],"active_profile":"remote.yaml"}"#.utf8
+    )
+    let session = QueueSession(responses: [
+      ControlResponse(success: true, payload: payload),
+      ControlResponse(success: true, payload: payload),
+    ])
+    let client = TrayControlClient(makeSession: { session })
+    let coordinator = ProfileCoordinator(control: client, root: root)
+
+    let remoteActive = try await coordinator.editedProfileIsActive(
+      named: "remote.yaml",
+      daemonInstalled: true
+    )
+    let localActive = try await coordinator.editedProfileIsActive(
+      named: "local.yaml",
+      daemonInstalled: true
+    )
+    XCTAssertTrue(remoteActive)
+    XCTAssertFalse(localActive)
+    XCTAssertEqual(session.operations, [.listProfiles, .listProfiles])
+  }
 }
 
 private final class QueueSession: AppControlSession, @unchecked Sendable {

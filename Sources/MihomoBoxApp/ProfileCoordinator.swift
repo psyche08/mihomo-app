@@ -175,9 +175,20 @@ actor ProfileCoordinator {
       guard let contents = String(data: bytes, encoding: .utf8) else {
         throw ProfileCoordinatorError.invalidFile
       }
-      let activate = localList().activeProfile == name
-      try await ProfileEditorPrompt.run(name: name, contents: contents) { edited in
+      let activatesOnSave = try await editedProfileIsActive(
+        named: name,
+        daemonInstalled: daemonInstalled
+      )
+      try await ProfileEditorPrompt.run(
+        name: name,
+        contents: contents,
+        activatesOnSave: activatesOnSave
+      ) { edited in
         do {
+          let activate = try await self.editedProfileIsActive(
+            named: name,
+            daemonInstalled: daemonInstalled
+          )
           try await self.saveEditedProfile(
             name: name,
             bytes: Data(edited.utf8),
@@ -232,6 +243,17 @@ actor ProfileCoordinator {
   }
 
   func localState() -> ProfileList { localList() }
+
+  /// The daemon is authoritative once installed. The user mirror remains the
+  /// source of editable bytes, but a stale local active-profile marker must not
+  /// decide whether a save restarts the live runtime.
+  func editedProfileIsActive(named rawName: String, daemonInstalled: Bool) async throws -> Bool {
+    let name = try Self.validatedName(rawName)
+    if daemonInstalled {
+      return try await control.listProfiles().activeProfile == name
+    }
+    return localList().activeProfile == name
+  }
 
   private func withOperation<Value: Sendable>(
     _ body: () async throws -> Value
