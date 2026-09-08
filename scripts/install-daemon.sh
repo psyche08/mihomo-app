@@ -11,6 +11,16 @@ CONTROLLER_METADATA="$APP_SUPPORT/controller.json"
 COMPONENT_VERSION="$APP_SUPPORT/component-version"
 COMPONENT_PENDING="$APP_SUPPORT/component-update-pending.plist"
 PROVISIONING_STATE="$APP_SUPPORT/provisioning"
+LOCAL_DOH_DIR="$APP_SUPPORT/local-doh"
+LOCAL_DOH_CERT="$LOCAL_DOH_DIR/server.crt"
+LOCAL_DOH_KEY="$LOCAL_DOH_DIR/server.key"
+LOCAL_DOH_FINGERPRINT="$LOCAL_DOH_DIR/certificate.sha1"
+LOCAL_DOH_STATE="$APP_SUPPORT/local-doh-enabled"
+LOCAL_DOH_PROFILE_IDENTIFIER="dev.linsheng.mihomobox.local-doh"
+LOCAL_DOH_ROLLBACK_DIR=""
+LOCAL_DOH_CERT_CREATED=0
+LOCAL_DOH_TRUST_ADDED=0
+LOCAL_DOH_STATE_EXISTED=0
 INSTALL_LOCK="/Library/Application Support/.mihomobox-install.lock"
 CLI_ENTRY="/usr/local/bin/mihomoboxctl"
 CLI_TARGET_METADATA="$APP_SUPPORT/cli-target"
@@ -34,6 +44,8 @@ RESTART_SERVICE=0
 IMPORT_PROFILE=""
 SWITCH_PROFILE=""
 ACTIVATE_PROFILE=0
+INSTALL_LOCAL_DOH=0
+REMOVE_LOCAL_DOH=0
 ROLLBACK_DIR=""
 PROFILE_ROLLBACK_DIR=""
 PROFILE_DAEMON_WAS_RUNNING=0
@@ -41,6 +53,7 @@ PREVIOUS_DAEMON_RUNNING=0
 PREVIOUS_RENAMED_DAEMON_RUNNING=0
 PREVIOUS_LEGACY_RUNNING=0
 PREVIOUS_MANAGED_RUNTIME_RUNNING=0
+PREVIOUS_LOCAL_DOH_ENABLED=0
 PREVIOUS_CLI_LINK=""
 PREVIOUS_CLI_LINK_PRESENT=0
 CLI_LINK_CHANGED=0
@@ -48,7 +61,7 @@ UNVERSIONED_INSTALLATION_AUTHORIZED=0
 INSTALL_LOCK_HELD=0
 
 usage() {
-  echo "usage: $0 [--app-bundle PATH --dry-run] [--restore | --restore-network | --start | --restart | --import-profile PATH [--activate] | --switch-profile NAME]"
+  echo "usage: $0 [--app-bundle PATH --dry-run] [--restore | --restore-network | --start | --restart | --install-local-doh | --remove-local-doh | --import-profile PATH [--activate] | --switch-profile NAME]"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -67,6 +80,8 @@ while [[ $# -gt 0 ]]; do
     --import-profile) IMPORT_PROFILE="${2:?missing profile path}"; shift 2 ;;
     --switch-profile) SWITCH_PROFILE="${2:?missing profile name}"; shift 2 ;;
     --activate) ACTIVATE_PROFILE=1; shift ;;
+    --install-local-doh) INSTALL_LOCAL_DOH=1; shift ;;
+    --remove-local-doh) REMOVE_LOCAL_DOH=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -76,7 +91,7 @@ if [[ -n "$IMPORT_PROFILE" && -n "$SWITCH_PROFILE" ]]; then
   echo "--import-profile and --switch-profile are mutually exclusive" >&2
   exit 2
 fi
-if [[ $((RESTORE + RESTORE_NETWORK + START_SERVICE + RESTART_SERVICE + (${#IMPORT_PROFILE} > 0) + (${#SWITCH_PROFILE} > 0))) -gt 1 ]]; then
+if [[ $((RESTORE + RESTORE_NETWORK + START_SERVICE + RESTART_SERVICE + INSTALL_LOCAL_DOH + REMOVE_LOCAL_DOH + (${#IMPORT_PROFILE} > 0) + (${#SWITCH_PROFILE} > 0))) -gt 1 ]]; then
   echo "select only one restore or profile operation" >&2
   exit 2
 fi
@@ -581,9 +596,27 @@ managed_network_ready() {
   local health
   health="$("$APP_SUPPORT/mihomo-agent" --config "$APP_SUPPORT/daemon.json" --health)" || return 1
   local field
-  for field in controller_reachable dns_bridge_ready mihomo_dns_ready fake_ip_route_ready system_dns_managed tun_enabled network_consistent; do
+  for field in controller_reachable mihomo_dns_ready fake_ip_route_ready tun_enabled network_consistent; do
     [[ "$health" == *"\"$field\":true"* ]] || return 1
   done
+  if [[ "$(/usr/bin/plutil -extract manageSystemDNS raw -o - "$APP_SUPPORT/daemon.json" 2>/dev/null)" == "true" ]]; then
+    [[ "$health" == *'"dns_bridge_ready":true'* &&
+      "$health" == *'"system_dns_managed":true'* ]] || return 1
+  else
+    [[ "$health" == *'"system_dns_managed":false'* ]] || return 1
+  fi
+}
+
+wait_for_runtime_dns_mode() {
+  if [[ "$(/usr/bin/plutil -extract manageSystemDNS raw -o - "$APP_SUPPORT/daemon.json" 2>/dev/null)" == "true" ]]; then
+    wait_for "macOS PrimaryService DNS preferences" \
+      "$APP_SUPPORT/mihomo-agent" --config "$APP_SUPPORT/daemon.json" --check-system-dns
+    wait_for "effective macOS DNS" \
+      /bin/sh -c "/usr/sbin/scutil --dns | /usr/bin/grep -q '127\\.0\\.0\\.53'"
+  else
+    wait_for "restored macOS default DNS" \
+      "$APP_SUPPORT/mihomo-agent" --config "$APP_SUPPORT/daemon.json" --check-system-dns-restored
+  fi
 }
 
 managed_controller_ready() {
@@ -706,6 +739,7 @@ prepare_profile() {
     "$AGENT_SOURCE" --configure-profile \
       --profile "$output" \
       --profile-backup "$backup" \
+      --runtime-config "$APP_SUPPORT/daemon.json" \
       --secret-file "$CONTROLLER_SECRET" \
       --controller-metadata "$CONTROLLER_METADATA" \
       --daemon-config "$APP_SUPPORT/daemon.json"
@@ -716,7 +750,8 @@ prepare_profile() {
   else
     "$AGENT_SOURCE" --configure-profile \
       --profile "$output" \
-      --profile-backup "$backup"
+      --profile-backup "$backup" \
+      --runtime-config "$APP_SUPPORT/daemon.json"
   fi
   /bin/rm -f "$backup"
   "$APP_SUPPORT/mihomo" -t -d "$MIHOMO_DATA" -f "$output"
@@ -840,8 +875,7 @@ switch_profile() {
     /bin/launchctl enable "system/$LABEL"
     /bin/launchctl kickstart -k "system/$LABEL"
     wait_for "authenticated Mihomo controller after profile switch" managed_controller_ready
-    wait_for "macOS PrimaryService DNS after profile switch" \
-      "$APP_SUPPORT/mihomo-agent" --config "$APP_SUPPORT/daemon.json" --check-system-dns
+    wait_for_runtime_dns_mode
     wait_for "fully managed network after profile switch" managed_network_ready
   else
     echo "daemon is not loaded; profile will take effect on the next start"
@@ -894,6 +928,13 @@ record_installation_state() {
   if [[ $((PREVIOUS_DAEMON_RUNNING + PREVIOUS_RENAMED_DAEMON_RUNNING)) -gt 0 &&
     ! -e "$PROVISIONING_STATE" && ! -L "$PROVISIONING_STATE" ]]; then
     PREVIOUS_MANAGED_RUNTIME_RUNNING=1
+  fi
+  if [[ -f "$APP_SUPPORT/daemon.json" && ! -L "$APP_SUPPORT/daemon.json" &&
+    -f "$LOCAL_DOH_CERT" && ! -L "$LOCAL_DOH_CERT" &&
+    -f "$LOCAL_DOH_KEY" && ! -L "$LOCAL_DOH_KEY" ]] &&
+    /usr/bin/plutil -extract localDoH.serverURL raw -o - \
+      "$APP_SUPPORT/daemon.json" >/dev/null 2>&1; then
+    PREVIOUS_LOCAL_DOH_ENABLED=1
   fi
   if [[ -L "$CLI_ENTRY" ]]; then
     PREVIOUS_CLI_LINK="$(/usr/bin/readlink "$CLI_ENTRY")"
@@ -1071,6 +1112,8 @@ rollback_installation() {
 
 restore() {
   require_root
+  /usr/bin/profiles remove -type configuration \
+    -identifier "$LOCAL_DOH_PROFILE_IDENTIFIER" -forced >/dev/null 2>&1 || true
   if /bin/launchctl print "system/$LABEL" >/dev/null 2>&1; then
     run /bin/launchctl bootout "system/$LABEL"
   fi
@@ -1088,6 +1131,7 @@ restore() {
   fi
   run /bin/rm -f "$PLIST" "$RENAMED_PLIST"
   remove_cli_entry
+  remove_local_doh_trust
   run /bin/rm -rf "$APP_SUPPORT" "$LOG_DIR"
   echo "restored system DNS and removed $LABEL"
 }
@@ -1122,10 +1166,7 @@ start_service() {
   run /bin/launchctl enable "system/$LABEL"
   run /bin/launchctl kickstart -k "system/$LABEL"
   wait_for "authenticated Mihomo controller" managed_controller_ready
-  wait_for "macOS PrimaryService DNS preferences" \
-    "$APP_SUPPORT/mihomo-agent" --config "$APP_SUPPORT/daemon.json" --check-system-dns
-  wait_for "effective macOS DNS" \
-    /bin/sh -c "/usr/sbin/scutil --dns | /usr/bin/grep -q '127\\.0\\.0\\.53'"
+  wait_for_runtime_dns_mode
   wait_for "fully managed network" managed_network_ready
   echo "started $LABEL with a consistent network"
 }
@@ -1148,6 +1189,204 @@ restore_network() {
     run "$APP_SUPPORT/mihomo-agent" --config "$APP_SUPPORT/daemon.json" --restore-system-dns
   fi
   echo "restored network and stopped Mihomo; configuration and installation were preserved"
+}
+
+local_doh_fingerprint() {
+  /usr/bin/openssl x509 -in "$LOCAL_DOH_CERT" -noout -fingerprint -sha1 \
+    | /usr/bin/sed 's/^.*=//;s/://g'
+}
+
+remove_local_doh_trust() {
+  local fingerprint=""
+  if [[ -f "$LOCAL_DOH_FINGERPRINT" && ! -L "$LOCAL_DOH_FINGERPRINT" ]]; then
+    fingerprint="$(/usr/bin/sed -n '1p' "$LOCAL_DOH_FINGERPRINT")"
+  elif [[ -f "$LOCAL_DOH_CERT" && ! -L "$LOCAL_DOH_CERT" ]]; then
+    fingerprint="$(local_doh_fingerprint 2>/dev/null || true)"
+  fi
+  if [[ "$fingerprint" =~ ^[0-9A-Fa-f]{40}$ ]]; then
+    /usr/bin/security delete-certificate -Z "$fingerprint" \
+      /Library/Keychains/System.keychain >/dev/null 2>&1 || true
+  fi
+}
+
+rollback_local_doh_install() {
+  local status=$?
+  trap - ERR
+  echo "local DoH preparation failed; restoring the previous managed network" >&2
+  /bin/launchctl bootout "system/$LABEL" >/dev/null 2>&1 || true
+  wait_for_job_absent "$LABEL" || true
+  wait_for_managed_process_absent || true
+  if [[ -x "$APP_SUPPORT/mihomo-agent" && -f "$APP_SUPPORT/daemon.json" ]]; then
+    "$APP_SUPPORT/mihomo-agent" --config "$APP_SUPPORT/daemon.json" \
+      --restore-system-dns >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$LOCAL_DOH_ROLLBACK_DIR" && -d "$LOCAL_DOH_ROLLBACK_DIR" ]]; then
+    /bin/cp -p "$LOCAL_DOH_ROLLBACK_DIR/daemon.json" "$APP_SUPPORT/daemon.json" || true
+    /bin/cp -p "$LOCAL_DOH_ROLLBACK_DIR/config.yaml" "$MIHOMO_DATA/config.yaml" || true
+  fi
+  if [[ "$LOCAL_DOH_TRUST_ADDED" -eq 1 ]]; then
+    remove_local_doh_trust
+  fi
+  if [[ "$LOCAL_DOH_CERT_CREATED" -eq 1 ]]; then
+    /bin/rm -f "$LOCAL_DOH_CERT" "$LOCAL_DOH_KEY" "$LOCAL_DOH_FINGERPRINT"
+    /bin/rmdir "$LOCAL_DOH_DIR" >/dev/null 2>&1 || true
+  fi
+  if [[ "$LOCAL_DOH_STATE_EXISTED" -eq 0 ]]; then
+    /bin/rm -f "$LOCAL_DOH_STATE"
+  fi
+  if [[ -f "$PLIST" && ! -f "$PROVISIONING_STATE" ]]; then
+    /bin/launchctl bootstrap system "$PLIST" >/dev/null 2>&1 || true
+    /bin/launchctl enable "system/$LABEL" >/dev/null 2>&1 || true
+    /bin/launchctl kickstart -k "system/$LABEL" >/dev/null 2>&1 || true
+    wait_for "restored managed network" managed_network_ready || true
+  fi
+  if [[ -n "$LOCAL_DOH_ROLLBACK_DIR" ]]; then
+    /bin/rm -rf "$LOCAL_DOH_ROLLBACK_DIR"
+  fi
+  exit "$status"
+}
+
+install_local_doh() {
+  require_root
+  resolve_sources
+  [[ -x "$APP_SUPPORT/mihomo" && -f "$APP_SUPPORT/daemon.json" && -f "$ACTIVE_PROFILE" ]] || {
+    echo "install and activate a Mihomo profile before enabling local DoH" >&2
+    return 1
+  }
+  local active_name
+  active_name="$(/usr/bin/sed -n '1p' "$ACTIVE_PROFILE")"
+  validate_profile_name "$active_name"
+  local active_source="$PROFILES_DIR/$active_name"
+  [[ -f "$active_source" && ! -L "$active_source" ]] || {
+    echo "the active root-owned profile is unavailable" >&2
+    return 1
+  }
+
+  LOCAL_DOH_ROLLBACK_DIR="$(/usr/bin/mktemp -d /private/tmp/mihomobox-doh-rollback.XXXXXX)"
+  /bin/chmod 0700 "$LOCAL_DOH_ROLLBACK_DIR"
+  /bin/cp -p "$APP_SUPPORT/daemon.json" "$LOCAL_DOH_ROLLBACK_DIR/daemon.json"
+  /bin/cp -p "$MIHOMO_DATA/config.yaml" "$LOCAL_DOH_ROLLBACK_DIR/config.yaml"
+  [[ -f "$LOCAL_DOH_STATE" && ! -L "$LOCAL_DOH_STATE" ]] && LOCAL_DOH_STATE_EXISTED=1
+  trap rollback_local_doh_install ERR
+
+  if /bin/launchctl print "system/$LABEL" >/dev/null 2>&1; then
+    /bin/launchctl bootout "system/$LABEL"
+    wait_for_job_absent "$LABEL"
+  fi
+  wait_for_managed_process_absent
+  "$APP_SUPPORT/mihomo-agent" --config "$APP_SUPPORT/daemon.json" --restore-system-dns
+
+  ensure_root_directory "$LOCAL_DOH_DIR" 0700
+  local regenerate_identity=0
+  local certificate_modulus=""
+  local private_key_modulus=""
+  if [[ ! -f "$LOCAL_DOH_CERT" || ! -f "$LOCAL_DOH_KEY" ||
+    -L "$LOCAL_DOH_CERT" || -L "$LOCAL_DOH_KEY" ]]; then
+    regenerate_identity=1
+  else
+    certificate_modulus="$(/usr/bin/openssl x509 -in "$LOCAL_DOH_CERT" -noout -modulus 2>/dev/null)"
+    private_key_modulus="$(/usr/bin/openssl rsa -in "$LOCAL_DOH_KEY" -noout -modulus 2>/dev/null)"
+    if [[ -z "$certificate_modulus" || "$certificate_modulus" != "$private_key_modulus" ]] ||
+      ! /usr/bin/openssl x509 -in "$LOCAL_DOH_CERT" -noout -checkend 86400 >/dev/null 2>&1; then
+      regenerate_identity=1
+    fi
+  fi
+  if [[ "$regenerate_identity" -eq 1 ]]; then
+    remove_local_doh_trust
+    /bin/rm -f "$LOCAL_DOH_CERT" "$LOCAL_DOH_KEY" "$LOCAL_DOH_FINGERPRINT"
+    /usr/bin/openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 825 \
+      -subj "/CN=MihomoBox Local DoH" \
+      -addext "subjectAltName=IP:127.0.0.1,DNS:localhost" \
+      -addext "basicConstraints=critical,CA:FALSE" \
+      -addext "keyUsage=critical,digitalSignature,keyEncipherment" \
+      -addext "extendedKeyUsage=serverAuth" \
+      -keyout "$LOCAL_DOH_KEY" -out "$LOCAL_DOH_CERT" >/dev/null 2>&1
+    LOCAL_DOH_CERT_CREATED=1
+  fi
+  /usr/sbin/chown root:wheel "$LOCAL_DOH_CERT" "$LOCAL_DOH_KEY"
+  /bin/chmod 0644 "$LOCAL_DOH_CERT"
+  /bin/chmod 0600 "$LOCAL_DOH_KEY"
+  local fingerprint
+  fingerprint="$(local_doh_fingerprint)"
+  [[ "$fingerprint" =~ ^[0-9A-Fa-f]{40}$ ]] || {
+    echo "local DoH certificate fingerprint is invalid" >&2
+    return 1
+  }
+  /usr/bin/printf '%s\n' "$fingerprint" > "$LOCAL_DOH_FINGERPRINT"
+  /usr/sbin/chown root:wheel "$LOCAL_DOH_FINGERPRINT"
+  /bin/chmod 0600 "$LOCAL_DOH_FINGERPRINT"
+  if ! /usr/bin/security verify-cert -c "$LOCAL_DOH_CERT" \
+    -p ssl -s 127.0.0.1 >/dev/null 2>&1; then
+    /usr/bin/security add-trusted-cert -d -r trustAsRoot -p ssl \
+      -k /Library/Keychains/System.keychain "$LOCAL_DOH_CERT"
+    LOCAL_DOH_TRUST_ADDED=1
+  fi
+  /usr/bin/security verify-cert -c "$LOCAL_DOH_CERT" -p ssl -s 127.0.0.1 >/dev/null
+
+  "$AGENT_SOURCE" --config "$APP_SUPPORT/daemon.json" --set-local-doh enabled
+  local staged
+  staged="$(/usr/bin/mktemp "$MIHOMO_DATA/.local-doh-profile.XXXXXX")"
+  prepare_profile "$active_source" "$staged" 1
+  /usr/sbin/chown root:wheel "$staged"
+  /bin/chmod 0600 "$staged"
+  /bin/mv -f "$staged" "$MIHOMO_DATA/config.yaml"
+  /usr/bin/touch "$LOCAL_DOH_STATE"
+  /usr/sbin/chown root:wheel "$LOCAL_DOH_STATE"
+  /bin/chmod 0644 "$LOCAL_DOH_STATE"
+
+  /bin/launchctl bootstrap system "$PLIST"
+  /bin/launchctl enable "system/$LABEL"
+  /bin/launchctl kickstart -k "system/$LABEL"
+  wait_for "authenticated Mihomo controller" managed_controller_ready
+  wait_for_runtime_dns_mode
+  wait_for "local DoH endpoint" /usr/bin/nc -z 127.0.0.1 9443
+  wait_for "fully managed local DoH network" managed_network_ready
+  trap - ERR
+  /bin/rm -rf "$LOCAL_DOH_ROLLBACK_DIR"
+  LOCAL_DOH_ROLLBACK_DIR=""
+  echo "prepared local DoH; install the generated profile in System Settings"
+}
+
+remove_local_doh() {
+  require_root
+  resolve_sources
+  /usr/bin/profiles remove -type configuration \
+    -identifier "$LOCAL_DOH_PROFILE_IDENTIFIER" -forced >/dev/null 2>&1 || true
+  if /bin/launchctl print "system/$LABEL" >/dev/null 2>&1; then
+    /bin/launchctl bootout "system/$LABEL"
+    wait_for_job_absent "$LABEL"
+  fi
+  wait_for_managed_process_absent
+  if [[ -x "$APP_SUPPORT/mihomo-agent" && -f "$APP_SUPPORT/daemon.json" ]]; then
+    "$APP_SUPPORT/mihomo-agent" --config "$APP_SUPPORT/daemon.json" --restore-system-dns
+    "$AGENT_SOURCE" --config "$APP_SUPPORT/daemon.json" --set-local-doh disabled
+  fi
+  if [[ -f "$ACTIVE_PROFILE" ]]; then
+    local active_name
+    active_name="$(/usr/bin/sed -n '1p' "$ACTIVE_PROFILE")"
+    validate_profile_name "$active_name"
+    local active_source="$PROFILES_DIR/$active_name"
+    if [[ -f "$active_source" && ! -L "$active_source" ]]; then
+      local staged
+      staged="$(/usr/bin/mktemp "$MIHOMO_DATA/.standard-dns-profile.XXXXXX")"
+      prepare_profile "$active_source" "$staged" 1
+      /usr/sbin/chown root:wheel "$staged"
+      /bin/chmod 0600 "$staged"
+      /bin/mv -f "$staged" "$MIHOMO_DATA/config.yaml"
+    fi
+  fi
+  remove_local_doh_trust
+  /bin/rm -f "$LOCAL_DOH_CERT" "$LOCAL_DOH_KEY" "$LOCAL_DOH_FINGERPRINT" "$LOCAL_DOH_STATE"
+  /bin/rmdir "$LOCAL_DOH_DIR" >/dev/null 2>&1 || true
+  if [[ -f "$PLIST" && ! -f "$PROVISIONING_STATE" ]]; then
+    /bin/launchctl bootstrap system "$PLIST"
+    /bin/launchctl enable "system/$LABEL"
+    /bin/launchctl kickstart -k "system/$LABEL"
+    wait_for "authenticated Mihomo controller" managed_controller_ready
+    wait_for_runtime_dns_mode
+    wait_for "fully managed network" managed_network_ready
+  fi
+  echo "removed local DoH profile, trust, and server identity"
 }
 
 install_daemon() {
@@ -1237,6 +1476,9 @@ install_daemon() {
     fi
   fi
   run /usr/bin/install -o root -g wheel -m 0600 "$RESOURCE_ROOT/daemon.json" "$APP_SUPPORT/daemon.json"
+  if [[ "$PREVIOUS_LOCAL_DOH_ENABLED" -eq 1 ]]; then
+    run "$AGENT_SOURCE" --config "$APP_SUPPORT/daemon.json" --set-local-doh enabled
+  fi
   # Left behind by installations up to 0.6.1, when profile configuration was a
   # Python helper staged here. Nothing calls it any more. Removed only on an
   # explicit install or repair: a component-update rollback can restore a 0.6.1
@@ -1265,6 +1507,7 @@ install_daemon() {
     run "$AGENT_SOURCE" --configure-profile \
       --profile "$MIHOMO_DATA/config.yaml" \
       --profile-backup "$APP_SUPPORT/config.before-mihomo-app.yaml" \
+      --runtime-config "$APP_SUPPORT/daemon.json" \
       --secret-file "$CONTROLLER_SECRET" \
       --controller-metadata "$CONTROLLER_METADATA" \
       --daemon-config "$APP_SUPPORT/daemon.json"
@@ -1312,11 +1555,12 @@ install_daemon() {
     wait_for "verified stopped network after provisioning" managed_network_restored
   else
     wait_for "authenticated Mihomo controller" managed_controller_ready
-    wait_for "system DNS 127.0.0.53:53" /usr/bin/dig @127.0.0.53 -p 53 test.invalid A +time=1 +tries=1
-    wait_for "macOS PrimaryService DNS preferences" \
-      "$APP_SUPPORT/mihomo-agent" --config "$APP_SUPPORT/daemon.json" --check-system-dns
-    wait_for "effective macOS DNS" \
-      /bin/sh -c "/usr/sbin/scutil --dns | /usr/bin/grep -q '127\\.0\\.0\\.53'"
+    if [[ "$(/usr/bin/plutil -extract manageSystemDNS raw -o - "$APP_SUPPORT/daemon.json" 2>/dev/null)" == "true" ]]; then
+      wait_for "system DNS 127.0.0.53:53" /usr/bin/dig @127.0.0.53 -p 53 test.invalid A +time=1 +tries=1
+    else
+      wait_for "local DoH endpoint" /usr/bin/nc -z 127.0.0.1 9443
+    fi
+    wait_for_runtime_dns_mode
     wait_for "fully managed network" managed_network_ready
   fi
   install_cli_entry
@@ -1341,6 +1585,11 @@ elif [[ "$START_SERVICE" -eq 1 ]]; then
   start_service 0
 elif [[ "$RESTART_SERVICE" -eq 1 ]]; then
   start_service 1
+elif [[ "$INSTALL_LOCAL_DOH" -eq 1 ]]; then
+  install_daemon
+  install_local_doh
+elif [[ "$REMOVE_LOCAL_DOH" -eq 1 ]]; then
+  remove_local_doh
 else
   install_daemon
 fi

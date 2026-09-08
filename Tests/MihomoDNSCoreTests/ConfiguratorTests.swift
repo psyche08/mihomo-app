@@ -329,4 +329,67 @@ extension ConfiguratorTests {
         XCTAssertEqual(daemon["manageSystemDNS"] as? Bool, true, "unrelated keys survive")
         XCTAssertEqual(daemon["loopbackAlias"] as? String, "127.0.0.53")
     }
+
+    func testLocalDoHRuntimeInjectsLoopbackTLSAndRestoresFromRawProfile() throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let config = directory.appendingPathComponent("config.yaml")
+        let runtime = directory.appendingPathComponent("daemon.json")
+        try """
+        external-controller-tls: 127.0.0.1:9555
+        external-doh-server: /user-path
+        tls:
+          certificate: /tmp/user.crt
+          private-key: /tmp/user.key
+        tun:
+          enable: true
+        dns:
+          enable: true
+
+        """.write(to: config, atomically: true, encoding: .utf8)
+        let runtimeConfiguration = ProxyConfiguration(
+            manageSystemDNS: false,
+            localDoH: LocalDoHConfiguration()
+        )
+        let encoder = JSONEncoder()
+        try encoder.encode(runtimeConfiguration).write(to: runtime)
+
+        try MihomoConfigurator.apply(MihomoConfigurator.Paths(
+            config: config.path,
+            backup: directory.appendingPathComponent("backup.yaml").path,
+            runtimeConfig: runtime.path
+        ), resolver: StubResolver(answers: [:]))
+        let result = try String(contentsOf: config, encoding: .utf8)
+        XCTAssertTrue(result.contains("external-controller-tls: 127.0.0.1:9443\n"))
+        XCTAssertTrue(result.contains("external-doh-server: /dns-query\n"))
+        let resultLines = result.split(separator: "\n", omittingEmptySubsequences: false)
+            .map { String($0) + "\n" }
+        XCTAssertEqual(
+            MihomoConfigurator.directScalar(resultLines, section: "tls", key: "certificate"),
+            "/Library/Application Support/Mihomo App/local-doh/server.crt"
+        )
+        XCTAssertEqual(
+            MihomoConfigurator.directScalar(resultLines, section: "tls", key: "private-key"),
+            "/Library/Application Support/Mihomo App/local-doh/server.key"
+        )
+        XCTAssertFalse(result.contains("/tmp/user.crt"))
+    }
+
+    func testLocalDoHConfigurationStoreMakesDNSOwnershipMutuallyExclusive() throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let runtime = directory.appendingPathComponent("daemon.json")
+        let encoder = JSONEncoder()
+        try encoder.encode(ProxyConfiguration()).write(to: runtime)
+
+        try LocalDoHConfigurationStore.setEnabled(true, configurationPath: runtime.path)
+        var configured = try ProxyConfiguration.load(path: runtime.path)
+        XCTAssertFalse(configured.manageSystemDNS)
+        XCTAssertEqual(configured.localDoH?.endpoint, Endpoint(host: "127.0.0.1", port: 9443))
+
+        try LocalDoHConfigurationStore.setEnabled(false, configurationPath: runtime.path)
+        configured = try ProxyConfiguration.load(path: runtime.path)
+        XCTAssertTrue(configured.manageSystemDNS)
+        XCTAssertNil(configured.localDoH)
+    }
 }

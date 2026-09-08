@@ -229,6 +229,14 @@ disabled. An automatically downloaded update uses Sparkle's no-UI immediate
 install/relaunch path; the daemon-owned active tunnel does not depend on the App
 process remaining alive.
 
+Config also exposes **Local DNS over HTTPS**. The store reads the current
+authenticated `/rules` snapshot, converts only enabled `DOMAIN` and
+`DOMAIN-SUFFIX` proxy rules to a bounded split-DNS plan, and shows the omitted
+and exact-to-suffix counts. Preparing and removing the root TLS endpoint use
+the verified installer; the App then opens the generated `.mobileconfig` for
+the mandatory macOS review. The busy state disables repeat clicks throughout
+the administrator and profile-generation steps.
+
 There is no loopback HTTP server, browser token, WebView, or `mihomoboxctl`
 child process in the desktop data path. The daemon still validates every
 method/path/body and injects the root-owned controller credential. The public

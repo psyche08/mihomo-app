@@ -803,21 +803,25 @@ private final class LiveAppShellCoordinator: AppShellCoordinating {
   let trayService: any TrayService
   private let components: ComponentSynchronizer
   private let updates: SparkleUpdateController
+  private let localDoH: LocalDoHCoordinator
 
   init(
     trayService: any TrayService,
     components: ComponentSynchronizer,
-    updates: SparkleUpdateController
+    updates: SparkleUpdateController,
+    localDoH: LocalDoHCoordinator
   ) {
     self.trayService = trayService
     self.components = components
     self.updates = updates
+    self.localDoH = localDoH
   }
 
   func startBackgroundServices() {
     Task { await components.start() }
     updates.start()
     DashboardStore.shared.configureUpdatePreference(updates)
+    DashboardStore.shared.configureLocalDoHService(localDoH)
   }
 
   func stopBackgroundServices() {
@@ -831,7 +835,9 @@ enum AppComposition {
   static func live() -> any AppShellCoordinating {
     let control = TrayControlClient()
     let updates = SparkleUpdateController()
+    let localDoH = LocalDoHCoordinator()
     DashboardStore.shared.configureUpdatePreference(updates)
+    DashboardStore.shared.configureLocalDoHService(localDoH)
     let mutationGate = AppMutationGate()
     let tray = TrayStateCoordinator(
       control: control,
@@ -844,7 +850,8 @@ enum AppComposition {
     return LiveAppShellCoordinator(
       trayService: tray,
       components: ComponentSynchronizer(control: control, mutationGate: mutationGate),
-      updates: updates
+      updates: updates,
+      localDoH: localDoH
     )
   }
 }

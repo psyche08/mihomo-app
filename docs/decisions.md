@@ -83,12 +83,17 @@ the App does not repeatedly re-register the item. The unprivileged login item
 only restores the hidden tray App, while the root LaunchDaemon independently
 restores the managed network service with `tun.enable: true` at system startup.
 
-## SystemConfiguration DNS instead of a DNS Settings profile
+## SystemConfiguration DNS by default, opt-in split DoH profile
 
 The agent uses public SystemConfiguration preference APIs, manages the active
-PrimaryService, and observes per-service resolver changes. This removes
-interactive profile enrollment and certificate/DoH plumbing while retaining
-macOS supplemental-domain and interface routing information.
+PrimaryService, and observes per-service resolver changes in the default mode.
+An opt-in local DoH mode exists for hosts where another DNS proxy repeatedly
+captures or rewrites cleartext port 53. It restores MihomoBox's Global DNS
+write, exposes Mihomo's own DoH handler only on loopback TLS, and uses a manual
+DNS Settings profile with `SupplementalMatchDomains`. This keeps nonmatching
+domains on the current macOS resolver and avoids implementing a second DNS
+policy engine. Manual profile confirmation is retained because macOS 11 and
+later do not permit the `profiles` CLI to install configuration profiles.
 
 ## Separate port 53 and port 1054
 

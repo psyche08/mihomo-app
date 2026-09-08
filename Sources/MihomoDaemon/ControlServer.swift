@@ -355,9 +355,9 @@ final class ControlDispatcher: @unchecked Sendable {
                       health.tunInterface?.isEmpty == false,
                       health.fakeIPMode,
                       health.fakeIPRouteReady,
-                      health.dnsBridgeReady,
+                      (agent.usesLocalDoH || health.dnsBridgeReady),
                       health.mihomoDNSReady,
-                      health.systemDNSManaged,
+                      (!agent.managesSystemDNS || health.systemDNSManaged),
                       health.networkConsistent else {
                     throw serverErrorStatic("the managed network is not ready")
                 }

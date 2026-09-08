@@ -454,6 +454,27 @@ final class CoreTests: XCTestCase {
         }
     }
 
+    func testLocalDoHUsesOnlyTheFixedRootOwnedEndpointAndIdentity() {
+        XCTAssertNoThrow(try ProxyConfiguration(
+            manageSystemDNS: false,
+            localDoH: LocalDoHConfiguration()
+        ).validate())
+        XCTAssertThrowsError(try ProxyConfiguration(
+            manageSystemDNS: false,
+            localDoH: LocalDoHConfiguration(
+                certificatePath: "/Library/Application Support/Mihomo App/local-doh/../other.key"
+            )
+        ).validate()) { error in
+            XCTAssertEqual(error as? ConfigurationError, .invalidLocalDoH)
+        }
+        XCTAssertThrowsError(try ProxyConfiguration(
+            manageSystemDNS: true,
+            localDoH: LocalDoHConfiguration()
+        ).validate()) { error in
+            XCTAssertEqual(error as? ConfigurationError, .incompatibleDNSOwnership)
+        }
+    }
+
     func testExistingLoopbackAliasIsIgnored() throws {
         let marker = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)

@@ -223,6 +223,7 @@ final class ProfileBroker: @unchecked Sendable {
             "--configure-profile",
             "--profile", config.path,
             "--profile-backup", backup.path,
+            "--runtime-config", root.appendingPathComponent("daemon.json").path,
         ]
         if publishController {
             arguments += [

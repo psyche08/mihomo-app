@@ -182,14 +182,13 @@ public enum MihomoRuntimeInspector {
         let fakeIPMode = configuration.mihomoProcess
             .map { inspectFakeIPMode(path: $0.configPath) } ?? false
         let visibleRouteInterface = fakeIPRouteInterface()
-        let dnsHealth = RuntimeDNSHealthProbePolicy.evaluate(
-            mihomoDNS: { dnsEndpointResponds(endpoint: configuration.mihomoDNS) },
-            systemDNSBridge: {
-                dnsEndpointResponds(endpoint: configuration.systemDNSListen)
-            }
-        )
-        let dnsBridgeReady = dnsHealth.dnsBridgeReady
-        let mihomoDNSReady = dnsHealth.mihomoDNSReady
+        let mihomoDNSReady = dnsEndpointResponds(endpoint: configuration.mihomoDNS)
+        let dnsBridgeReady = configuration.localDoH == nil && mihomoDNSReady
+            ? dnsEndpointResponds(endpoint: configuration.systemDNSListen)
+            : false
+        let localDoHReady = configuration.localDoH.map {
+            tcpEndpointResponds(endpoint: $0.endpoint)
+        } ?? true
         let preferences: GlobalDNSPreferences
         if let globalDNS {
             preferences = globalDNS
@@ -213,14 +212,18 @@ public enum MihomoRuntimeInspector {
             preexistingInterface: preexistingFakeIPRouteInterface
         )
         let routeReady = routeInterface != nil
-        let runtimeReady = controller.reachable && tunEnabled && routeReady
-            && dnsBridgeReady && mihomoDNSReady
+        let runtimeReady = controller.reachable && tunEnabled && routeReady && mihomoDNSReady
+            && (configuration.localDoH != nil || dnsBridgeReady) && localDoHReady
         let systemDNSRestored = !systemDNSManaged
             && ((try? preferences.containsManagedServerPersistently()) == false)
             && ((try? preferences.containsManagedServerEffectively()) == false)
         let runtimeStopped = !controller.reachable && !tunEnabled && routeInterface == nil
             && !dnsBridgeReady && !mihomoDNSReady
-        let networkConsistent = systemDNSManaged ? runtimeReady : (runtimeStopped && systemDNSRestored)
+        let resolverOwnershipReady = configuration.manageSystemDNS
+            ? systemDNSManaged
+            : systemDNSRestored
+        let networkConsistent = (runtimeReady && resolverOwnershipReady)
+            || (runtimeStopped && systemDNSRestored)
         return NetworkConsistencyHealth(
             controllerReachable: controller.reachable,
             tunEnabled: tunEnabled,
@@ -435,6 +438,25 @@ public enum MihomoRuntimeInspector {
             timeoutMilliseconds: 2_000,
             interfaceName: nil
         )) != nil
+    }
+
+    static func tcpEndpointResponds(endpoint: Endpoint) -> Bool {
+        let descriptor = socket(AF_INET, SOCK_STREAM, 0)
+        guard descriptor >= 0 else { return false }
+        defer { close(descriptor) }
+        var timeout = timeval(tv_sec: 1, tv_usec: 0)
+        setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout.size(ofValue: timeout)))
+        setsockopt(descriptor, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout.size(ofValue: timeout)))
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = UInt16(endpoint.port).bigEndian
+        address.sin_addr = in_addr(s_addr: inet_addr(endpoint.host))
+        return withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) == 0
+            }
+        }
     }
 
     /// Re-probes only the loopback system-DNS bridge after the alias has been
@@ -930,19 +952,27 @@ public final class NetworkConsistencyController: @unchecked Sendable {
             preexistingFakeIPRouteInterface: preexistingFakeIPRouteInterface
         )
         let kernelReady = before.controllerReachable && before.tunEnabled && before.tunInterface != nil
-        let upstreamRuntimeReady = kernelReady && before.mihomoDNSReady
-        let networkOwned = ((try? globalDNS.isApplied()) == true)
-            || globalDNS.isEffective()
-            || globalDNS.hasManagedBackup()
+        let localDoHReady = configuration.localDoH.map {
+            MihomoRuntimeInspector.tcpEndpointResponds(endpoint: $0.endpoint)
+        } ?? true
+        let upstreamRuntimeReady = kernelReady && before.mihomoDNSReady && localDoHReady
+            && (configuration.localDoH != nil || before.dnsBridgeReady)
+        let networkOwned = configuration.manageSystemDNS
+            ? (((try? globalDNS.isApplied()) == true)
+                || globalDNS.isEffective()
+                || globalDNS.hasManagedBackup())
+            : before.tunInterface != nil
         var bridgeReadyForPolicies = before.dnsBridgeReady
         var changed = false
         var action = "observe"
-        let acquisitionDecision = acquisitionPolicy.decide(
-            upstreamRuntimeReady: upstreamRuntimeReady,
-            dnsBridgeReady: before.dnsBridgeReady,
-            systemDNSManaged: before.systemDNSManaged,
-            nowNanoseconds: DispatchTime.now().uptimeNanoseconds
-        )
+        let acquisitionDecision = configuration.manageSystemDNS
+            ? acquisitionPolicy.decide(
+                upstreamRuntimeReady: upstreamRuntimeReady,
+                dnsBridgeReady: before.dnsBridgeReady,
+                systemDNSManaged: before.systemDNSManaged,
+                nowNanoseconds: DispatchTime.now().uptimeNanoseconds
+            )
+            : .none
         switch acquisitionDecision {
         case .none:
             break
@@ -994,7 +1024,7 @@ public final class NetworkConsistencyController: @unchecked Sendable {
             }
         }
 
-        let bridgeDecision = chargeFailures
+        let bridgeDecision = chargeFailures && configuration.manageSystemDNS
             ? bridgeFailurePolicy.decide(
                 bridgeReady: bridgeReadyForPolicies,
                 upstreamRuntimeReady: upstreamRuntimeReady,
@@ -1068,7 +1098,7 @@ public final class NetworkConsistencyController: @unchecked Sendable {
         // Egress is only meaningful when the app believes the whole path is up:
         // kernel + DNS bridge + system DNS ownership. If any of those is down,
         // the dedicated policies above already own the response.
-        let fullyReady = upstreamRuntimeReady && before.dnsBridgeReady && before.systemDNSManaged
+        let fullyReady = upstreamRuntimeReady && before.networkConsistent
         if upstreamRuntimeReady, !checkedProxyServerResolution {
             checkedProxyServerResolution = true
             reportLoopingProxyServers(tunnelInterface: before.tunInterface)
@@ -1094,10 +1124,7 @@ public final class NetworkConsistencyController: @unchecked Sendable {
                 to: healthSnapshotPath
             )
         }
-        safetyState.setRuntimeReady(
-            after.controllerReachable && after.tunEnabled && after.tunInterface != nil
-                && after.dnsBridgeReady && after.mihomoDNSReady && after.systemDNSManaged
-        )
+        safetyState.setRuntimeReady(after.networkConsistent)
         if after != previous {
             let transition = UUID().uuidString
             let oldTUN = previous?.tunEnabled.description ?? "unknown"

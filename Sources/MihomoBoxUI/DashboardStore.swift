@@ -61,6 +61,9 @@ public enum DashboardConfigAction: Equatable, Sendable {
   case flushingFakeIP
   case flushingDNS
   case updatingGeoData
+  case preparingLocalDoH
+  case openingDeviceManagement
+  case removingLocalDoH
 
   public var progressTitle: String {
     switch self {
@@ -70,6 +73,9 @@ public enum DashboardConfigAction: Equatable, Sendable {
     case .flushingFakeIP: "Flushing Fake-IP cache…"
     case .flushingDNS: "Flushing DNS cache…"
     case .updatingGeoData: "Updating GEO data…"
+    case .preparingLocalDoH: "Preparing local DoH…"
+    case .openingDeviceManagement: "Opening Device Management…"
+    case .removingLocalDoH: "Removing local DoH…"
     }
   }
 }
@@ -118,6 +124,11 @@ public final class DashboardStore: ObservableObject {
   @Published public private(set) var configAction: DashboardConfigAction?
   @Published public private(set) var automaticUpdatesAvailable = false
   @Published public private(set) var automaticUpdatesEnabled = false
+  @Published public private(set) var localDoHAvailable = false
+  @Published public private(set) var localDoHPrepared = false
+  @Published public private(set) var localDoHDomainCount = 0
+  @Published public private(set) var localDoHOmittedRuleCount = 0
+  @Published public private(set) var localDoHExactDomainCount = 0
   @Published public private(set) var coreVersion = "Mihomo"
   @Published public private(set) var traffic = TrafficSnapshot()
   @Published public private(set) var trafficHistory: [TrafficPoint] = []
@@ -147,6 +158,7 @@ public final class DashboardStore: ObservableObject {
   private let gateway: any DashboardControlGateway
   private let previewMode: Bool
   private weak var updatePreference: (any DashboardUpdatePreference)?
+  private weak var localDoHService: (any DashboardLocalDoHService)?
   private var streamTasks: [StreamKind: Task<Void, Never>] = [:]
   private var streamRetryTasks: [StreamKind: Task<Void, Never>] = [:]
   private var streamRetryCounts: [StreamKind: Int] = [:]
@@ -248,6 +260,11 @@ public final class DashboardStore: ObservableObject {
     updatePreference = preference
     automaticUpdatesAvailable = preference.automaticUpdatesAvailable
     automaticUpdatesEnabled = preference.automaticUpdatesEnabled
+  }
+
+  public func configureLocalDoHService(_ service: any DashboardLocalDoHService) {
+    localDoHService = service
+    Task { await refreshLocalDoHStatus() }
   }
 
   public func setAutomaticUpdatesEnabled(_ enabled: Bool) {
@@ -485,6 +502,63 @@ public final class DashboardStore: ObservableObject {
     await performConfigAction(.updatingGeoData) { try await gateway.updateGeoData() }
   }
 
+  public func prepareLocalDoH() async {
+    guard let localDoHService else { return }
+    await performConfigAction(.preparingLocalDoH) {
+      let catalog = try await gateway.fetchRules()
+      let rules = catalog.rules.map {
+        DashboardRule(
+          id: String($0.index),
+          index: $0.index,
+          type: $0.type,
+          payload: $0.payload,
+          target: $0.proxy,
+          isEnabled: $0.extra?.disabled != true,
+          hitCount: 0,
+          missCount: 0,
+          size: $0.size,
+          lastMatchedAt: nil,
+          lastUnmatchedAt: nil
+        )
+      }
+      let plan = LocalDoHDomainPlan.build(from: rules)
+      try await localDoHService.prepare(plan: plan)
+      localDoHOmittedRuleCount = plan.omittedRules + plan.truncatedDomains
+      localDoHExactDomainCount = plan.exactDomainApproximations
+      await refreshLocalDoHStatus()
+    }
+  }
+
+  public func removeLocalDoH() async {
+    guard let localDoHService else { return }
+    await performConfigAction(.removingLocalDoH) {
+      try await localDoHService.remove()
+      localDoHOmittedRuleCount = 0
+      localDoHExactDomainCount = 0
+      await refreshLocalDoHStatus()
+    }
+  }
+
+  public func openDeviceManagement() async {
+    guard let localDoHService else { return }
+    await performConfigAction(.openingDeviceManagement) {
+      try await localDoHService.openDeviceManagement()
+    }
+  }
+
+  public func refreshLocalDoHStatus() async {
+    guard let localDoHService else {
+      localDoHAvailable = false
+      localDoHPrepared = false
+      localDoHDomainCount = 0
+      return
+    }
+    let status = await localDoHService.status()
+    localDoHAvailable = status.available
+    localDoHPrepared = status.prepared
+    localDoHDomainCount = status.installedDomainCount
+  }
+
   private func scheduleRefresh(_ page: DashboardPage) {
     refreshTasks[page]?.cancel()
     let token = UUID()
@@ -517,6 +591,7 @@ public final class DashboardStore: ObservableObject {
     case .logs:
       break
     case .config:
+      await refreshLocalDoHStatus()
       await load(page: page) {
         apply(config: try await gateway.fetchConfig())
       }

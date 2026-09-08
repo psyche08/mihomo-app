@@ -228,6 +228,55 @@ actor InstallerCoordinator {
     AppLog.info("event=privileged_installer action=uninstall result=success")
   }
 
+  func prepareLocalDoH() async throws {
+    try await runSpecialInstaller(arguments: ["--install-local-doh"], action: "install_local_doh")
+  }
+
+  func removeLocalDoH() async throws {
+    try await runSpecialInstaller(arguments: ["--remove-local-doh"], action: "remove_local_doh")
+  }
+
+  private func runSpecialInstaller(arguments: [String], action: String) async throws {
+    guard let bundleURL, bundleURL.pathExtension == "app" else {
+      throw InstallerCoordinatorError.appBundleUnavailable
+    }
+    let script = bundleURL.appendingPathComponent(
+      "Contents/Resources/scripts/install-daemon.sh"
+    )
+    guard Self.isRegularExecutable(script) else {
+      throw InstallerCoordinatorError.installerMissing
+    }
+    let requirements = try Self.exactSigningRequirements(
+      bundleURL: bundleURL,
+      callerRelativeExecutable: Self.callerRelativeExecutable
+    )
+    let command = Self.bootstrapCommand(
+      sourceBundlePath: bundleURL.standardizedFileURL.path,
+      appRequirement: requirements.app,
+      callerRequirement: requirements.caller,
+      callerRelativeExecutable: Self.callerRelativeExecutable,
+      installerArguments: arguments,
+      detached: false
+    )
+    let source = "do shell script \(Self.appleScriptQuote(command)) with administrator privileges"
+    AppLog.info("event=privileged_installer action=\(action) phase=started")
+    let result = try await Self.runAppleScript(source)
+    guard result.status == 0 else {
+      if result.status == 1
+        && (result.output.contains("(-128)")
+          || result.output.localizedCaseInsensitiveContains("User canceled"))
+      {
+        AppLog.info("event=privileged_installer action=\(action) result=cancelled")
+        throw InstallerCoordinatorError.cancelled
+      }
+      AppLog.error(
+        "event=privileged_installer action=\(action) result=failed reason=\(Self.classification(result.output))"
+      )
+      throw InstallerCoordinatorError.failed
+    }
+    AppLog.info("event=privileged_installer action=\(action) result=success")
+  }
+
   private static func runAppleScript(_ source: String) async throws -> (
     status: Int32, output: String
   ) {

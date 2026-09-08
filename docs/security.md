@@ -80,6 +80,14 @@
   network health before clearing it. Power loss or failed health restores the
   complete prior signed set with same-filesystem atomic replacement. While
   recovery is incomplete, runtime mutations fail closed.
+- Local DoH setup is another fixed operation of the exact-snapshot installer;
+  it accepts no certificate, key, hostname, port, output path, or arbitrary
+  domain argument. The installer generates the identity at a fixed root-owned
+  path, imports only its fingerprint into the System keychain for SSL, and
+  never unlocks a keychain. The unprivileged App derives the profile's bounded
+  domain list only from authenticated controller rule snapshots. Unsupported
+  rules are omitted, an empty list is rejected, and the generated profile is
+  private to the current user until macOS presents its own install review.
 - A signed legacy protocol response is not permission to downgrade the App's
   XPC requests. Version 1 is classified only from the authenticated response
   envelope, never from a marker file or error string. The tray disables all
@@ -179,6 +187,8 @@ bytes to the daemon through XPC.
 - Restore is compare-before-write and respects external changes.
 - Pre-existing `127.0.0.53` aliases are not removed.
 - Original-DNS sockets bind to the physical interface to avoid TUN recursion.
+- Local DoH and direct SystemConfiguration DNS ownership cannot be enabled at
+  the same time; local DoH health requires the old managed DNS to be restored.
 - A stale PID is terminated only after executable-path verification.
 - Profile reload is serialized by the daemon and rolls back configuration and
   agent state together on failure.

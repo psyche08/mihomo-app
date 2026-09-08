@@ -10,6 +10,25 @@ public struct Endpoint: Codable, Equatable, Hashable {
     }
 }
 
+public struct LocalDoHConfiguration: Codable, Equatable {
+    public var endpoint: Endpoint
+    public var serverURL: String
+    public var certificatePath: String
+    public var privateKeyPath: String
+
+    public init(
+        endpoint: Endpoint = Endpoint(host: "127.0.0.1", port: 9443),
+        serverURL: String = "https://127.0.0.1:9443/dns-query",
+        certificatePath: String = "/Library/Application Support/Mihomo App/local-doh/server.crt",
+        privateKeyPath: String = "/Library/Application Support/Mihomo App/local-doh/server.key"
+    ) {
+        self.endpoint = endpoint
+        self.serverURL = serverURL
+        self.certificatePath = certificatePath
+        self.privateKeyPath = privateKeyPath
+    }
+}
+
 public struct ProxyConfiguration: Codable, Equatable {
     public var systemDNSListen: Endpoint
     public var mihomoDNS: Endpoint
@@ -25,6 +44,7 @@ public struct ProxyConfiguration: Codable, Equatable {
     public var mihomoProcess: MihomoProcessConfiguration?
     public var controllerEndpoint: Endpoint?
     public var controllerSecret: String?
+    public var localDoH: LocalDoHConfiguration?
 
     public init(
         systemDNSListen: Endpoint = Endpoint(host: "127.0.0.53", port: 53),
@@ -40,7 +60,8 @@ public struct ProxyConfiguration: Codable, Equatable {
         fallbackDNSServers: [String] = [],
         mihomoProcess: MihomoProcessConfiguration? = nil,
         controllerEndpoint: Endpoint? = nil,
-        controllerSecret: String? = nil
+        controllerSecret: String? = nil,
+        localDoH: LocalDoHConfiguration? = nil
     ) {
         self.systemDNSListen = systemDNSListen
         self.mihomoDNS = mihomoDNS
@@ -56,6 +77,7 @@ public struct ProxyConfiguration: Codable, Equatable {
         self.mihomoProcess = mihomoProcess
         self.controllerEndpoint = controllerEndpoint
         self.controllerSecret = controllerSecret
+        self.localDoH = localDoH
     }
 
     public static func load(path: String) throws -> ProxyConfiguration {
@@ -122,6 +144,35 @@ public struct ProxyConfiguration: Codable, Equatable {
                 throw ConfigurationError.invalidControllerSecret
             }
         }
+        if let localDoH {
+            // These values cross into a root-owned Mihomo configuration. Keep
+            // the surface fixed instead of accepting caller-selected ports or
+            // file paths (including path traversal below local-doh/).
+            guard localDoH == LocalDoHConfiguration(),
+                  localDoH.endpoint != controllerEndpoint else {
+                throw ConfigurationError.invalidLocalDoH
+            }
+            guard !manageSystemDNS else {
+                throw ConfigurationError.incompatibleDNSOwnership
+            }
+        }
+    }
+}
+
+public enum LocalDoHConfigurationStore {
+    public static func setEnabled(_ enabled: Bool, configurationPath: String) throws {
+        var configuration = try ProxyConfiguration.load(path: configurationPath)
+        configuration.manageSystemDNS = !enabled
+        configuration.localDoH = enabled ? LocalDoHConfiguration() : nil
+        try configuration.validate()
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(configuration)
+        try data.write(to: URL(fileURLWithPath: configurationPath), options: [.atomic])
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: configurationPath
+        )
     }
 }
 
@@ -157,6 +208,8 @@ public enum ConfigurationError: Error, Equatable, CustomStringConvertible {
     case invalidSystemDNSListener
     case invalidControllerEndpoint
     case invalidControllerSecret
+    case invalidLocalDoH
+    case incompatibleDNSOwnership
 
     public var description: String {
         switch self {
@@ -166,6 +219,8 @@ public enum ConfigurationError: Error, Equatable, CustomStringConvertible {
         case .invalidSystemDNSListener: return "managed system DNS must listen on the configured loopback alias port 53"
         case .invalidControllerEndpoint: return "Mihomo controller must use a valid 127.0.0.1 port"
         case .invalidControllerSecret: return "Mihomo controller secret is invalid"
+        case .invalidLocalDoH: return "local DoH configuration is invalid"
+        case .incompatibleDNSOwnership: return "local DoH and managed system DNS cannot be enabled together"
         }
     }
 }

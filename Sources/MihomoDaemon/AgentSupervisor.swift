@@ -33,6 +33,14 @@ final class AgentSupervisor: @unchecked Sendable {
         queue.sync { process?.isRunning == true }
     }
 
+    var managesSystemDNS: Bool {
+        (try? ProxyConfiguration.load(path: configPath).manageSystemDNS) ?? true
+    }
+
+    var usesLocalDoH: Bool {
+        (try? ProxyConfiguration.load(path: configPath).localDoH) != nil
+    }
+
     func start() throws {
         try queue.sync {
             desiredRunning = true

@@ -14,6 +14,8 @@ it never kills an unrelated process merely because a PID file exists.
 
 ## DNS Flow
 
+The default mode keeps the existing classic-DNS bridge:
+
 ```text
 macOS -> 127.0.0.53:53 -> 127.0.0.1:1153 (Mihomo)
                               |
@@ -23,6 +25,33 @@ macOS -> 127.0.0.53:53 -> 127.0.0.1:1153 (Mihomo)
 
 Mihomo -> 127.0.0.1:1054 -> scoped or PrimaryService DHCP DNS
 ```
+
+The optional **Local DNS over HTTPS** mode instead installs a manually approved
+macOS DNS Settings profile for the concrete proxy domains that can be expressed
+as suffix matches:
+
+```text
+matching macOS queries -> https://127.0.0.1:9443/dns-query -> Mihomo DNS
+all other queries      -> current macOS default/scoped resolver
+
+Mihomo -> 127.0.0.1:1054 -> scoped or PrimaryService DHCP DNS
+```
+
+Mihomo's loopback TLS controller owns `/dns-query`; it is not a second DNS
+implementation. The installer generates a host-only self-signed certificate
+with the `127.0.0.1` IP SAN, keeps its private key root-only, and adds an
+SSL-scoped `trustAsRoot` record to the System keychain. It never unlocks a
+keychain. The profile uses a fixed identifier so regeneration updates the
+existing settings, and removal deletes that exact profile and certificate.
+
+Only enabled `DOMAIN` and `DOMAIN-SUFFIX` rules whose target is not a built-in
+direct/reject action are representable in `SupplementalMatchDomains`.
+`DOMAIN` is explicitly widened to suffix semantics. Rule sets, GEO rules,
+regular expressions, keywords, disabled rules, and invalid names are omitted
+and counted in the UI; an empty result fails closed instead of generating a
+global encrypted-DNS profile. Regenerate the profile after changing those
+rules. macOS requires the user to review and install the generated profile in
+**General > Device Management**.
 
 The separate `1054` listener is mandatory. Pointing Mihomo at macOS `system`
 DNS would recurse back through `127.0.0.53`. The installer also forces
@@ -75,6 +104,13 @@ application/interface scope, so choosing a non-primary root resolver would be
 ambiguous. Domain-scoped VPN and enterprise resolvers remain deterministic.
 
 ## System DNS ownership
+
+SystemConfiguration ownership and local DoH are mutually exclusive. In local
+DoH mode the agent first proves `127.0.0.53` has been restored, does not bind
+the port-53 bridge, and treats a live loopback TLS endpoint plus restored
+system DNS as the resolver-health gate. The original-DNS `1054` listener,
+physical-interface binding, route observer, wake recovery, egress probes, and
+generation-bound health snapshots remain active.
 
 The agent reads `CurrentSet`, then manages:
 

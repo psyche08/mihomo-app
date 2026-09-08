@@ -50,19 +50,22 @@ public enum MihomoConfigurator {
         public var secretFile: String?
         public var controllerMetadata: String?
         public var daemonConfig: String?
+        public var runtimeConfig: String?
 
         public init(
             config: String,
             backup: String,
             secretFile: String? = nil,
             controllerMetadata: String? = nil,
-            daemonConfig: String? = nil
+            daemonConfig: String? = nil,
+            runtimeConfig: String? = nil
         ) {
             self.config = config
             self.backup = backup
             self.secretFile = secretFile
             self.controllerMetadata = controllerMetadata
             self.daemonConfig = daemonConfig
+            self.runtimeConfig = runtimeConfig
         }
     }
 
@@ -79,6 +82,7 @@ public enum MihomoConfigurator {
         var lines = try String(contentsOfFile: paths.config, encoding: .utf8).keepingLines()
         let controller = try normalizeController(topLevelScalar(lines, "external-controller"))
         let secret = try resolveSecret(topLevelScalar(lines, "secret"), secretFile: paths.secretFile)
+        let localDoH = try resolveLocalDoH(runtimeConfig: paths.runtimeConfig ?? paths.daemonConfig)
 
         let (dnsStart, dnsEnd) = try block(lines, named: "dns")
         var dns = Array(lines[(dnsStart + 1) ..< dnsEnd])
@@ -96,8 +100,24 @@ public enum MihomoConfigurator {
         // logs held nothing at all. Volume is handled by retaining a bounded
         // sample of the text rather than by discarding the level.
         lines = replaceTopLevelScalar(lines, key: "log-level", value: "warning")
+        if let localDoH {
+            lines = replaceTopLevelScalar(
+                lines,
+                key: "external-controller-tls",
+                value: "\(localDoH.endpoint.host):\(localDoH.endpoint.port)"
+            )
+            lines = replaceTopLevelScalar(lines, key: "external-doh-server", value: "/dns-query")
+            lines = replaceTopLevelMapping(
+                lines,
+                key: "tls",
+                values: [
+                    ("certificate", jsonQuoted(localDoH.certificatePath)),
+                    ("private-key", jsonQuoted(localDoH.privateKeyPath)),
+                ]
+            )
+        }
 
-        guard directScalar(lines, section: "tun", key: "enable") == "true" else {
+        guard directScalar(lines, section: "tun", key: "enable")?.lowercased() == "true" else {
             throw ConfiguratorError.tunDisabled
         }
         lines = excludeProxyServersFromTunnel(lines, resolver: resolver)
@@ -229,6 +249,21 @@ public enum MihomoConfigurator {
         return secret
     }
 
+    static func resolveLocalDoH(runtimeConfig: String?) throws -> LocalDoHConfiguration? {
+        guard let runtimeConfig else { return nil }
+        guard let data = FileManager.default.contents(atPath: runtimeConfig),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw ConfiguratorError.daemonConfigUnreadable
+        }
+        guard let value = object["localDoH"] else { return nil }
+        guard !(value is NSNull), JSONSerialization.isValidJSONObject(value),
+              let localData = try? JSONSerialization.data(withJSONObject: value),
+              let localDoH = try? JSONDecoder().decode(LocalDoHConfiguration.self, from: localData) else {
+            throw ConfiguratorError.daemonConfigUnreadable
+        }
+        return localDoH
+    }
+
     private static func persistController(
         _ controller: (host: String, port: Int),
         secret: String,
@@ -338,6 +373,32 @@ public enum MihomoConfigurator {
         return Array(lines[..<index]) + [replacement] + Array(lines[(index + 1)...])
     }
 
+    static func replaceTopLevelMapping(
+        _ lines: [String],
+        key: String,
+        values: [(String, String)]
+    ) -> [String] {
+        let replacement = ["\(key):\n"] + values.map { "  \($0.0): \($0.1)\n" }
+        guard let start = lines.firstIndex(where: { line in
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !line.hasPrefix(" ") && !line.hasPrefix("\t")
+                && !trimmed.hasPrefix("#") && trimmed == "\(key):"
+        }) else {
+            return replacement + lines
+        }
+        var end = lines.count
+        for index in (start + 1)..<lines.count {
+            let line = lines[index]
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty, !trimmed.hasPrefix("#"),
+               !line.hasPrefix(" "), !line.hasPrefix("\t") {
+                end = index
+                break
+            }
+        }
+        return Array(lines[..<start]) + replacement + Array(lines[end...])
+    }
+
     static func topLevelScalar(_ lines: [String], _ key: String) -> String? {
         for line in lines where line.hasPrefix("\(key):") || line.hasPrefix("\(key) :") {
             guard let colon = line.firstIndex(of: ":") else { continue }
@@ -351,7 +412,7 @@ public enum MihomoConfigurator {
         for line in lines[(start + 1) ..< end] {
             guard line.hasPrefix("  \(key):") || line.hasPrefix("  \(key) :"),
                   let colon = line.firstIndex(of: ":") else { continue }
-            return parseScalar(String(line[line.index(after: colon)...])).lowercased()
+            return parseScalar(String(line[line.index(after: colon)...]))
         }
         return nil
     }

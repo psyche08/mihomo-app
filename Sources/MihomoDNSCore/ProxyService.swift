@@ -79,8 +79,10 @@ public final class ProxyService {
         )
 
         do {
-            channels.append(try startUDP(endpoint: configuration.systemDNSListen, forwarder: systemDNSForwarder))
-            channels.append(try startTCP(endpoint: configuration.systemDNSListen, forwarder: systemDNSForwarder))
+            if configuration.localDoH == nil {
+                channels.append(try startUDP(endpoint: configuration.systemDNSListen, forwarder: systemDNSForwarder))
+                channels.append(try startTCP(endpoint: configuration.systemDNSListen, forwarder: systemDNSForwarder))
+            }
             channels.append(try startUDP(endpoint: configuration.upstreamListen, forwarder: originalDNSForwarder))
             channels.append(try startTCP(endpoint: configuration.upstreamListen, forwarder: originalDNSForwarder))
             // Capture a route owned by another TUN before starting Mihomo. A
@@ -88,7 +90,7 @@ public final class ProxyService {
             // if the Fake-IP route never moved away from that interface.
             let preexistingFakeIPRouteInterface = MihomoRuntimeInspector.fakeIPRouteInterface()
             try mihomoSupervisor?.start()
-            if configuration.manageSystemDNS {
+            if configuration.manageSystemDNS || configuration.localDoH != nil {
                 let controller = NetworkConsistencyController(
                     configuration: configuration,
                     globalDNS: globalDNS,
@@ -106,10 +108,9 @@ public final class ProxyService {
                 consistencyController = controller
                 controller.start()
 
-                // SystemConfiguration already tells us when the primary
-                // interface, service or DNS changes; until now nothing consumed
-                // it, so the app only noticed a network change on the next
-                // 2-second poll and never re-validated egress at all.
+                // Resolver and route changes also matter in local-DoH mode: the
+                // original-DNS escape still follows the physical network even
+                // though MihomoBox no longer writes the system resolver itself.
                 networkState.setRefreshHandler { [weak controller] signal in
                     controller?.handleNetworkChange(reason: signal)
                 }

@@ -13,6 +13,7 @@ public struct ConfigView: View {
       VStack(alignment: .leading, spacing: DashboardTheme.sectionSpacing) {
         configHeader
         applicationUpdatePanel
+        localDoHPanel
 
         switch store.configState {
         case .loaded:
@@ -294,6 +295,84 @@ public struct ConfigView: View {
         .foregroundStyle(DashboardTheme.muted.opacity(0.72))
         .fixedSize(horizontal: false, vertical: true)
         .padding(.horizontal, 8)
+      }
+    }
+  }
+
+  private var localDoHPanel: some View {
+    configPanel("Local DNS over HTTPS", symbol: "lock.shield") {
+      VStack(alignment: .leading, spacing: 10) {
+        HStack(spacing: 10) {
+          StatusPill(
+            store.localDoHPrepared ? "Server Ready" : "Not Configured",
+            color: store.localDoHPrepared ? DashboardTheme.success : DashboardTheme.muted
+          )
+          if store.localDoHDomainCount > 0 {
+            Text("\(store.localDoHDomainCount) proxy domains")
+              .font(.system(size: 10, weight: .medium))
+              .foregroundStyle(DashboardTheme.muted)
+          }
+          Spacer()
+        }
+
+        Text(
+          "Generates a loopback-only certificate, trusts it in the System keychain, and opens a macOS DNS Settings profile. Only enabled DOMAIN and DOMAIN-SUFFIX proxy rules use local DoH; all other domains keep the current default DNS."
+        )
+        .font(.system(size: 10))
+        .foregroundStyle(DashboardTheme.muted.opacity(0.78))
+        .fixedSize(horizontal: false, vertical: true)
+
+        if store.localDoHOmittedRuleCount > 0 || store.localDoHExactDomainCount > 0 {
+          Text(
+            "Generated with \(store.localDoHOmittedRuleCount) unsupported or excess rules omitted"
+              + (store.localDoHExactDomainCount > 0
+                ? " and \(store.localDoHExactDomainCount) exact-domain rules represented as suffixes."
+                : ".")
+          )
+          .font(.system(size: 10, weight: .medium))
+          .foregroundStyle(DashboardTheme.warning)
+          .fixedSize(horizontal: false, vertical: true)
+        }
+
+        Text(
+          "macOS requires one final confirmation in General › Device Management. Re-run Prepare after changing proxy-domain rules to update the profile."
+        )
+        .font(.system(size: 10))
+        .foregroundStyle(DashboardTheme.muted.opacity(0.72))
+        .fixedSize(horizontal: false, vertical: true)
+
+        HStack(spacing: 10) {
+          actionButton(
+            store.localDoHPrepared ? "Regenerate & Open Profile" : "Prepare & Open Profile",
+            symbol: "plus.shield.fill",
+            tint: DashboardTheme.primary,
+            actionKind: .preparingLocalDoH
+          ) {
+            await store.prepareLocalDoH()
+          }
+          .disabled(!store.localDoHAvailable || store.configAction != nil)
+
+          if store.localDoHPrepared {
+            actionButton(
+              "Open Device Management",
+              symbol: "gearshape.fill",
+              tint: DashboardTheme.content,
+              actionKind: .openingDeviceManagement
+            ) {
+              await store.openDeviceManagement()
+            }
+            .disabled(store.configAction != nil)
+
+            actionButton(
+              "Remove Local DoH",
+              symbol: "trash",
+              tint: DashboardTheme.warning,
+              actionKind: .removingLocalDoH
+            ) {
+              await store.removeLocalDoH()
+            }
+          }
+        }
       }
     }
   }

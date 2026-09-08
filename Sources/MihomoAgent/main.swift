@@ -22,6 +22,7 @@ private let commandMode = arguments.contains("--check")
     || arguments.contains("--health")
     || arguments.contains("--configure-profile")
     || arguments.contains("--restore-profile")
+    || arguments.contains("--set-local-doh")
 
 ServiceLog.configure(
     logPath: commandMode
@@ -47,8 +48,9 @@ if arguments.contains("--help") || arguments.contains("-h") {
                         [--restore-system-dns]
                         [--configure-profile --profile PATH --profile-backup PATH
                          [--secret-file PATH] [--controller-metadata PATH]
-                         [--daemon-config PATH]]
+                         [--daemon-config PATH] [--runtime-config PATH]]
                         [--restore-profile --profile PATH --profile-backup PATH]
+                        [--set-local-doh enabled|disabled]
     """)
     exit(0)
 }
@@ -72,6 +74,26 @@ let runtimeGeneration: String = {
     return arguments[index + 1]
 }()
 
+if let index = arguments.firstIndex(of: "--set-local-doh") {
+    guard arguments.indices.contains(index + 1),
+          ["enabled", "disabled"].contains(arguments[index + 1]) else {
+        print("--set-local-doh requires enabled or disabled", to: &standardError)
+        exit(2)
+    }
+    do {
+        try LocalDoHConfigurationStore.setEnabled(
+            arguments[index + 1] == "enabled",
+            configurationPath: configPath
+        )
+        ServiceLog.info("event=agent_command command=set_local_doh result=success")
+        exit(0)
+    } catch {
+        ServiceLog.error("event=agent_command command=set_local_doh result=failed")
+        print(error.localizedDescription, to: &standardError)
+        exit(1)
+    }
+}
+
 if arguments.contains("--configure-profile") || arguments.contains("--restore-profile") {
     func option(_ name: String) -> String? {
         guard let index = arguments.firstIndex(of: name),
@@ -93,7 +115,8 @@ if arguments.contains("--configure-profile") || arguments.contains("--restore-pr
                 backup: backupPath,
                 secretFile: option("--secret-file"),
                 controllerMetadata: option("--controller-metadata"),
-                daemonConfig: option("--daemon-config")
+                daemonConfig: option("--daemon-config"),
+                runtimeConfig: option("--runtime-config")
             ))
             ServiceLog.info("event=agent_command command=configure_profile result=success")
         }

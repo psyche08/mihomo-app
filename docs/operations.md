@@ -64,6 +64,18 @@ The installer:
 7. verifies controller, TUN, Fake-IP route, DNS bridge, Mihomo DNS, persisted
    PrimaryService DNS, and effective resolver state.
 
+From the Config page, **Prepare & Open Profile** runs the same exact-snapshot
+administrator boundary, repairs the installed components, generates a
+root-owned loopback certificate/private key, trusts only that certificate for
+SSL, enables Mihomo's loopback DoH endpoint, and restores MihomoBox's classic
+Global DNS setting. The App then writes a mode-`0600` profile in the current
+user's Application Support directory and opens it. Apple requires the user to
+finish installation in **General > Device Management**; **Open Device
+Management** reopens that exact System Settings pane at any time. **Remove Local DoH**
+removes the fixed profile identifier, its exact certificate fingerprint and
+server identity, then restores the classic managed-DNS mode. Helper uninstall
+performs the same profile/trust cleanup before deleting the root installation.
+
 There are two intentionally separate startup mechanisms. The root
 LaunchDaemon starts the managed network service at system startup with the
 active profile, whose managed configuration requires `tun.enable: true`. Once
