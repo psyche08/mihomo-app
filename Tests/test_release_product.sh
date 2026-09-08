@@ -268,10 +268,13 @@ require_literal "$CLOUD_PREP" '/usr/bin/codesign --verify --deep --strict --all-
 require_literal "$CLOUD_PREP" '/usr/bin/xcrun stapler validate "$APP"'
 require_literal "$CLOUD_PREP" "'Print :BuildVersion' \"\$MANIFEST\")\" == \"\$VERSION\""
 require_literal "$CLOUD_PREP" "readonly EXPECTED_CLOUD_LEAF_SHA1='44B2EB8C6C3C6A85A3687EEDED7D85EB7C13524A'"
+require_literal "$CLOUD_PREP" "readonly EXPECTED_SPARKLE_PUBLIC_ED_KEY='CL5i36xBB93GX8INJAcBAVFreeVys28Vu94mgAgTA00='"
+require_literal "$CLOUD_PREP" "readonly EXPECTED_KEY_CHALLENGE_SIGNATURE_SHA256='92b8373f2a7807b1e3b22b91d9e2fcf7b8de57e7314825dc10cda1213dc42b2c'"
 require_literal "$CLOUD_PREP" "readonly ASSET_NAME=\"MihomoBox-\$VERSION-macos-arm64.zip\""
 require_literal "$CLOUD_PREP" '[[ "$(sha256_file "$ASSET_TEMP")" == "$SOURCE_SHA256" ]]'
 require_literal "$CLOUD_PREP" '"$SPARKLE_GENERATE_APPCAST" \'
-require_literal "$CLOUD_PREP" '"$SPARKLE_SIGNATURE_VERIFIER" --public-key "$PUBLIC_KEY" \'
+require_literal "$CLOUD_PREP" '"$SPARKLE_SIGN_UPDATE" --verify --ed-key-file "$SPARKLE_ED_KEY_PATH" \'
+reject_literal "$CLOUD_PREP" 'SPARKLE_SIGNATURE_VERIFIER'
 reject_regex "$CLOUD_PREP" '(/usr/bin/)?(swift|xcodebuild)([[:space:]]|$)|build-macos-app\.sh'
 reject_regex "$CLOUD_PREP" '(/usr/bin/)?codesign[[:space:]]+(-[^[:space:]]+[[:space:]]+)*--sign([[:space:]]|$)'
 reject_regex "$CLOUD_PREP" 'notarytool|notarytool-rs|stapler[[:space:]]+staple|hdiutil|(^|[[:space:]])tar([[:space:]]|$)'

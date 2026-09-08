@@ -85,7 +85,9 @@ This command verifies the source commit, version and build number, all five
 executables, the pinned Cloud Developer ID leaf, Gatekeeper acceptance, the
 stapled ticket and production Sparkle settings. It then copies the ZIP
 byte-for-byte to its versioned name and uses pinned Sparkle 2.9.4 tools to
-generate and independently verify `dist/appcast.xml`. Local work is limited to
+generate and verify `dist/appcast.xml`. The App public key and a deterministic
+signature fingerprint pin the release key independently of mutable local
+OpenSSL installations. Local work is limited to
 feed metadata; this command does not build, sign, notarize, staple or package
 the App.
 

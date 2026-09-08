@@ -21,11 +21,11 @@ readonly RELEASE_INPUT_ROOT="$ROOT/build/release-inputs"
 readonly SPARKLE_DISTRIBUTION_ROOT="$RELEASE_INPUT_ROOT/Sparkle-2.9.4"
 readonly SPARKLE_GENERATE_APPCAST="$SPARKLE_DISTRIBUTION_ROOT/bin/generate_appcast"
 readonly SPARKLE_SIGN_UPDATE="$SPARKLE_DISTRIBUTION_ROOT/bin/sign_update"
-readonly SPARKLE_SIGNATURE_VERIFIER="$RELEASE_INPUT_ROOT/verify-sparkle-ed25519"
 readonly SPARKLE_ED_KEY_PATH="${HOME:-}/.config/mihomobox/sparkle-private-ed25519.b64"
 readonly EXPECTED_GENERATE_APPCAST_SHA256='d70b1872fb6a859695f8abc0a403301d151d1c6c83cf427f4a2716c37a48983d'
 readonly EXPECTED_SIGN_UPDATE_SHA256='bfb52400c3da18bb4c251ac4818c2c2e1e31c2e649a45b31c11109b6e57b34ad'
-readonly EXPECTED_SIGNATURE_VERIFIER_SHA256='d35e471db39dfd3ab98dddff3c2b16ba2fed27fc131b85806f7087f319f2d530'
+readonly EXPECTED_SPARKLE_PUBLIC_ED_KEY='CL5i36xBB93GX8INJAcBAVFreeVys28Vu94mgAgTA00='
+readonly EXPECTED_KEY_CHALLENGE_SIGNATURE_SHA256='92b8373f2a7807b1e3b22b91d9e2fcf7b8de57e7314825dc10cda1213dc42b2c'
 readonly EXPECTED_CLOUD_LEAF_SHA1='44B2EB8C6C3C6A85A3687EEDED7D85EB7C13524A'
 readonly EXPECTED_TEAM_ID='89LGY6BD53'
 readonly EXPECTED_SPARKLE_VERSION='2.9.4'
@@ -87,7 +87,7 @@ readonly SOURCE_COMMIT="$(/usr/bin/git -C "$ROOT" rev-parse --verify 'HEAD^{comm
 readonly WORKTREE_STATUS="$(/usr/bin/git -C "$ROOT" status --porcelain=v1 --untracked-files=all)"
 [[ -z "$WORKTREE_STATUS" ]] || fail 'release worktree must be clean'
 
-for tool in "$SPARKLE_GENERATE_APPCAST" "$SPARKLE_SIGN_UPDATE" "$SPARKLE_SIGNATURE_VERIFIER"; do
+for tool in "$SPARKLE_GENERATE_APPCAST" "$SPARKLE_SIGN_UPDATE"; do
   require_regular_file "$tool" 'pinned Sparkle release tool'
   [[ -x "$tool" ]] || fail 'pinned Sparkle release tool must be executable'
 done
@@ -95,8 +95,6 @@ done
   fail 'generate_appcast checksum does not match the audited pin'
 [[ "$(sha256_file "$SPARKLE_SIGN_UPDATE")" == "$EXPECTED_SIGN_UPDATE_SHA256" ]] ||
   fail 'sign_update checksum does not match the audited pin'
-[[ "$(sha256_file "$SPARKLE_SIGNATURE_VERIFIER")" == "$EXPECTED_SIGNATURE_VERIFIER_SHA256" ]] ||
-  fail 'Sparkle signature verifier checksum does not match the audited pin'
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
   "$SPARKLE_DISTRIBUTION_ROOT/Sparkle.framework/Resources/Info.plist")" == \
   "$EXPECTED_SPARKLE_VERSION" ]] || fail 'Sparkle release tools have the wrong version'
@@ -198,15 +196,18 @@ for pair in \
 done
 
 readonly PUBLIC_KEY="$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$INFO")"
-[[ "$PUBLIC_KEY" =~ '^[A-Za-z0-9+/]{43}=$' ]] || fail 'Cloud App Sparkle public key is invalid'
+[[ "$PUBLIC_KEY" == "$EXPECTED_SPARKLE_PUBLIC_ED_KEY" ]] ||
+  fail 'Cloud App Sparkle public key does not match the release key pin'
 readonly CHALLENGE="$STAGE/key-challenge"
-/usr/bin/printf 'MihomoBox Cloud release key check %s\n' "$(/usr/bin/uuidgen)" > "$CHALLENGE"
+/usr/bin/printf 'MihomoBox Sparkle release key v1\n' > "$CHALLENGE"
 typeset CHALLENGE_SIGNATURE=''
 CHALLENGE_SIGNATURE="$("$SPARKLE_SIGN_UPDATE" -p --ed-key-file "$SPARKLE_ED_KEY_PATH" "$CHALLENGE")"
 CHALLENGE_SIGNATURE="$(/usr/bin/printf '%s' "$CHALLENGE_SIGNATURE" | /usr/bin/tr -d '\r\n[:space:]')"
 [[ "$CHALLENGE_SIGNATURE" =~ '^[A-Za-z0-9+/]{86}==$' ]] || fail 'Sparkle key challenge signature is invalid'
-"$SPARKLE_SIGNATURE_VERIFIER" --public-key "$PUBLIC_KEY" \
-  --signature "$CHALLENGE_SIGNATURE" --file "$CHALLENGE"
+[[ "$(/usr/bin/printf '%s' "$CHALLENGE_SIGNATURE" | /usr/bin/shasum -a 256 | /usr/bin/awk 'NR == 1 { print $1 }')" == \
+  "$EXPECTED_KEY_CHALLENGE_SIGNATURE_SHA256" ]] || fail 'Sparkle private key does not match the release key pin'
+"$SPARKLE_SIGN_UPDATE" --verify --ed-key-file "$SPARKLE_ED_KEY_PATH" \
+  "$CHALLENGE" "$CHALLENGE_SIGNATURE" >/dev/null
 unset CHALLENGE_SIGNATURE
 
 [[ -e "$DIST" ]] || /bin/mkdir "$DIST"
@@ -257,8 +258,8 @@ readonly ENCLOSURE_SIGNATURE="$(/usr/bin/xmllint --xpath \
   "string($ENCLOSURE_XPATH/@*[local-name()='edSignature'])" "$GENERATED_APPCAST")"
 [[ "$ENCLOSURE_SIGNATURE" =~ '^[A-Za-z0-9+/]{86}==$' ]] ||
   fail 'appcast enclosure signature is invalid'
-"$SPARKLE_SIGNATURE_VERIFIER" --public-key "$PUBLIC_KEY" \
-  --signature "$ENCLOSURE_SIGNATURE" --file "$ASSET"
+"$SPARKLE_SIGN_UPDATE" --verify --ed-key-file "$SPARKLE_ED_KEY_PATH" \
+  "$ASSET" "$ENCLOSURE_SIGNATURE" >/dev/null
 
 readonly APPCAST="$DIST/appcast.xml"
 readonly APPCAST_TEMP="$(/usr/bin/mktemp "$DIST/.appcast.XXXXXX")"
