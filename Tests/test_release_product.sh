@@ -266,6 +266,7 @@ require_literal "$GITHUB_HELPER" 'verify_exact_formal_assets "$release_id"'
 require_literal "$CLOUD_PREP" 'Cloud ZIP release format starts at version 0.9.3'
 require_literal "$CLOUD_PREP" '/usr/bin/codesign --verify --deep --strict --all-architectures "$APP"'
 require_literal "$CLOUD_PREP" '/usr/bin/xcrun stapler validate "$APP"'
+require_literal "$CLOUD_PREP" "'Print :BuildVersion' \"\$MANIFEST\")\" == \"\$VERSION\""
 require_literal "$CLOUD_PREP" "readonly EXPECTED_CLOUD_LEAF_SHA1='44B2EB8C6C3C6A85A3687EEDED7D85EB7C13524A'"
 require_literal "$CLOUD_PREP" "readonly ASSET_NAME=\"MihomoBox-\$VERSION-macos-arm64.zip\""
 require_literal "$CLOUD_PREP" '[[ "$(sha256_file "$ASSET_TEMP")" == "$SOURCE_SHA256" ]]'

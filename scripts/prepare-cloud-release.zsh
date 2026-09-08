@@ -154,8 +154,8 @@ readonly BUILD_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$
   fail 'Cloud App executable is invalid'
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :Version' "$MANIFEST")" == "$VERSION" ]] ||
   fail 'Cloud BuildManifest version mismatch'
-[[ "$(/usr/libexec/PlistBuddy -c 'Print :BuildVersion' "$MANIFEST")" == "$BUILD_VERSION" ]] ||
-  fail 'Cloud BuildManifest build version mismatch'
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :BuildVersion' "$MANIFEST")" == "$VERSION" ]] ||
+  fail 'Cloud BuildManifest source build version mismatch'
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :Architecture' "$MANIFEST")" == 'arm64' ]] ||
   fail 'Cloud App architecture is not arm64'
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :SourceCommit' "$MANIFEST")" == "$SOURCE_COMMIT" ]] ||
