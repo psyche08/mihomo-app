@@ -106,6 +106,7 @@ typeset -A LOCAL_ASSET_PATH=()
 typeset -A LOCAL_ASSET_SHA256=()
 typeset -A LOCAL_ASSET_SIZE=()
 typeset -A REMOTE_ASSET_SEEN=()
+typeset FORMAL_ASSET_COUNT=0
 
 usage() {
   /usr/bin/printf '%s\n' \
@@ -435,6 +436,38 @@ acquire_release_lock() {
   LOCK_TOKEN_TEMP=''
 }
 
+is_cloud_zip_release() {
+  local major="${VERSION%%.*}"
+  local remainder="${VERSION#*.}"
+  local minor="${remainder%%.*}"
+  local patch="${remainder#*.}"
+
+  (( major > 0 || minor > 9 || (minor == 9 && patch >= 3) ))
+}
+
+configure_asset_set() {
+  if is_cloud_zip_release; then
+    ASSET_NAMES=(
+      "MihomoBox-$VERSION-macos-arm64.zip"
+      'appcast.xml'
+    )
+  else
+    ASSET_NAMES=(
+      "MihomoBox-$VERSION-macos-arm64.app.tar.gz"
+      "MihomoBox-$VERSION-macos-arm64.app.tar.gz.sig"
+      "MihomoBox-$VERSION-macos-arm64.dmg"
+      'latest.json'
+      'appcast.xml'
+    )
+  fi
+  ASSET_PATHS=()
+  local name=''
+  for name in "${ASSET_NAMES[@]}"; do
+    ASSET_PATHS+=("$DIST/$name")
+  done
+  FORMAL_ASSET_COUNT="${#ASSET_NAMES[@]}"
+}
+
 validate_release_feeds() {
   local archive_name="MihomoBox-$VERSION-macos-arm64.app.tar.gz"
   local dmg_name="MihomoBox-$VERSION-macos-arm64.dmg"
@@ -449,10 +482,34 @@ validate_release_feeds() {
   local appcast_version=''
   local appcast_short_version=''
 
-  require_safe_regular_file "$DIST/latest.json" "latest.json"
   require_safe_regular_file "$DIST/appcast.xml" "appcast.xml"
-  /usr/bin/plutil -convert json -o /dev/null "$DIST/latest.json"
   /usr/bin/xmllint --noout "$DIST/appcast.xml"
+
+  if is_cloud_zip_release; then
+    local zip_name="MihomoBox-$VERSION-macos-arm64.zip"
+    local zip_url="https://github.com/$REPOSITORY/releases/download/$TAG/$zip_name"
+    enclosure_xpath="/*[local-name()='rss']/*[local-name()='channel']/*[local-name()='item']/*[local-name()='enclosure'][@url='$zip_url']"
+    enclosure_count="$(/usr/bin/xmllint --xpath "count($enclosure_xpath)" "$DIST/appcast.xml")" ||
+      die "could not inspect appcast.xml enclosure"
+    [[ "$enclosure_count" == '1' ]] ||
+      die "appcast.xml must contain exactly one current Cloud ZIP enclosure"
+    enclosure_length="$(/usr/bin/xmllint --xpath "string(($enclosure_xpath)[1]/@length)" "$DIST/appcast.xml")"
+    expected_dmg_length="$(file_size "$DIST/$zip_name")"
+    [[ "$enclosure_length" == "$expected_dmg_length" ]] ||
+      die "appcast.xml enclosure length does not match the current Cloud ZIP"
+    appcast_version="$(/usr/bin/xmllint --xpath \
+      "string((/*[local-name()='rss']/*[local-name()='channel']/*[local-name()='item']/*[local-name()='version'])[1])" \
+      "$DIST/appcast.xml")"
+    appcast_short_version="$(/usr/bin/xmllint --xpath \
+      "string((/*[local-name()='rss']/*[local-name()='channel']/*[local-name()='item']/*[local-name()='shortVersionString'])[1])" \
+      "$DIST/appcast.xml")"
+    [[ "$appcast_version" =~ ^[1-9][0-9]*$ && "$appcast_short_version" == "$VERSION" ]] ||
+      die "appcast.xml version does not match the Cloud App"
+    return 0
+  fi
+
+  require_safe_regular_file "$DIST/latest.json" "latest.json"
+  /usr/bin/plutil -convert json -o /dev/null "$DIST/latest.json"
 
   latest_version="$(/usr/bin/plutil -extract version raw -n -o - "$DIST/latest.json")" ||
     die "latest.json has no version"
@@ -492,21 +549,6 @@ build_local_asset_manifest() {
   local digest=''
   local size=''
   local manifest_temporary=''
-
-  ASSET_NAMES=(
-    "MihomoBox-$VERSION-macos-arm64.app.tar.gz"
-    "MihomoBox-$VERSION-macos-arm64.app.tar.gz.sig"
-    "MihomoBox-$VERSION-macos-arm64.dmg"
-    'latest.json'
-    'appcast.xml'
-  )
-  ASSET_PATHS=(
-    "$DIST/${ASSET_NAMES[1]}"
-    "$DIST/${ASSET_NAMES[2]}"
-    "$DIST/${ASSET_NAMES[3]}"
-    "$DIST/${ASSET_NAMES[4]}"
-    "$DIST/${ASSET_NAMES[5]}"
-  )
 
   LOCAL_ASSET_PATH=()
   LOCAL_ASSET_SHA256=()
@@ -1178,18 +1220,18 @@ upload_missing_assets() {
 
   load_and_validate_remote_assets "$release_id"
   (( ${#MISSING_ASSETS[@]} == 0 )) || die "locked release is missing formal assets"
-  (( ${#REMOTE_ASSET_SEEN[@]} == 5 )) ||
-    die "locked release does not contain exactly five formal assets"
+  (( ${#REMOTE_ASSET_SEEN[@]} == FORMAL_ASSET_COUNT )) ||
+    die "locked release does not contain the exact formal asset set"
   write_state uploaded_verified "$release_id"
 }
 
-verify_exact_five_assets() {
+verify_exact_formal_assets() {
   local release_id="$1"
 
   load_and_validate_remote_assets "$release_id"
   (( ${#MISSING_ASSETS[@]} == 0 )) || die "locked release is missing formal assets"
-  (( ${#REMOTE_ASSET_SEEN[@]} == 5 )) ||
-    die "locked release does not contain exactly five formal assets"
+  (( ${#REMOTE_ASSET_SEEN[@]} == FORMAL_ASSET_COUNT )) ||
+    die "locked release does not contain the exact formal asset set"
 }
 
 verify_latest_release_id() {
@@ -1209,7 +1251,7 @@ publish_locked_release() {
   [[ -n "$release_id" ]] || die "publish requires a locked release_id"
   require_single_canonical_release "$release_id"
   fetch_release_by_id "$release_id"
-  verify_exact_five_assets "$release_id"
+  verify_exact_formal_assets "$release_id"
 
   if [[ "$RELEASE_DRAFT" == 'false' ]]; then
     [[ -n "$RELEASE_PUBLISHED_AT" ]] || die "public release has no published_at timestamp"
@@ -1240,7 +1282,7 @@ publish_locked_release() {
   [[ "$RELEASE_DRAFT" == 'false' && -n "$RELEASE_PUBLISHED_AT" ]] ||
     die "publish outcome remains unresolved; no second PATCH was attempted (exit=$patch_exit)"
   require_single_canonical_release "$release_id"
-  verify_exact_five_assets "$release_id"
+  verify_exact_formal_assets "$release_id"
   verify_latest_release_id "$release_id"
   write_state published_verified "$release_id"
   /usr/bin/printf 'published %s release_id=%s commit=%s\n' "$TAG" "$release_id" "$HEAD_SHA"
@@ -1264,6 +1306,7 @@ main() {
   find_gh
   validate_repository_name
   derive_repository_state
+  configure_asset_set
   prepare_state_directory
   acquire_release_lock
   prepare_temp_files
@@ -1282,7 +1325,7 @@ main() {
     prepare_annotated_tag_and_main
     bind_or_create_draft
     if [[ "$RELEASE_DRAFT" == 'false' ]]; then
-      verify_exact_five_assets "$STATE_RELEASE_ID"
+      verify_exact_formal_assets "$STATE_RELEASE_ID"
       verify_latest_release_id "$STATE_RELEASE_ID"
       write_state published_verified "$STATE_RELEASE_ID"
       /usr/bin/printf 'verified already-published %s release_id=%s\n' \
@@ -1290,8 +1333,8 @@ main() {
       return 0
     fi
     upload_missing_assets "$STATE_RELEASE_ID"
-    /usr/bin/printf 'prepared draft %s release_id=%s assets=5 commit=%s\n' \
-      "$TAG" "$STATE_RELEASE_ID" "$HEAD_SHA"
+    /usr/bin/printf 'prepared draft %s release_id=%s assets=%s commit=%s\n' \
+      "$TAG" "$STATE_RELEASE_ID" "$FORMAL_ASSET_COUNT" "$HEAD_SHA"
   else
     inspect_remote_annotated_tag '0'
     ensure_local_tag_matches_remote

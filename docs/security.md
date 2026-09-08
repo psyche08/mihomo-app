@@ -123,8 +123,10 @@ the network data plane.
 - Mihomo uses a pinned release and SHA-256.
 - SwiftPM lockfiles pin the native dependency graph. The pinned Sparkle binary
   artifact is additionally protected by SwiftPM's recorded checksum.
-- Daemon, agent, CLI, Desktop, and DMG in any one release use one Developer ID
-  certificate. During the bounded 0.9.1 Xcode Cloud migration, peer policy is
+- Daemon, agent, CLI, and Desktop in any one release use one Developer ID
+  certificate. Starting with 0.9.3, their exact Xcode Cloud notarized and
+  ticket-attached App ZIP is the update artifact. During the bounded 0.9.1
+  Xcode Cloud migration, peer policy is
   the exact union of the published leaf and the observed Cloud leaf; it never
   falls back to Team ID. The old-signed bridge is not releasable until both
   fingerprints are source-pinned.

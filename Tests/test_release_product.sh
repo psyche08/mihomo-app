@@ -6,6 +6,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PRODUCT="$ROOT/scripts/release-product.zsh"
 GITHUB_HELPER="$ROOT/scripts/release-github.zsh"
+CLOUD_PREP="$ROOT/scripts/prepare-cloud-release.zsh"
 RELEASE_MACOS="$ROOT/scripts/release-macos.sh"
 VALIDATE="$ROOT/scripts/validate.sh"
 
@@ -49,13 +50,14 @@ reject_regex() {
   fi
 }
 
-for path in "$PRODUCT" "$GITHUB_HELPER" "$RELEASE_MACOS" "$VALIDATE"; do
+for path in "$PRODUCT" "$GITHUB_HELPER" "$CLOUD_PREP" "$RELEASE_MACOS" "$VALIDATE"; do
   require_file "$path"
 done
 
 # Syntax inspection only: neither operator entry point is executed here.
 /bin/zsh -n "$PRODUCT"
 /bin/zsh -n "$GITHUB_HELPER"
+/bin/zsh -n "$CLOUD_PREP"
 
 # release-product is the operator boundary. A fresh run reaches compilation
 # only through validate.sh; it must not grow a second build/sign/notary path.
@@ -161,33 +163,31 @@ require_literal "$PRODUCT" 'read -r "NOTARY_APPLE_ID?Apple ID email: "'
 require_literal "$PRODUCT" 'read -r -s \'
 require_literal "$PRODUCT" 'export NOTARY_TEAM_ID NOTARY_APPLE_ID NOTARY_PASSWORD'
 
-for path in "$PRODUCT" "$GITHUB_HELPER" "$RELEASE_MACOS"; do
+for path in "$PRODUCT" "$GITHUB_HELPER" "$CLOUD_PREP" "$RELEASE_MACOS"; do
   reject_literal "$path" 'unlock-keychain'
 done
 
-# The GitHub helper freezes exactly the five formal assets for the current
-# version. No zip, glob, previous-version artifact, or mutable latest selection
-# is part of the upload set.
-asset_block="$(
-  /usr/bin/sed -n \
-    '/^[[:space:]]*ASSET_NAMES=(/,/^[[:space:]]*)[[:space:]]*$/p' \
-    "$GITHUB_HELPER"
-)"
-asset_count="$(
-  /usr/bin/printf '%s\n' "$asset_block" |
-    /usr/bin/grep -Ec "^[[:space:]]+(\"[^\"]+\"|'[^']+')[[:space:]]*$"
-)"
-[[ "$asset_count" == "5" ]] || fail "GitHub helper must define exactly five assets"
+# Starting at 0.9.3, GitHub publishes the exact ticket-attached Cloud ZIP and
+# its signed Sparkle feed. Historical versions retain their frozen five-file
+# compatibility set; the helper must select one exact set without globs.
+require_literal "$GITHUB_HELPER" 'is_cloud_zip_release() {'
+require_literal "$GITHUB_HELPER" 'configure_asset_set() {'
+require_literal "$GITHUB_HELPER" 'FORMAL_ASSET_COUNT="${#ASSET_NAMES[@]}"'
+for asset in \
+  'MihomoBox-$VERSION-macos-arm64.zip' \
+  'appcast.xml'; do
+  require_literal "$GITHUB_HELPER" "$asset"
+done
 for asset in \
   'MihomoBox-$VERSION-macos-arm64.app.tar.gz' \
   'MihomoBox-$VERSION-macos-arm64.app.tar.gz.sig' \
   'MihomoBox-$VERSION-macos-arm64.dmg' \
   'latest.json' \
   'appcast.xml'; do
-  /usr/bin/printf '%s\n' "$asset_block" | /usr/bin/grep -Fq -- "$asset" ||
-    fail "missing exact GitHub asset: $asset"
+  require_literal "$GITHUB_HELPER" "$asset"
 done
-require_literal "$GITHUB_HELPER" '(( ${#REMOTE_ASSET_SEEN[@]} == 5 ))'
+require_literal "$GITHUB_HELPER" '(( ${#REMOTE_ASSET_SEEN[@]} == FORMAL_ASSET_COUNT ))'
+require_literal "$GITHUB_HELPER" 'verify_exact_formal_assets() {'
 require_literal "$GITHUB_HELPER" '"refs/tags/${TAG}:refs/tags/${TAG}"'
 require_literal "$GITHUB_HELPER" 'upload_asset_by_release_id() {'
 require_literal "$GITHUB_HELPER" \
@@ -249,7 +249,7 @@ for path in "$PRODUCT" "$GITHUB_HELPER"; do
 done
 
 # Publication requires the exact version@commit confirmation and PATCHes only
-# the state-bound release ID after all five remote digests were verified.
+# the state-bound release ID after every selected remote digest was verified.
 require_literal "$PRODUCT" 'readonly EXPECTED_CONFIRMATION="v$VERSION@$EXPECTED_COMMIT"'
 require_literal "$PRODUCT" \
   '[[ "$CONFIRMATION" == "$EXPECTED_CONFIRMATION" ]]'
@@ -259,7 +259,21 @@ require_literal "$GITHUB_HELPER" \
   'gh_api --method PATCH "repos/$REPOSITORY/releases/$release_id" \'
 require_literal "$GITHUB_HELPER" '-F draft=false'
 require_literal "$GITHUB_HELPER" '-f make_latest=true'
-require_literal "$GITHUB_HELPER" 'verify_exact_five_assets "$release_id"'
+require_literal "$GITHUB_HELPER" 'verify_exact_formal_assets "$release_id"'
+
+# Cloud preparation is verification plus byte-preserving copy and signed feed
+# metadata only. It must not build, sign, notarize, staple, or package the App.
+require_literal "$CLOUD_PREP" 'Cloud ZIP release format starts at version 0.9.3'
+require_literal "$CLOUD_PREP" '/usr/bin/codesign --verify --deep --strict --all-architectures "$APP"'
+require_literal "$CLOUD_PREP" '/usr/bin/xcrun stapler validate "$APP"'
+require_literal "$CLOUD_PREP" "readonly EXPECTED_CLOUD_LEAF_SHA1='44B2EB8C6C3C6A85A3687EEDED7D85EB7C13524A'"
+require_literal "$CLOUD_PREP" "readonly ASSET_NAME=\"MihomoBox-\$VERSION-macos-arm64.zip\""
+require_literal "$CLOUD_PREP" '[[ "$(sha256_file "$ASSET_TEMP")" == "$SOURCE_SHA256" ]]'
+require_literal "$CLOUD_PREP" '"$SPARKLE_GENERATE_APPCAST" \'
+require_literal "$CLOUD_PREP" '"$SPARKLE_SIGNATURE_VERIFIER" --public-key "$PUBLIC_KEY" \'
+reject_regex "$CLOUD_PREP" '(/usr/bin/)?(swift|xcodebuild)([[:space:]]|$)|build-macos-app\.sh'
+reject_regex "$CLOUD_PREP" '(/usr/bin/)?codesign[[:space:]]+(-[^[:space:]]+[[:space:]]+)*--sign([[:space:]]|$)'
+reject_regex "$CLOUD_PREP" 'notarytool|notarytool-rs|stapler[[:space:]]+staple|hdiutil|(^|[[:space:]])tar([[:space:]]|$)'
 
 require_literal "$VALIDATE" '/bin/bash Tests/test_release_product.sh'
 

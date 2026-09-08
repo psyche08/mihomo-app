@@ -4,10 +4,10 @@
 
 Production release artifacts originate only from Xcode Cloud after the 0.9.1
 certificate bridge. Xcode Cloud owns the release build, Developer ID signing,
-notarization and packaging. If a later artifact is published through GitHub or
-another download channel, it must be the exact Cloud-produced artifact; a
-local build must never be substituted. Local compilation, tests and validation
-use ad-hoc signing only.
+notarization, ticket attachment and App packaging. Starting with 0.9.3, GitHub
+publishes that exact ticket-attached ZIP byte-for-byte plus a locally generated
+signed Sparkle appcast. A local build, re-sign or repack must never be
+substituted. Local compilation, tests and validation use ad-hoc signing only.
 
 Version 0.9.1 is the sole migration exception. It may reuse only the already
 built App bound to source commit `acb6f380c76d5d5a8bd96d208ce6a5e3947cdb4f`,
@@ -57,147 +57,58 @@ runs Swift and shell tests, builds the bundle through
 `scripts/build-macos-app.sh`, and performs structural checks on the final App.
 It never installs the LaunchDaemon and never changes the current network.
 
-## Operator release orchestration
+## GitHub publication from Xcode Cloud
 
-`scripts/release-product.zsh` is the operator-only release entry point. Because
-its `fresh` mode invokes `scripts/validate.sh`, an agent must never run this
-script: an agent may edit or statically inspect it, then give the exact command
-to the operator to run in a normal Terminal outside the sandbox. The wrapper
-does not unlock Keychain Access; an unavailable signing identity remains an
-operator-controlled prerequisite and fails closed.
-
-For a one-command local production package that validates and compiles with the
-published Sparkle key, signs with Developer ID, notarizes, staples, and creates
-the local artifacts without preparing or modifying GitHub, run:
-
-```bash
-./scripts/release-product.zsh local
-```
-
-`local` uses the same clean-commit, fixed-input, credential, signing identity,
-notarization-state, and immutable-artifact gates as a full release. It ends
-with `release_result=signed_notarized_local` and never invokes the GitHub
-helper. Existing state remains fail-closed and must be resumed or reconciled;
-the command never silently deletes or replaces an ambiguous submission.
-When an earlier direct `release-macos.sh` attempt crashed before exposing any
-submission ID, the operator must first prove from Apple history that no upload
-was accepted. Only then may the one-time discard switch be used so `local`
-automatically verifies and archives that direct state and ZIP before creating a
-new artifact:
-
-```bash
-./scripts/release-product.zsh local --discard-direct-submit-unknown
-```
-
-The option accepts exactly one `submit_unknown`, `upload_confirmed=false`,
-no-ID state whose ZIP bytes match its recorded SHA-256. Other or ambiguous
-state remains blocked; the SHA-256 never needs to be entered manually.
-If signing, upload, waiting, or stapling is interrupted after state has been
-created, inspect the recorded log and resume only that exact local artifact:
-
-```bash
-./scripts/release-product.zsh local-resume
-```
-
-Start a new acceptance-gated release from a clean, committed, non-detached
-branch. The wrapper refreshes `origin/main`, requires it to be an ancestor of
-`HEAD`, and the GitHub phase atomically advances main together with the tag; an
-intermediate feature-branch push is not required:
-
-```bash
-./scripts/release-product.zsh fresh
-```
-
-The default result is a draft GitHub Release. `fresh` validates and compiles
-once, verifies that `BuildManifest.plist` records the same full source commit
-with `SourceDirty=false`, signs and notarizes the prebuilt App, freezes the five
-formal assets, creates an annotated `vX.Y.Z` tag, atomically pushes the exact
-commit to `main` together with that tag, and uploads only to the release ID
-bound in local state. The five-asset set is exactly:
+Starting with 0.9.3, the formal release set contains exactly two files:
 
 ```text
-MihomoBox-X.Y.Z-macos-arm64.app.tar.gz
-MihomoBox-X.Y.Z-macos-arm64.app.tar.gz.sig
-MihomoBox-X.Y.Z-macos-arm64.dmg
-latest.json
+MihomoBox-X.Y.Z-macos-arm64.zip
 appcast.xml
 ```
 
-The wrapper uses non-empty `NOTARY_TEAM_ID`, `NOTARY_APPLE_ID`, and
-`NOTARY_PASSWORD` values from the operator environment as-is; it prompts only
-for a missing value, and the password is the Apple app-specific password. It
-does not request the Mac login or Keychain password and never unlocks a
-Keychain. GitHub authentication comes from the normal `gh` credential store or
-`GH_TOKEN` (an inherited `GITHUB_TOKEN` is normalized to `GH_TOKEN` only for the
-GitHub phase).
+The ZIP must be downloaded from the Xcode Cloud Notarize post-action as
+**Notarized App (ticket attached)**. The Archive action's similarly named
+Developer ID ZIP is not the publication input because it may not contain the
+stapled ticket. The downloaded ZIP is renamed only: its bytes and SHA-256 must
+remain identical, and the App must never be extracted and repackaged for
+distribution.
 
-Every asset name, byte length and SHA-256 digest is frozen in
-`release-assets.tsv` and verified against GitHub. An existing remote asset with
-a different size or digest stops the release; the workflow never uses
-`--clobber`, deletes an asset, chooses the first draft, or mutates a release by
-an unbound tag or URL.
-
-Resume the same version and full commit after inspecting the previous log:
+From a clean checkout at the exact Cloud source commit, validate the ZIP and
+create the signed feed metadata:
 
 ```bash
-./scripts/release-product.zsh resume
+./scripts/prepare-cloud-release.zsh \
+  --cloud-zip '/absolute/path/to/MihomoBox.app.zip'
 ```
 
-State lives under
-`dist/.release-state/X.Y.Z-FULL_SOURCE_COMMIT/`, while
-`dist/.release-state/release-product.lock` and
-`dist/.release-state/release.lock` serialize product and signing operations
-across every version. Before `release-assets.tsv` exists, `resume` delegates to
-`release-macos.sh --resume` and retains the existing signed-App and
-notarization bindings. Once that asset manifest exists, the artifacts are
-immutable: `resume` skips validation and `release-macos.sh` completely and only
-reconciles the state-bound GitHub draft, release ID and five remote digests.
-Never delete state to force `fresh`.
+This command verifies the source commit, version and build number, all five
+executables, the pinned Cloud Developer ID leaf, Gatekeeper acceptance, the
+stapled ticket and production Sparkle settings. It then copies the ZIP
+byte-for-byte to its versioned name and uses pinned Sparkle 2.9.4 tools to
+generate and independently verify `dist/appcast.xml`. Local work is limited to
+feed metadata; this command does not build, sign, notarize, staple or package
+the App.
 
-After signed-machine acceptance, publish only the exact frozen draft using the
-full confirmation printed by the wrapper:
+Prepare a state-bound GitHub draft, then publish the exact draft after review:
 
 ```bash
-./scripts/release-product.zsh publish \
+STATE_DIR="$PWD/dist/.release-state/X.Y.Z-FULL_SOURCE_COMMIT"
+./scripts/release-github.zsh prepare --state-dir "$STATE_DIR"
+./scripts/release-github.zsh publish \
+  --state-dir "$STATE_DIR" \
   --confirm vX.Y.Z@FULL_SOURCE_COMMIT
 ```
 
-For an explicitly approved release that does not require a separate acceptance
-pause, publication may be requested in the initial operator run:
+The helper creates an annotated tag, atomically keeps `main` and that tag on
+the same commit, freezes every formal asset's byte length and SHA-256, and
+binds all mutations to one numeric GitHub release ID. An existing asset with a
+different digest stops the release; the workflow never uses `--clobber`,
+deletes an asset, or selects a mutable draft by tag alone.
 
-```bash
-./scripts/release-product.zsh fresh --publish \
-  --confirm vX.Y.Z@FULL_SOURCE_COMMIT
-```
-
-Both publication forms re-read the exact numeric GitHub `release_id`, tag,
-commit and all five remote digests before making that release public and latest.
-The ordinary `fresh` and `resume` forms never publish.
-
-For a deliberate one-command public release, use:
-
-```bash
-./scripts/release-product.zsh ship
-```
-
-`ship` computes the exact `vX.Y.Z@FULL_SOURCE_COMMIT` confirmation from the
-clean committed checkout, then runs the same validation/compilation,
-signing/notarization, immutable GitHub upload and publication phases. It does
-not bypass any artifact, remote-main, tag, digest or release-ID gate.
-
-Release inputs are version-independent. The wrapper uses the audited Sparkle
-tool digests checked into `scripts/release-product.zsh`, tools under
-`build/release-inputs/`, and private keys under the operator-owned ignored
-paths documented below. A new `VERSION` does not require creating or editing a
-`release-X.Y.Z.env` file. The Developer ID Application identity is selected by
-`NOTARY_TEAM_ID`; when the team has multiple valid identities,
-`CODESIGN_IDENTITY_FINGERPRINT` must still resolve the ambiguity.
-
-Versions `0.8.3`, `0.8.4`, and `0.9.0` are already public. Version `0.9.1` is a
-separate native-dashboard release: it uses its own source commit, annotated
-tag, state directory, notarization submissions and five assets. Preparing or
-publishing `0.9.1` must not delete, resume, replace, upload to, or otherwise
-alter any `0.8.x` or `0.9.0` state or GitHub assets.
+The local `release-product.zsh` and `release-macos.sh` signing/notarization path
+is retained only for the frozen 0.9.1 migration exception and historical
+recovery. It is not a production path for 0.9.2 or later. Its state and legacy
+five-file release set must never be reused for a Cloud release.
 
 The bundle gate must find exactly these product executables:
 
@@ -247,10 +158,11 @@ unique leaves. Publish 0.9.1 with the published certificate; only a later
 version may be distributed from the Cloud certificate. Keep the Sparkle EdDSA
 key unchanged during this Developer ID rotation.
 
-Xcode Cloud's notarized App archive does not replace the separate DMG, Sparkle
-appcast, legacy 0.7 manifest, GitHub immutable-asset, or signed-machine runtime
-acceptance gates. Those remain explicit release stages until their artifact
-provenance and secret-handling contracts are migrated independently.
+For 0.9.3 and later, the ticket-attached App ZIP from the Notarize post-action
+is the Sparkle enclosure and GitHub application artifact. It replaces the
+locally created DMG, tar archive and `latest.json`; only the signed appcast is
+generated locally. GitHub immutable-asset verification and signed-machine
+runtime acceptance remain independent gates.
 
 The source tree also contains the independent cross-platform Notary API client
 at `tools/notarytool-rs`. It uses App Store Connect API-key JWT authentication,
@@ -427,8 +339,7 @@ no-UI immediate-install handler after an automatic download so a long-lived
 menu-bar process cannot leave the updater pending indefinitely.
 
 Existing 0.7 clients only understand the previous Minisign-compatible manifest.
-During the migration window every 0.8.x GitHub Release therefore carries both
-feeds:
+Historical 0.8.x through 0.9.1 GitHub Releases therefore carried both feeds:
 
 ```text
 MihomoBox-X.Y.Z-macos-arm64.app.tar.gz
@@ -438,12 +349,10 @@ latest.json
 appcast.xml
 ```
 
-`latest.json`, the tar archive and its signature exist only to move installed
-0.7 clients onto 0.8. The native App never parses that manifest. The archive is
-created with `COPYFILE_DISABLE=1`, starts with `MihomoBox.app/`, and contains no
-AppleDouble or `__MACOSX` entries. A standard external Minisign implementation
-must be proven byte-compatible with the existing public key by a real 0.7
-updater smoke test before publication.
+`latest.json`, the tar archive and its signature existed only to move installed
+0.7 clients onto 0.8. The native App never parses that manifest. The last
+legacy bridge remains available on its historical release; 0.9.3 and later do
+not regenerate or publish that format.
 
 Replacing the App is not proof that privileged migration succeeded. A real
 0.7 acceptance run must continue after relaunch: the native App must classify
@@ -455,31 +364,26 @@ exactly one managed runtime, and complete TUN/Fake-IP/DNS health. Also replay
 the mixed state produced by 0.8.0 (0.8 App with a 0.7 daemon) and the normal
 Sparkle update from a healthy 0.8 daemon.
 
-`appcast.xml` and the DMG serve 0.8 and later. Appcast generation must use the
-Sparkle tools from the exact resolved 2.9.4 package, a private key supplied by
-path, and a feed URL under the matching GitHub tag. `sign_update --verify` is
-not used on the XML feed: that mode verifies an update archive against an
-explicit signature. The release gate instead selects the exact DMG enclosure
-from the generated XML and verifies its Ed25519 signature over the DMG bytes
-with the pinned verifier and the public key embedded in the App.
-
-Keep the legacy feed for at least 180 days or two stable releases. Removal is a
-separate measured decision; repository cleanup alone is not evidence that all
-installed 0.7 clients have migrated.
+The signed `appcast.xml` serves 0.8 and later. For 0.9.3 and later its enclosure
+is the exact Cloud ZIP. Appcast generation uses tools from the pinned Sparkle
+2.9.4 binary distribution, a private key supplied by path and the matching
+GitHub tag URL. The release gate independently verifies the enclosure's
+Ed25519 signature over those exact ZIP bytes with the public key embedded in
+the Cloud App.
 
 ## GitHub Release assets
 
-Release titles and descriptions are English. The three artifacts plus two
-feeds are treated as one atomic five-file release set: do not upload a subset
-while DMG notarization, Sparkle signing or legacy compatibility is incomplete.
+Release titles and descriptions are English. Starting with 0.9.3, the exact
+Cloud ZIP and signed appcast are one atomic two-file release set; do not upload
+a subset. Historical releases keep their original five-file set unchanged.
 
 Before uploading, freeze SHA-256 values and verify:
 
-- App, updater archive and mounted DMG all report the same product version;
-- App and all five executables have the expected leaf certificate;
-- App and DMG pass code-sign, stapler, Gatekeeper and DMG verification;
-- `latest.json` URL, version and signature match the legacy archive;
-- `appcast.xml` enclosure URL, length, version and EdDSA signature match the DMG;
+- the Cloud ZIP SHA-256 is unchanged after its versioned rename;
+- App and all five executables have the expected Cloud leaf certificate;
+- App passes code-sign, stapler and Gatekeeper verification;
+- `appcast.xml` enclosure URL, length, versions and EdDSA signature match the
+  exact Cloud ZIP;
 - no asset, state or submission identifier from a previous release is reused.
 
 ## License outputs

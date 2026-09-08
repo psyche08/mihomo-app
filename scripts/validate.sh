@@ -51,6 +51,7 @@ env \
 /bin/bash Tests/test_installer_lock.sh
 /bin/bash Tests/test_release_product.sh
 /bin/bash -n scripts/*.sh Tests/e2e.sh
+/bin/zsh -n scripts/*.zsh
 /usr/bin/plutil -lint deploy/dev.linsheng.mihomo.daemon.plist
 test "$(/usr/libexec/PlistBuddy -c 'Print :RunAtLoad' \
   deploy/dev.linsheng.mihomo.daemon.plist)" = "true"

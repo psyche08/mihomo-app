@@ -31,12 +31,13 @@ signature validation, atomic replacement, authorization when necessary, and
 relaunch. MihomoBox does not implement its own archive extractor or updater.
 The appcast is served over HTTPS and is signed; system profiling is disabled.
 
-The first native release temporarily publishes two update contracts. Existing
-0.7 clients continue to receive the legacy `latest.json` and minisign-compatible
-archive signature, while 0.8 and later clients use Sparkle's signed
-`appcast.xml`. The legacy signer is a release-only compatibility tool and is
-never linked into the App. It remains only for the migration window and must be
-removed after the supported 0.7 upgrade period ends.
+The first native releases published two update contracts. Existing 0.7 clients
+received the legacy `latest.json` and minisign-compatible archive signature,
+while 0.8 and later clients use Sparkle's signed `appcast.xml`. Starting with
+0.9.3, the legacy bridge is no longer regenerated: the Sparkle enclosure is the
+exact ticket-attached Xcode Cloud App ZIP, renamed without changing its bytes.
+Only the signed appcast metadata is generated locally. Historical legacy
+assets remain available on their original releases.
 
 ## Root agent owns Mihomo continuously
 
