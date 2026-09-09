@@ -44,18 +44,28 @@ SSL-scoped `trustAsRoot` record to the System keychain. It never unlocks a
 keychain. The profile uses a fixed identifier so regeneration updates the
 existing settings, and removal deletes that exact profile and certificate.
 
-Only enabled `DOMAIN` and `DOMAIN-SUFFIX` rules whose current selector chain
-resolves to a concrete remote proxy are representable in
-`SupplementalMatchDomains`. The planner accepts both YAML's `DOMAIN-SUFFIX`
-spelling and the controller API's `DomainSuffix` spelling. A selector currently
-ending in DIRECT, an unknown target, or a selector cycle is omitted.
-`DOMAIN` is explicitly widened to suffix semantics. Rule sets, GEO rules,
-regular expressions, keywords, disabled rules, and invalid names are omitted
-and counted in the UI; an empty result fails closed instead of generating a
-global encrypted-DNS profile. Global and Direct outbound modes are also
-rejected because their effective domain scope cannot be represented as a
-bounded split-DNS suffix list. Regenerate the profile after changing those
-rules or proxy selections. macOS requires the user to review and install the generated profile in
+The root daemon builds `SupplementalMatchDomains` from enabled `DOMAIN`,
+`DOMAIN-SUFFIX`, and `GEOSITE` rules whose current selector chain resolves to a
+concrete remote proxy. It accepts both YAML's `DOMAIN-SUFFIX` and the controller
+API's `DomainSuffix` spelling. `GEOSITE` selectors are resolved against the
+validated root-owned `GeoSite.dat` from the managed Mihomo configuration
+directory. Tag lookup is case-insensitive, `@attribute` filters are intersected,
+and a tag containing `!` (for example `category-ai-!cn`) remains a literal tag.
+Only GeoSite root-domain and full-domain entries can become Apple suffix
+matches. Plain keywords, regular expressions, unknown entry kinds, invalid
+names, and unsupported controller rules are omitted and counted. Full-domain
+and controller `DOMAIN` matches are explicitly widened to suffix semantics and
+counted as approximations.
+
+The complete deduplicated result is emitted without a silent domain-count cap.
+A whole-selector inversion such as `!cn` cannot be represented by a finite
+Apple suffix list, so it is omitted and counted rather than widened to global
+DNS. A selector ending in DIRECT, an unknown target, or a selector cycle is
+also omitted. An empty result fails closed instead of generating a global
+encrypted-DNS profile. Global and Direct outbound modes are rejected because
+their effective domain scope cannot be represented as bounded split DNS.
+Regenerate the profile after changing rules, GeoSite data, or proxy selections.
+macOS requires the user to review and install the generated profile in
 **General > Device Management**.
 
 The separate `1054` listener is mandatory. Pointing Mihomo at macOS `system`
@@ -117,12 +127,14 @@ system DNS as the resolver-health gate. The original-DNS `1054` listener,
 physical-interface binding, route observer, wake recovery, egress probes, and
 generation-bound health snapshots remain active.
 
-The Config page queries a fixed `local-doh.status` operation over authenticated
-XPC. The daemon reduces the fixed system profile identifier, root-owned server
-identity, and passive runtime health to booleans plus a domain count; profile
-contents and domain names never cross XPC or enter logs. The UI distinguishes
-classic DNS, waiting for macOS profile approval, active Local DoH, and a
-profile/server mismatch, and refreshes while Config is visible.
+The Config page asks the daemon to prepare the fixed root-owned profile through
+the typed `local-doh.prepare-profile` mutation, then queries
+`local-doh.status`. The daemon reduces preparation, the fixed system profile
+identifier, root-owned server identity, and passive runtime health to booleans
+plus numeric counts. Profile contents, expanded domain names, and GeoSite
+entries never cross XPC or enter logs. The UI distinguishes classic DNS,
+waiting for macOS profile approval, active Local DoH, and a profile/server
+mismatch, and refreshes while Config is visible.
 
 The agent reads `CurrentSet`, then manages:
 
@@ -241,7 +253,8 @@ inactive Wi-Fi, Ethernet, or VPN service from retaining `127.0.0.53` when it is
 reactivated.
 
 The root daemon does not participate in this data plane. It authenticates XPC
-clients, serializes lifecycle/profile transactions, and supervises the agent.
+clients, serializes lifecycle/profile transactions, prepares the fixed split-DNS
+profile from managed controller/GeoSite state, and supervises the agent.
 
 Each agent launch receives a daemon-generated runtime generation. The
 consistency observer includes that generation in its mode-`0600` atomic health

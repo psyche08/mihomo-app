@@ -38,4 +38,21 @@ struct LocalDoHStatusProvider {
             return (false, .init(installed: false))
         }
     }
+
+    static func inspectPreparedProfile() -> LocalDoHProfileInspection {
+        let path = LocalDoHProfileDocument.managedProfilePath
+        var metadata = stat()
+        guard lstat(path, &metadata) == 0,
+              metadata.st_mode & S_IFMT == S_IFREG,
+              metadata.st_uid == 0,
+              metadata.st_gid == 0,
+              metadata.st_mode & 0o777 == 0o644,
+              metadata.st_size > 0,
+              metadata.st_size <= 64 * 1_024 * 1_024,
+              let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
+            return .init(installed: false)
+        }
+        return LocalDoHProfileInspection.inspect(propertyList: data)
+            ?? .init(installed: false)
+    }
 }

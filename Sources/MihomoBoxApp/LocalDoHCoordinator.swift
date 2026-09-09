@@ -1,25 +1,25 @@
 import AppKit
 import Foundation
 import MihomoBoxUI
+import MihomoControl
 
 @MainActor
 final class LocalDoHCoordinator: DashboardLocalDoHService {
+  private static let deviceManagementURL = URL(
+    string: "x-apple.systempreferences:com.apple.Profiles-Settings.extension"
+  )!
   private let installer: InstallerCoordinator
   private let control: TrayControlClient
-  private let fileManager: FileManager
 
   init(
     installer: InstallerCoordinator = InstallerCoordinator(),
-    control: TrayControlClient = TrayControlClient(),
-    fileManager: FileManager = .default
+    control: TrayControlClient = TrayControlClient()
   ) {
     self.installer = installer
     self.control = control
-    self.fileManager = fileManager
   }
 
   func status() async -> DashboardLocalDoHStatus {
-    let plan = try? storedPlan()
     let available = await installer.installationActionsAvailable
     do {
       let root = try await control.localDoHStatus()
@@ -31,30 +31,22 @@ final class LocalDoHCoordinator: DashboardLocalDoHService {
         runtimeHealthy: root.runtimeHealthy,
         systemDNSManaged: root.systemDNSManaged,
         installedDomainCount: root.installedDomainCount > 0
-          ? root.installedDomainCount : (plan?.domains.count ?? 0)
+          ? root.installedDomainCount : root.preparedDomainCount
       )
     } catch {
       return DashboardLocalDoHStatus(
         available: available,
-        statusVerified: false,
-        installedDomainCount: plan?.domains.count ?? 0
+        statusVerified: false
       )
     }
   }
 
-  func prepare(plan: LocalDoHDomainPlan) async throws {
-    let profileData = try LocalDoHProfileDocument.data(for: plan)
+  func prepare() async throws -> LocalDoHPlanSummary {
+    let summary = try await control.prepareLocalDoHProfile()
     try await installer.prepareLocalDoH()
-    let url = try profileURL()
-    try fileManager.createDirectory(
-      at: url.deletingLastPathComponent(),
-      withIntermediateDirectories: true,
-      attributes: [.posixPermissions: 0o700]
-    )
-    try profileData.write(to: url, options: [.atomic])
-    try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    let url = URL(fileURLWithPath: LocalDoHProfileDocument.managedProfilePath)
     let profileOpened = NSWorkspace.shared.open(url)
-    let settingsOpened = NSWorkspace.shared.open(LocalDoHProfileDocument.deviceManagementURL)
+    let settingsOpened = NSWorkspace.shared.open(Self.deviceManagementURL)
     guard profileOpened && settingsOpened else {
       throw NSError(
         domain: "MihomoBoxLocalDoH",
@@ -65,18 +57,15 @@ final class LocalDoHCoordinator: DashboardLocalDoHService {
         ]
       )
     }
+    return summary
   }
 
   func remove() async throws {
     try await installer.removeLocalDoH()
-    let url = try profileURL()
-    if fileManager.fileExists(atPath: url.path) {
-      try fileManager.removeItem(at: url)
-    }
   }
 
   func openDeviceManagement() async throws {
-    guard NSWorkspace.shared.open(LocalDoHProfileDocument.deviceManagementURL) else {
+    guard NSWorkspace.shared.open(Self.deviceManagementURL) else {
       throw NSError(
         domain: "MihomoBoxLocalDoH",
         code: 4,
@@ -86,36 +75,5 @@ final class LocalDoHCoordinator: DashboardLocalDoHService {
         ]
       )
     }
-  }
-
-  private func profileURL() throws -> URL {
-    guard let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-    else {
-      throw NSError(
-        domain: "MihomoBoxLocalDoH",
-        code: 3,
-        userInfo: [NSLocalizedDescriptionKey: "Application Support is unavailable."]
-      )
-    }
-    return base.appendingPathComponent("MihomoBox", isDirectory: true)
-      .appendingPathComponent("MihomoBox-Local-DoH.mobileconfig")
-  }
-
-  private func storedPlan() throws -> LocalDoHDomainPlan {
-    let data = try Data(contentsOf: profileURL())
-    let value = try PropertyListSerialization.propertyList(
-      from: data,
-      options: [],
-      format: nil
-    )
-    guard let profile = value as? [String: Any],
-      let payloads = profile["PayloadContent"] as? [[String: Any]],
-      let first = payloads.first,
-      let settings = first["DNSSettings"] as? [String: Any],
-      let domains = settings["SupplementalMatchDomains"] as? [String]
-    else {
-      throw CocoaError(.fileReadCorruptFile)
-    }
-    return LocalDoHDomainPlan(domains: domains)
   }
 }

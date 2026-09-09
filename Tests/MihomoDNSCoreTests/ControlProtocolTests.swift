@@ -10,6 +10,7 @@ final class ControlProtocolTests: XCTestCase {
         XCTAssertTrue(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .setTUN))
         XCTAssertTrue(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .reloadProfile))
         XCTAssertTrue(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .localDoHStatus))
+        XCTAssertTrue(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .prepareLocalDoHProfile))
     }
 
     func testLocalDoHStatusRoundTripsWithoutProfileDetails() throws {
@@ -19,7 +20,8 @@ final class ControlProtocolTests: XCTestCase {
             profileInspectionSucceeded: true,
             runtimeHealthy: true,
             systemDNSManaged: false,
-            installedDomainCount: 2
+            installedDomainCount: 2,
+            preparedDomainCount: 5_123
         )
 
         let decoded = try JSONDecoder().decode(
@@ -28,6 +30,44 @@ final class ControlProtocolTests: XCTestCase {
         )
 
         XCTAssertEqual(decoded, status)
+    }
+
+    func testLocalDoHStatusDefaultsPreparedCountForOlderResponses() throws {
+        let data = Data(
+            """
+            {
+              "server_prepared": false,
+              "profile_installed": false,
+              "profile_inspection_succeeded": true,
+              "runtime_healthy": false,
+              "installed_domain_count": 0
+            }
+            """.utf8
+        )
+
+        XCTAssertEqual(
+            try JSONDecoder().decode(LocalDoHStatus.self, from: data).preparedDomainCount,
+            0
+        )
+    }
+
+    func testLocalDoHPlanSummaryRoundTripsWithoutExpandedDomains() throws {
+        let summary = LocalDoHPlanSummary(
+            domainCount: 5_123,
+            omittedRuleCount: 2,
+            exactDomainApproximationCount: 3,
+            expandedGeoSiteRuleCount: 7,
+            unrepresentableGeoSiteEntryCount: 11,
+            invertedGeoSiteRuleCount: 1
+        )
+
+        XCTAssertEqual(
+            try JSONDecoder().decode(
+                LocalDoHPlanSummary.self,
+                from: JSONEncoder().encode(summary)
+            ),
+            summary
+        )
     }
 
     func testLocalDoHProfileInspectionReturnsOnlyFixedProfileStateAndCount() throws {

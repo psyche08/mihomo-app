@@ -9,6 +9,7 @@ public struct LocalDoHStatus: Codable, Equatable, Sendable {
     public var runtimeHealthy: Bool
     public var systemDNSManaged: Bool?
     public var installedDomainCount: Int
+    public var preparedDomainCount: Int
 
     public init(
         serverPrepared: Bool,
@@ -16,7 +17,8 @@ public struct LocalDoHStatus: Codable, Equatable, Sendable {
         profileInspectionSucceeded: Bool,
         runtimeHealthy: Bool,
         systemDNSManaged: Bool? = nil,
-        installedDomainCount: Int = 0
+        installedDomainCount: Int = 0,
+        preparedDomainCount: Int = 0
     ) {
         self.serverPrepared = serverPrepared
         self.profileInstalled = profileInstalled
@@ -24,6 +26,7 @@ public struct LocalDoHStatus: Codable, Equatable, Sendable {
         self.runtimeHealthy = runtimeHealthy
         self.systemDNSManaged = systemDNSManaged
         self.installedDomainCount = installedDomainCount
+        self.preparedDomainCount = preparedDomainCount
     }
 
     enum CodingKeys: String, CodingKey {
@@ -33,6 +36,27 @@ public struct LocalDoHStatus: Codable, Equatable, Sendable {
         case runtimeHealthy = "runtime_healthy"
         case systemDNSManaged = "system_dns_managed"
         case installedDomainCount = "installed_domain_count"
+        case preparedDomainCount = "prepared_domain_count"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        serverPrepared = try container.decode(Bool.self, forKey: .serverPrepared)
+        profileInstalled = try container.decode(Bool.self, forKey: .profileInstalled)
+        profileInspectionSucceeded = try container.decode(
+            Bool.self,
+            forKey: .profileInspectionSucceeded
+        )
+        runtimeHealthy = try container.decode(Bool.self, forKey: .runtimeHealthy)
+        systemDNSManaged = try container.decodeIfPresent(Bool.self, forKey: .systemDNSManaged)
+        installedDomainCount = try container.decodeIfPresent(
+            Int.self,
+            forKey: .installedDomainCount
+        ) ?? 0
+        preparedDomainCount = try container.decodeIfPresent(
+            Int.self,
+            forKey: .preparedDomainCount
+        ) ?? 0
     }
 }
 

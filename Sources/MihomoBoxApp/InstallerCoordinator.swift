@@ -48,6 +48,7 @@ enum InstallerCoordinatorError: Error, LocalizedError {
   case profileRejected
   case timedOut
   case localDoHPrerequisite
+  case localDoHProfileGenerationFailed
   case localDoHProfileRemovalFailed
   case networkRecoveryRequired
   case failed
@@ -61,6 +62,8 @@ enum InstallerCoordinatorError: Error, LocalizedError {
     case .timedOut: "the daemon did not become ready in time"
     case .localDoHPrerequisite:
       "activate a valid Mihomo profile before preparing Local DoH"
+    case .localDoHProfileGenerationFailed:
+      "the daemon-generated Local DoH profile failed privileged validation; retry after repairing MihomoBox components"
     case .localDoHProfileRemovalFailed:
       "macOS did not remove or verify removal of the Local DoH profile; open Device Management and remove it there"
     case .networkRecoveryRequired:
@@ -285,6 +288,9 @@ actor InstallerCoordinator {
       if message.localizedCaseInsensitiveContains("install and activate a Mihomo profile") {
         throw InstallerCoordinatorError.localDoHPrerequisite
       }
+      if message.localizedCaseInsensitiveContains("root-owned Local DoH profile") {
+        throw InstallerCoordinatorError.localDoHProfileGenerationFailed
+      }
       if message.localizedCaseInsensitiveContains("Local DoH profile") {
         throw InstallerCoordinatorError.localDoHProfileRemovalFailed
       }
@@ -334,6 +340,9 @@ actor InstallerCoordinator {
   static func classification(_ value: String) -> String {
     if value.localizedCaseInsensitiveContains("test failed") { return "profile_rejected" }
     if value.localizedCaseInsensitiveContains("configuration file") { return "profile_rejected" }
+    if value.localizedCaseInsensitiveContains("root-owned Local DoH profile") {
+      return "local_doh_profile_generation"
+    }
     if value.localizedCaseInsensitiveContains("Local DoH profile") {
       return "local_doh_profile"
     }

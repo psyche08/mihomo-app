@@ -16,6 +16,7 @@ LOCAL_DOH_CERT="$LOCAL_DOH_DIR/server.crt"
 LOCAL_DOH_KEY="$LOCAL_DOH_DIR/server.key"
 LOCAL_DOH_FINGERPRINT="$LOCAL_DOH_DIR/certificate.sha1"
 LOCAL_DOH_STATE="$APP_SUPPORT/local-doh-enabled"
+LOCAL_DOH_PROFILE="$APP_SUPPORT/MihomoBox-Local-DoH.mobileconfig"
 LOCAL_DOH_PROFILE_IDENTIFIER="dev.linsheng.mihomobox.local-doh"
 LOCAL_DOH_ROLLBACK_DIR=""
 LOCAL_DOH_CERT_CREATED=0
@@ -1113,6 +1114,7 @@ rollback_installation() {
 restore() {
   require_root
   remove_local_doh_profile_if_installed
+  /bin/rm -f "$LOCAL_DOH_PROFILE"
   if /bin/launchctl print "system/$LABEL" >/dev/null 2>&1; then
     run /bin/launchctl bootout "system/$LABEL"
   fi
@@ -1193,6 +1195,37 @@ restore_network() {
 local_doh_fingerprint() {
   /usr/bin/openssl x509 -in "$LOCAL_DOH_CERT" -noout -fingerprint -sha1 \
     | /usr/bin/sed 's/^.*=//;s/://g'
+}
+
+validate_local_doh_profile_artifact() {
+  [[ -f "$LOCAL_DOH_PROFILE" && ! -L "$LOCAL_DOH_PROFILE" &&
+    "$(/usr/bin/stat -f '%u:%g:%Lp' "$LOCAL_DOH_PROFILE")" == "0:0:644" ]] || {
+    echo "the root-owned Local DoH profile is unavailable" >&2
+    return 1
+  }
+  /usr/bin/plutil -lint "$LOCAL_DOH_PROFILE" >/dev/null || {
+    echo "the root-owned Local DoH profile is invalid" >&2
+    return 1
+  }
+  local identifier server_url protocol server_address first_domain
+  identifier="$(/usr/libexec/PlistBuddy -c 'Print :PayloadIdentifier' \
+    "$LOCAL_DOH_PROFILE" 2>/dev/null || true)"
+  server_url="$(/usr/libexec/PlistBuddy -c \
+    'Print :PayloadContent:0:DNSSettings:ServerURL' "$LOCAL_DOH_PROFILE" 2>/dev/null || true)"
+  protocol="$(/usr/libexec/PlistBuddy -c \
+    'Print :PayloadContent:0:DNSSettings:DNSProtocol' "$LOCAL_DOH_PROFILE" 2>/dev/null || true)"
+  server_address="$(/usr/libexec/PlistBuddy -c \
+    'Print :PayloadContent:0:DNSSettings:ServerAddresses:0' "$LOCAL_DOH_PROFILE" 2>/dev/null || true)"
+  first_domain="$(/usr/libexec/PlistBuddy -c \
+    'Print :PayloadContent:0:DNSSettings:SupplementalMatchDomains:0' \
+    "$LOCAL_DOH_PROFILE" 2>/dev/null || true)"
+  [[ "$identifier" == "$LOCAL_DOH_PROFILE_IDENTIFIER" &&
+    "$server_url" == "https://127.0.0.1:9443/dns-query" &&
+    "$protocol" == "HTTPS" && "$server_address" == "127.0.0.1" &&
+    -n "$first_domain" && "$first_domain" != "." ]] || {
+    echo "the root-owned Local DoH profile failed fixed-field validation" >&2
+    return 1
+  }
 }
 
 # Returns 0 when the fixed device profile is installed, 1 when a successful
@@ -1310,6 +1343,7 @@ install_local_doh() {
     echo "the active root-owned profile is unavailable" >&2
     return 1
   }
+  validate_local_doh_profile_artifact
 
   LOCAL_DOH_ROLLBACK_DIR="$(/usr/bin/mktemp -d /private/tmp/mihomobox-doh-rollback.XXXXXX)"
   /bin/chmod 0700 "$LOCAL_DOH_ROLLBACK_DIR"
@@ -1443,6 +1477,7 @@ rollback_local_doh_remove() {
     remove_local_doh_trust
     /bin/rm -f "$LOCAL_DOH_CERT" "$LOCAL_DOH_KEY" \
       "$LOCAL_DOH_FINGERPRINT" "$LOCAL_DOH_STATE"
+    /bin/rm -f "$LOCAL_DOH_PROFILE"
     /bin/rmdir "$LOCAL_DOH_DIR" >/dev/null 2>&1 || true
     echo "Local DoH removal failed, but classic managed DNS was restored" >&2
   else
@@ -1499,6 +1534,7 @@ remove_local_doh() {
   # instead of an installed profile pointing at a deleted identity.
   remove_local_doh_trust
   /bin/rm -f "$LOCAL_DOH_CERT" "$LOCAL_DOH_KEY" "$LOCAL_DOH_FINGERPRINT" "$LOCAL_DOH_STATE"
+  /bin/rm -f "$LOCAL_DOH_PROFILE"
   /bin/rmdir "$LOCAL_DOH_DIR" >/dev/null 2>&1 || true
   trap - ERR
   echo "removed local DoH profile, trust, and server identity"

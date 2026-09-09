@@ -228,6 +228,7 @@ final class ControlDispatcher: @unchecked Sendable {
                     try? JSONDecoder().decode(NetworkConsistencyHealth.self, from: $0)
                 }
                 let profile = LocalDoHStatusProvider.inspectInstalledProfile()
+                let preparedProfile = LocalDoHStatusProvider.inspectPreparedProfile()
                 let prepared = agent.localDoHIdentityPrepared
                 let status = LocalDoHStatus(
                     serverPrepared: prepared,
@@ -237,9 +238,15 @@ final class ControlDispatcher: @unchecked Sendable {
                         && health?.networkConsistent == true
                         && health?.systemDNSManaged == false,
                     systemDNSManaged: health?.systemDNSManaged,
-                    installedDomainCount: profile.inspection.domainCount
+                    installedDomainCount: profile.inspection.domainCount,
+                    preparedDomainCount: preparedProfile.domainCount
                 )
                 payload = try JSONEncoder().encode(status)
+            case .prepareLocalDoHProfile:
+                guard agent.isRunning else {
+                    throw serverError("Mihomo agent is not running")
+                }
+                payload = try JSONEncoder().encode(controller.prepareLocalDoHProfile())
             case .upgradeComponents:
                 guard let package = request.payload else {
                     throw serverError("component update package is required")
@@ -324,7 +331,7 @@ final class ControlDispatcher: @unchecked Sendable {
         case .startAgent, .stopAgent, .restartAgent, .upgradeComponents,
              .importProfile, .switchProfile, .reloadProfile, .setTUN,
              .setOutboundMode, .selectProxy, .refreshProxyProvider,
-             .closeAllConnections:
+             .closeAllConnections, .prepareLocalDoHProfile:
             return true
         case .controllerRequest:
             // ControllerRequestPolicy is still the authority for the exact

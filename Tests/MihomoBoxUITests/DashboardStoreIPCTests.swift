@@ -1,4 +1,5 @@
 import Foundation
+import MihomoControl
 import XCTest
 
 @testable import MihomoBoxUI
@@ -182,30 +183,43 @@ final class DashboardStoreIPCTests: XCTestCase {
     XCTAssertTrue(gateway.calls.isEmpty)
   }
 
-  func testLocalDoHPlanUsesAuthenticatedRulesAndCurrentProxySelection() async {
+  func testLocalDoHUsesDaemonGeneratedAggregateSummary() async {
     let gateway = FakeDashboardGateway()
     let service = FakeDashboardLocalDoHService()
+    service.summary = LocalDoHPlanSummary(
+      domainCount: 5_123,
+      omittedRuleCount: 2,
+      exactDomainApproximationCount: 3,
+      expandedGeoSiteRuleCount: 7,
+      unrepresentableGeoSiteEntryCount: 11,
+      invertedGeoSiteRuleCount: 1
+    )
     let store = DashboardStore(gateway: gateway)
     store.configureLocalDoHService(service)
 
     await store.prepareLocalDoH()
 
-    XCTAssertEqual(service.preparedPlans.map(\.domains), [["example.com"]])
-    XCTAssertTrue(gateway.calls.contains("fetchRules"))
-    XCTAssertTrue(gateway.calls.contains("fetchSnapshot"))
+    XCTAssertEqual(service.prepareCallCount, 1)
+    XCTAssertEqual(store.localDoHOmittedRuleCount, 2)
+    XCTAssertEqual(store.localDoHExactDomainCount, 3)
+    XCTAssertEqual(store.localDoHExpandedGeoSiteRuleCount, 7)
+    XCTAssertEqual(store.localDoHUnrepresentableGeoSiteEntryCount, 11)
+    XCTAssertEqual(store.localDoHInvertedGeoSiteRuleCount, 1)
+    XCTAssertFalse(gateway.calls.contains("fetchRules"))
+    XCTAssertFalse(gateway.calls.contains("fetchSnapshot"))
     XCTAssertNil(store.actionError)
   }
 
   func testLocalDoHRefusesGlobalModeInsteadOfGeneratingGlobalDNSProfile() async throws {
     let gateway = FakeDashboardGateway()
     let service = FakeDashboardLocalDoHService()
+    service.prepareError = LocalDoHPlanningError.requiresRuleMode("global")
     let store = DashboardStore(gateway: gateway)
     store.configureLocalDoHService(service)
-    _ = try await gateway.applyOutboundMode(.global)
 
     await store.prepareLocalDoH()
 
-    XCTAssertTrue(service.preparedPlans.isEmpty)
+    XCTAssertEqual(service.prepareCallCount, 1)
     XCTAssertTrue(store.actionError?.contains("require Rule mode") == true)
   }
 
@@ -238,14 +252,18 @@ private final class FakeDashboardUpdatePreference: DashboardUpdatePreference {
 
 @MainActor
 private final class FakeDashboardLocalDoHService: DashboardLocalDoHService {
-  private(set) var preparedPlans: [LocalDoHDomainPlan] = []
+  var summary = LocalDoHPlanSummary(domainCount: 1)
+  var prepareError: Error?
+  private(set) var prepareCallCount = 0
 
   func status() async -> DashboardLocalDoHStatus {
     DashboardLocalDoHStatus(available: true)
   }
 
-  func prepare(plan: LocalDoHDomainPlan) async throws {
-    preparedPlans.append(plan)
+  func prepare() async throws -> LocalDoHPlanSummary {
+    prepareCallCount += 1
+    if let prepareError { throw prepareError }
+    return summary
   }
 
   func openDeviceManagement() async throws {}

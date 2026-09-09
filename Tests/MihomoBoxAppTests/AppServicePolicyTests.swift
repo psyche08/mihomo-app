@@ -257,6 +257,10 @@ final class AppServicePolicyTests: XCTestCase {
     XCTAssertEqual(
       InstallerCoordinator.classification("configuration file test failed"), "profile_rejected")
     XCTAssertEqual(InstallerCoordinator.classification("timed out waiting for daemon"), "timeout")
+    XCTAssertEqual(
+      InstallerCoordinator.classification("the root-owned Local DoH profile is invalid"),
+      "local_doh_profile_generation"
+    )
     XCTAssertEqual(InstallerCoordinator.classification("arbitrary profile contents"), "other")
   }
 

@@ -134,6 +134,9 @@ public final class DashboardStore: ObservableObject {
   @Published public private(set) var localDoHDomainCount = 0
   @Published public private(set) var localDoHOmittedRuleCount = 0
   @Published public private(set) var localDoHExactDomainCount = 0
+  @Published public private(set) var localDoHExpandedGeoSiteRuleCount = 0
+  @Published public private(set) var localDoHUnrepresentableGeoSiteEntryCount = 0
+  @Published public private(set) var localDoHInvertedGeoSiteRuleCount = 0
   @Published public private(set) var coreVersion = "Mihomo"
   @Published public private(set) var traffic = TrafficSnapshot()
   @Published public private(set) var trafficHistory: [TrafficPoint] = []
@@ -510,41 +513,12 @@ public final class DashboardStore: ObservableObject {
   public func prepareLocalDoH() async {
     guard let localDoHService else { return }
     await performConfigAction(.preparingLocalDoH) {
-      async let rulesRequest = gateway.fetchRules()
-      async let snapshotRequest = gateway.fetchSnapshot()
-      let (catalog, snapshot) = try await (rulesRequest, snapshotRequest)
-      let mode = snapshot.configs.mode.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard mode.caseInsensitiveCompare("rule") == .orderedSame else {
-        throw LocalDoHPlanningError.requiresRuleMode(mode.isEmpty ? "unknown" : mode)
-      }
-      let rules = catalog.rules.map {
-        DashboardRule(
-          id: String($0.index),
-          index: $0.index,
-          type: $0.type,
-          payload: $0.payload,
-          target: $0.proxy,
-          isEnabled: $0.extra?.disabled != true,
-          hitCount: 0,
-          missCount: 0,
-          size: $0.size,
-          lastMatchedAt: nil,
-          lastUnmatchedAt: nil
-        )
-      }
-      let proxies = snapshot.proxies.proxies.mapValues { proxy in
-        ControllerRouteSnapshot.Proxy(
-          name: proxy.name,
-          type: proxy.type,
-          now: proxy.now,
-          all: proxy.all
-        )
-      }
-      let routeSnapshot = ControllerRouteSnapshot(mode: mode, proxies: proxies)
-      let plan = LocalDoHDomainPlan.build(from: rules, routeSnapshot: routeSnapshot)
-      try await localDoHService.prepare(plan: plan)
-      localDoHOmittedRuleCount = plan.omittedRules + plan.truncatedDomains
-      localDoHExactDomainCount = plan.exactDomainApproximations
+      let summary = try await localDoHService.prepare()
+      localDoHOmittedRuleCount = summary.omittedRuleCount
+      localDoHExactDomainCount = summary.exactDomainApproximationCount
+      localDoHExpandedGeoSiteRuleCount = summary.expandedGeoSiteRuleCount
+      localDoHUnrepresentableGeoSiteEntryCount = summary.unrepresentableGeoSiteEntryCount
+      localDoHInvertedGeoSiteRuleCount = summary.invertedGeoSiteRuleCount
       await refreshLocalDoHStatus()
     }
   }
@@ -555,6 +529,9 @@ public final class DashboardStore: ObservableObject {
       try await localDoHService.remove()
       localDoHOmittedRuleCount = 0
       localDoHExactDomainCount = 0
+      localDoHExpandedGeoSiteRuleCount = 0
+      localDoHUnrepresentableGeoSiteEntryCount = 0
+      localDoHInvertedGeoSiteRuleCount = 0
       await refreshLocalDoHStatus()
     }
   }

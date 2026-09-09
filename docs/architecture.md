@@ -82,8 +82,12 @@ validation before exchanging messages:
 Requests are typed and versioned. The broker allowlist covers status/snapshot,
 agent start-stop-restart, profile import/switch/reload, Enhanced TUN, outbound
 mode, proxy selection, latency tests, signed component synchronization, the
-fixed Local DoH status projection, and the native dashboard's validated
-controller REST and live stream routes. Component synchronization
+fixed Local DoH status projection and root-side profile preparation, and the
+native dashboard's validated controller REST and live stream routes. Local DoH
+preparation reads the authenticated controller state and exact managed
+root-owned `GeoSite.dat`, writes one fixed root-owned `.mobileconfig`, and
+returns aggregate counts only; expanded domain names never cross XPC.
+Component synchronization
 accepts exactly three named binary blobs with fixed size limits, validates each
 against the daemon's leaf-certificate requirement, stages and backs up inside
 the root-owned support directory, and rolls back the complete set on failure.

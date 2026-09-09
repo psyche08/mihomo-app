@@ -84,15 +84,19 @@
   it accepts no certificate, key, hostname, port, output path, or arbitrary
   domain argument. The installer generates the identity at a fixed root-owned
   path, imports only its fingerprint into the System keychain for SSL, and
-  never unlocks a keychain. The unprivileged App derives the profile's bounded
-  domain list only from authenticated controller rule snapshots. Unsupported
-  rules are omitted, an empty list is rejected, and the generated profile is
-  private to the current user until macOS presents its own install review.
-  Domain planning follows the authenticated controller's current selector
-  chains and accepts only concrete reviewed remote-proxy types. Root exposes a
-  separate fixed status operation that returns only server/profile booleans and
-  the installed suffix count. Removal verifies the fixed profile is absent
-  before deleting the exact trust record or server identity.
+  never unlocks a keychain. A typed daemon mutation derives the profile only
+  from authenticated controller rule snapshots and the exact root-owned,
+  non-writable managed `GeoSite.dat`; the unprivileged App never receives the
+  expanded domain list. Domain planning follows current selector chains and
+  accepts only concrete reviewed remote-proxy types. GeoSite attributes are
+  intersected, unsupported protobuf entry kinds are counted, whole-set
+  inversions are omitted without widening scope, an empty list is rejected,
+  and there is no silent domain-count truncation. The daemon atomically writes
+  one fixed root-owned profile artifact; the installer validates its ownership,
+  mode and fixed payload fields before changing runtime state. XPC returns only
+  server/profile booleans and aggregate counts. Removal verifies the fixed
+  installed profile is absent before deleting the exact trust record, server
+  identity, or prepared artifact.
 - A signed legacy protocol response is not permission to downgrade the App's
   XPC requests. Version 1 is classified only from the authenticated response
   envelope, never from a marker file or error string. The tray disables all

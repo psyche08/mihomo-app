@@ -196,6 +196,7 @@ activation transaction.
 | Import/switch profile | `profile.import` / `profile.switch` |
 | Start/stop/restart proxy runtime | `agent.start` / `agent.stop` / `agent.restart` |
 | Read fixed Local DoH server/profile state | `local-doh.status` |
+| Prepare root-owned Local DoH profile | `local-doh.prepare-profile` |
 | SwiftUI controller reads/mutations | typed operations or validated `dashboard.controller-request` |
 | SwiftUI live streams | `dashboard.controller-stream-open/next/close` |
 
@@ -233,14 +234,18 @@ process remaining alive.
 Config also exposes **Local DNS over HTTPS**. The store reads the current
 authenticated `/rules` and `/proxies` snapshot, recognizes both YAML
 `DOMAIN-SUFFIX` and controller `DomainSuffix` spellings, follows each current
-selector chain to a concrete remote proxy, and converts only those enabled
-rules to a bounded split-DNS plan. Global/Direct modes, DIRECT selections,
-unknown leaves and selector cycles fail closed. The Config panel shows the
-omitted and exact-to-suffix counts and polls the fixed `local-doh.status`
-projection while visible. Preparing and removing the root TLS endpoint use
-the verified installer; the App then opens the generated `.mobileconfig` and
-the exact Device Management pane for mandatory macOS review. The busy state
-disables repeat clicks throughout the administrator and profile-generation steps.
+selector chain to a concrete remote proxy, and expands selected `GEOSITE`
+selectors from the managed root-owned database. Attribute filters are
+intersected; plain/regex entries and whole-list inversions are counted rather
+than widening scope. The complete suffix set is deduplicated without a silent
+cap. Global/Direct modes, DIRECT selections, unknown leaves and selector cycles
+fail closed. The Config panel shows expanded-GeoSite, omitted,
+unrepresentable-entry, inversion, and exact-to-suffix counts and polls the fixed
+`local-doh.status` projection while visible. Domain names never leave the root
+daemon. Preparing and removing the root TLS endpoint use the verified
+installer; the App opens the fixed root-owned `.mobileconfig` and the exact
+Device Management pane for mandatory macOS review. The busy state disables
+repeat clicks throughout the administrator and profile-generation steps.
 
 There is no loopback HTTP server, browser token, WebView, or `mihomoboxctl`
 child process in the desktop data path. The daemon still validates every

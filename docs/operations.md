@@ -64,16 +64,21 @@ The installer:
 7. verifies controller, TUN, Fake-IP route, DNS bridge, Mihomo DNS, persisted
    PrimaryService DNS, and effective resolver state.
 
-From the Config page, **Prepare & Open Profile** runs the same exact-snapshot
-administrator boundary, repairs the installed components, generates a
-root-owned loopback certificate/private key, trusts only that certificate for
-SSL, enables Mihomo's loopback DoH endpoint, and restores MihomoBox's classic
-Global DNS setting. The App then writes a mode-`0600` profile in the current
-user's Application Support directory and opens it. Apple requires the user to
-finish installation in **General > Device Management**; **Open Device
+From the Config page, **Prepare & Open Profile** first asks the authenticated
+root daemon to build the split-DNS plan from the current controller routes and
+managed `GeoSite.dat`. The daemon writes the fixed profile at
+`/Library/Application Support/Mihomo App/MihomoBox-Local-DoH.mobileconfig` as
+root:wheel mode `0644` and returns only aggregate counts. The exact-snapshot
+administrator boundary then validates that artifact before stopping anything,
+repairs the installed components, generates a root-owned loopback
+certificate/private key, trusts only that certificate for SSL, enables
+Mihomo's loopback DoH endpoint, and restores MihomoBox's classic Global DNS
+setting. The App opens the validated root-owned profile. Apple requires the
+user to finish installation in **General > Device Management**; **Open Device
 Management** reopens that exact System Settings pane at any time. **Remove Local DoH**
 removes the fixed profile identifier, its exact certificate fingerprint and
-server identity, then restores the classic managed-DNS mode. Profile removal is
+server identity and prepared profile artifact, then restores the classic
+managed-DNS mode. Profile removal is
 verified before the server identity is deleted; if the DNS-mode transition
 fails, the installer retries classic managed DNS and otherwise leaves normal
 macOS DNS restored with an explicit recovery-required error. Helper uninstall
@@ -83,8 +88,10 @@ Config shows separate `Awaiting macOS Approval`, `Active`, and `Needs Attention`
 states. It refreshes authenticated root/profile state while visible, so
 finishing approval in System Settings does not require relaunching the App.
 Preparation is limited to Rule mode and follows each rule target through the
-controller's current selector chain; changing a selector or domain rule
-requires regenerating the profile.
+controller's current selector chain. Proxy-routed `GEOSITE` selectors are fully
+expanded with attribute filtering; unsupported entry kinds and unrepresentable
+inversions are counted in the panel. Changing a selector, domain rule, or
+GeoSite database requires regenerating the profile.
 
 There are two intentionally separate startup mechanisms. The root
 LaunchDaemon starts the managed network service at system startup with the

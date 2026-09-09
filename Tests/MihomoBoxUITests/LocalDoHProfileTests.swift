@@ -5,48 +5,164 @@ import XCTest
 @testable import MihomoBoxUI
 
 final class LocalDoHProfileTests: XCTestCase {
-  func testDomainPlanKeepsOnlyRepresentableProxyRulesAndCollapsesSuffixes() {
+  func testProxyGeoSiteRuleExpandsAttributesAndCountsUnrepresentableEntries() throws {
+    let database = GeoSiteDatabase(sites: [
+      "category-ai-!cn": [
+        .init(type: .rootDomain, value: "service.example", attributes: ["global"]),
+        .init(type: .full, value: "host.other.example", attributes: ["global"]),
+        .init(type: .plain, value: "keyword", attributes: ["global"]),
+        .init(type: .regex, value: ".*\\.regex\\.example", attributes: ["global"]),
+        .init(type: .rootDomain, value: "excluded.example", attributes: ["cn"]),
+      ]
+    ])
+    let plan = try LocalDoHDomainPlan.build(
+      from: [rule("GEOSITE", "geosite:category-ai-!cn@global", "Proxy")],
+      routeSnapshot: proxyRoutes(),
+      geoSiteDatabase: database
+    )
+
+    XCTAssertEqual(plan.domains, ["service.example", "host.other.example"])
+    XCTAssertEqual(plan.expandedGeoSiteRules, 1)
+    XCTAssertEqual(plan.unrepresentableGeoSiteEntries, 2)
+    XCTAssertEqual(plan.exactDomainApproximations, 1)
+    XCTAssertEqual(plan.omittedRules, 0)
+  }
+
+  func testGeoSiteAttributeFiltersUseIntersectionAndLeadingBangDoesNotBecomeGlobal() throws {
+    let database = GeoSiteDatabase(sites: [
+      "sample": [
+        .init(type: .rootDomain, value: "both.example", attributes: ["one", "two"]),
+        .init(type: .rootDomain, value: "one.example", attributes: ["one"]),
+      ]
+    ])
+    let plan = try LocalDoHDomainPlan.build(
+      from: [
+        rule("GEOSITE", "sample@one@two", "Proxy"),
+        rule("GEOSITE", "!sample", "Proxy"),
+      ],
+      routeSnapshot: proxyRoutes(),
+      geoSiteDatabase: database
+    )
+
+    XCTAssertEqual(plan.domains, ["both.example"])
+    XCTAssertEqual(plan.expandedGeoSiteRules, 1)
+    XCTAssertEqual(plan.invertedGeoSiteRules, 1)
+    XCTAssertEqual(plan.omittedRules, 1)
+    XCTAssertFalse(plan.domains.contains("."))
+  }
+
+  func testGeoSitePlanDoesNotSilentlyTruncateBeyondFormerLimit() throws {
+    let entries = (0..<5_000).map {
+      GeoSiteDatabase.Entry(type: .rootDomain, value: "d\($0).example")
+    }
+    let plan = try LocalDoHDomainPlan.build(
+      from: [rule("GEOSITE", "large", "Proxy")],
+      routeSnapshot: proxyRoutes(),
+      geoSiteDatabase: GeoSiteDatabase(sites: ["large": entries])
+    )
+
+    XCTAssertEqual(plan.domains.count, 5_000)
+    XCTAssertEqual(plan.summary.domainCount, 5_000)
+  }
+
+  func testDirectUnknownAndCyclicGeoSiteTargetsFailClosedWithoutLoadingLists() throws {
+    let plan = try LocalDoHDomainPlan.build(
+      from: [
+        rule("DOMAIN-SUFFIX", "safe.example", "Proxy"),
+        rule("GEOSITE", "missing-direct", "DIRECT"),
+        rule("GEOSITE", "missing-unknown", "Missing Group"),
+        rule("GEOSITE", "missing-cycle", "Cycle A"),
+      ],
+      routeSnapshot: proxyRoutes(),
+      geoSiteDatabase: nil
+    )
+
+    XCTAssertEqual(plan.domains, ["safe.example"])
+    XCTAssertEqual(plan.expandedGeoSiteRules, 0)
+  }
+
+  func testMissingProxiedGeoSiteListFailsInsteadOfWritingPartialProfile() {
+    XCTAssertThrowsError(
+      try LocalDoHDomainPlan.build(
+        from: [rule("GEOSITE", "missing", "Proxy")],
+        routeSnapshot: proxyRoutes(),
+        geoSiteDatabase: GeoSiteDatabase(sites: ["other": []])
+      )
+    ) { error in
+      XCTAssertEqual(error as? LocalDoHPlanningError, .geoSiteListMissing)
+    }
+  }
+
+  func testProtobufGeoSiteDecoderPreservesTypesAndAttributeKeys() throws {
+    let data = message(field: 1, value: site(
+      code: "Sample",
+      domains: [
+        domain(type: 2, value: "suffix.example", attributes: ["cn"]),
+        domain(type: 3, value: "full.example"),
+        domain(type: 0, value: "keyword"),
+        domain(type: 1, value: ".*regex"),
+      ]
+    ))
+    let database = try GeoSiteDatabase.decode(data)
+    let plan = try LocalDoHDomainPlan.build(
+      from: [rule("GEOSITE", "sample@CN", "Proxy")],
+      routeSnapshot: proxyRoutes(),
+      geoSiteDatabase: database
+    )
+
+    XCTAssertEqual(plan.domains, ["suffix.example"])
+    XCTAssertEqual(plan.unrepresentableGeoSiteEntries, 0)
+  }
+
+  func testMalformedGeoSiteProtobufFailsClosed() {
+    XCTAssertThrowsError(try GeoSiteDatabase.decode(Data([0x0f]))) { error in
+      XCTAssertEqual(error as? LocalDoHPlanningError, .invalidGeoSiteDatabase)
+    }
+  }
+
+  func testDomainPlanKeepsOnlyRepresentableProxyRulesAndCollapsesSuffixes() throws {
     let rules = [
-      // Mihomo's controller API emits `DomainSuffix`, while YAML uses
-      // `DOMAIN-SUFFIX`; the production planner must accept both forms.
-      rule(0, "DomainSuffix", "Example.COM.", "Proxy"),
-      rule(1, "DOMAIN-SUFFIX", "api.example.com", "Proxy"),
-      rule(2, "DOMAIN", "claude.ai", "AI Services"),
-      rule(3, "DOMAIN-SUFFIX", "direct.example", "DIRECT"),
-      rule(4, "RULE-SET", "global-services", "Proxy"),
-      rule(5, "DOMAIN-SUFFIX", "disabled.example", "Proxy", enabled: false),
-      rule(6, "DOMAIN-SUFFIX", "bad domain", "Proxy"),
+      rule("DomainSuffix", "Example.COM.", "Proxy"),
+      rule("DOMAIN-SUFFIX", "api.example.com", "Proxy"),
+      rule("DOMAIN", "claude.ai", "AI Services"),
+      rule("DOMAIN-SUFFIX", "direct.example", "DIRECT"),
+      rule("RULE-SET", "global-services", "Proxy"),
+      rule("DOMAIN-SUFFIX", "disabled.example", "Proxy", enabled: false),
+      rule("DOMAIN-SUFFIX", "bad domain", "Proxy"),
     ]
 
-    let plan = LocalDoHDomainPlan.build(from: rules, routeSnapshot: proxyRoutes())
+    let plan = try LocalDoHDomainPlan.build(from: rules, routeSnapshot: proxyRoutes())
 
     XCTAssertEqual(plan.domains, ["claude.ai", "example.com"])
     XCTAssertEqual(plan.exactDomainApproximations, 1)
     XCTAssertEqual(plan.omittedRules, 2)
-    XCTAssertEqual(plan.truncatedDomains, 0)
   }
 
-  func testDomainPlanUsesCurrentProxyGroupSelectionAndFailsClosed() {
+  func testDomainPlanUsesCurrentProxyGroupSelectionAndFailsClosed() throws {
     let rules = [
-      rule(0, "DOMAIN-SUFFIX", "proxied.example", "Remote Group"),
-      rule(1, "DOMAIN-SUFFIX", "direct.example", "Direct Group"),
-      rule(2, "DOMAIN-SUFFIX", "cycle.example", "Cycle A"),
-      rule(3, "DOMAIN-SUFFIX", "missing.example", "Missing Group"),
-      rule(4, "DOMAIN-SUFFIX", "leaf.example", "Node"),
+      rule("DOMAIN-SUFFIX", "proxied.example", "Remote Group"),
+      rule("DOMAIN-SUFFIX", "direct.example", "Direct Group"),
+      rule("DOMAIN-SUFFIX", "cycle.example", "Cycle A"),
+      rule("DOMAIN-SUFFIX", "missing.example", "Missing Group"),
+      rule("DOMAIN-SUFFIX", "leaf.example", "Node"),
     ]
 
-    let plan = LocalDoHDomainPlan.build(from: rules, routeSnapshot: proxyRoutes())
+    let plan = try LocalDoHDomainPlan.build(from: rules, routeSnapshot: proxyRoutes())
 
     XCTAssertEqual(plan.domains, ["leaf.example", "proxied.example"])
   }
 
-  func testProfileUsesStableDeviceScopeSplitDNSPayload() throws {
+  func testProfileUsesStableRootOwnedDeviceScopeSplitDNSPayload() throws {
     let plan = LocalDoHDomainPlan(domains: ["claude.ai", "example.com"])
     let data = try LocalDoHProfileDocument.data(for: plan)
     let value = try PropertyListSerialization.propertyList(from: data, options: [], format: nil)
     let profile = try XCTUnwrap(value as? [String: Any])
     XCTAssertEqual(profile["PayloadIdentifier"] as? String, LocalDoHProfileDocument.identifier)
     XCTAssertEqual(profile["PayloadScope"] as? String, "System")
+    XCTAssertEqual(
+      LocalDoHProfileDocument.managedProfilePath,
+      "/Library/Application Support/Mihomo App/MihomoBox-Local-DoH.mobileconfig"
+    )
     let payloads = try XCTUnwrap(profile["PayloadContent"] as? [[String: Any]])
     let settings = try XCTUnwrap(payloads.first?["DNSSettings"] as? [String: Any])
     XCTAssertEqual(settings["DNSProtocol"] as? String, "HTTPS")
@@ -64,20 +180,9 @@ final class LocalDoHProfileTests: XCTestCase {
     )
   }
 
-  func testDeviceManagementUsesTheProfilesSystemSettingsDeepLink() {
-    XCTAssertEqual(
-      LocalDoHProfileDocument.deviceManagementURL.absoluteString,
-      "x-apple.systempreferences:com.apple.Profiles-Settings.extension"
-    )
-  }
-
   func testDashboardStatusDistinguishesApprovalActiveAndDegradedStates() {
     XCTAssertEqual(
-      DashboardLocalDoHStatus(
-        available: true,
-        serverPrepared: true,
-        runtimeHealthy: true
-      ).phase,
+      DashboardLocalDoHStatus(available: true, serverPrepared: true, runtimeHealthy: true).phase,
       .awaitingApproval
     )
     XCTAssertEqual(
@@ -105,20 +210,12 @@ final class LocalDoHProfileTests: XCTestCase {
   }
 
   private func rule(
-    _ index: Int,
     _ type: String,
     _ payload: String,
     _ target: String,
     enabled: Bool = true
-  ) -> DashboardRule {
-    DashboardRule(
-      id: String(index),
-      index: index,
-      type: type,
-      payload: payload,
-      target: target,
-      isEnabled: enabled
-    )
+  ) -> LocalDoHRouteRule {
+    LocalDoHRouteRule(type: type, payload: payload, target: target, isEnabled: enabled)
   }
 
   private func proxyRoutes() -> ControllerRouteSnapshot {
@@ -132,5 +229,45 @@ final class LocalDoHProfileTests: XCTestCase {
       "Node": .init(name: "Node", type: "VLESS"),
       "DIRECT": .init(name: "DIRECT", type: "Direct"),
     ])
+  }
+
+  private func domain(type: UInt64, value: String, attributes: [String] = []) -> Data {
+    var valueData = varintField(1, type)
+    valueData.append(message(field: 2, value: Data(value.utf8)))
+    for attribute in attributes {
+      valueData.append(message(field: 3, value: message(field: 1, value: Data(attribute.utf8))))
+    }
+    return valueData
+  }
+
+  private func site(code: String, domains: [Data]) -> Data {
+    var value = message(field: 1, value: Data(code.utf8))
+    for domain in domains { value.append(message(field: 2, value: domain)) }
+    return value
+  }
+
+  private func message(field: UInt64, value: Data) -> Data {
+    var data = encodeVarint(field << 3 | 2)
+    data.append(encodeVarint(UInt64(value.count)))
+    data.append(value)
+    return data
+  }
+
+  private func varintField(_ field: UInt64, _ value: UInt64) -> Data {
+    var data = encodeVarint(field << 3)
+    data.append(encodeVarint(value))
+    return data
+  }
+
+  private func encodeVarint(_ value: UInt64) -> Data {
+    var value = value
+    var data = Data()
+    repeat {
+      var byte = UInt8(value & 0x7f)
+      value >>= 7
+      if value != 0 { byte |= 0x80 }
+      data.append(byte)
+    } while value != 0
+    return data
   }
 }

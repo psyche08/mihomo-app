@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import MihomoControl
 import MihomoDNSCore
@@ -79,6 +80,46 @@ final class ControllerBroker: @unchecked Sendable {
             }
         }
         throw lastError ?? ControllerBrokerCriticalError.unsafeGlobalRuntime
+    }
+
+    /// Builds the split-DNS profile entirely inside the root trust boundary.
+    /// The caller receives aggregate counts only; expanded domain names are
+    /// written to the fixed root-owned profile and never cross XPC or logs.
+    func prepareLocalDoHProfile() throws -> LocalDoHPlanSummary {
+        let configuration = try ProxyConfiguration.load(path: configPath)
+        let snapshot = try routeSnapshot(configuration)
+        guard snapshot.mode == "rule" else {
+            throw LocalDoHPlanningError.requiresRuleMode(
+                snapshot.mode.isEmpty ? "unknown" : snapshot.mode
+            )
+        }
+        let rules = try LocalDoHRouteRule.decodeControllerCatalog(
+            send(configuration, method: "GET", path: "/rules")
+        )
+        let selectedGeoSite = rules.contains { rule in
+            rule.isEnabled
+                && rule.type.uppercased().filter { $0.isLetter } == "GEOSITE"
+                && snapshot.routesThroughRemoteProxy(rule.target)
+        }
+        let geoSiteDatabase: GeoSiteDatabase?
+        if selectedGeoSite {
+            guard let process = configuration.mihomoProcess else {
+                throw LocalDoHPlanningError.unmanagedGeoSiteDatabase
+            }
+            let path = URL(fileURLWithPath: process.configDirectory)
+                .appendingPathComponent("GeoSite.dat")
+                .path
+            geoSiteDatabase = try GeoSiteDatabase.loadManaged(path: path)
+        } else {
+            geoSiteDatabase = nil
+        }
+        let plan = try LocalDoHDomainPlan.build(
+            from: rules,
+            routeSnapshot: snapshot,
+            geoSiteDatabase: geoSiteDatabase
+        )
+        try writeManagedLocalDoHProfile(LocalDoHProfileDocument.data(for: plan))
+        return plan.summary
     }
 
     deinit {
@@ -284,6 +325,34 @@ final class ControllerBroker: @unchecked Sendable {
             path: path,
             body: JSONSerialization.data(withJSONObject: object)
         )
+    }
+
+    private func writeManagedLocalDoHProfile(_ data: Data) throws {
+        let destination = URL(fileURLWithPath: LocalDoHProfileDocument.managedProfilePath)
+        let parent = destination.deletingLastPathComponent()
+        var parentMetadata = stat()
+        guard lstat(parent.path, &parentMetadata) == 0,
+              parentMetadata.st_mode & S_IFMT == S_IFDIR,
+              parentMetadata.st_uid == 0,
+              parentMetadata.st_gid == 0,
+              parentMetadata.st_mode & 0o022 == 0 else {
+            throw LocalDoHPlanningError.profileWriteFailed
+        }
+        try data.write(to: destination, options: [.atomic])
+        guard Darwin.chown(destination.path, 0, 0) == 0,
+              Darwin.chmod(destination.path, 0o644) == 0 else {
+            try? FileManager.default.removeItem(at: destination)
+            throw LocalDoHPlanningError.profileWriteFailed
+        }
+        var metadata = stat()
+        guard lstat(destination.path, &metadata) == 0,
+              metadata.st_mode & S_IFMT == S_IFREG,
+              metadata.st_uid == 0,
+              metadata.st_gid == 0,
+              metadata.st_mode & 0o777 == 0o644 else {
+            try? FileManager.default.removeItem(at: destination)
+            throw LocalDoHPlanningError.profileWriteFailed
+        }
     }
 
     /// Applies a mode transition, including the GLOBAL selector repair, inside

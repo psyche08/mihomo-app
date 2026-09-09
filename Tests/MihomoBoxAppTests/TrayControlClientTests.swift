@@ -132,6 +132,27 @@ final class TrayControlClientTests: XCTestCase {
     XCTAssertEqual(observed, expected)
     XCTAssertEqual(session.operations, [.localDoHStatus])
   }
+
+  func testLocalDoHProfilePreparationReturnsCountsButNoDomains() async throws {
+    let expected = LocalDoHPlanSummary(
+      domainCount: 5_123,
+      omittedRuleCount: 2,
+      exactDomainApproximationCount: 3,
+      expandedGeoSiteRuleCount: 7,
+      unrepresentableGeoSiteEntryCount: 11,
+      invertedGeoSiteRuleCount: 1
+    )
+    let encoded = try JSONEncoder().encode(expected)
+    XCTAssertNil(String(decoding: encoded, as: UTF8.self).range(of: ".com"))
+    let session = QueueSession(responses: [
+      ControlResponse(success: true, payload: encoded)
+    ])
+    let client = TrayControlClient(makeSession: { session })
+
+    let observed = try await client.prepareLocalDoHProfile()
+    XCTAssertEqual(observed, expected)
+    XCTAssertEqual(session.operations, [.prepareLocalDoHProfile])
+  }
 }
 
 private final class QueueSession: AppControlSession, @unchecked Sendable {

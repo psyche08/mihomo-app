@@ -331,18 +331,42 @@ public struct ConfigView: View {
         .fixedSize(horizontal: false, vertical: true)
 
         Text(
-          "Setup generates a loopback-only certificate and establishes SSL trust in the System keychain. In Rule mode, only enabled DOMAIN and DOMAIN-SUFFIX rules whose current selector chain reaches a remote proxy are included; all other domains keep the current macOS DNS."
+          "Setup generates a loopback-only certificate and establishes SSL trust in the System keychain. In Rule mode, enabled DOMAIN, DOMAIN-SUFFIX, and GEOSITE rules are included only when their current selector chain reaches a remote proxy; all other domains keep the current macOS DNS."
         )
         .font(.system(size: 10))
         .foregroundStyle(DashboardTheme.muted.opacity(0.78))
         .fixedSize(horizontal: false, vertical: true)
 
-        if store.localDoHOmittedRuleCount > 0 || store.localDoHExactDomainCount > 0 {
+        if store.localDoHExpandedGeoSiteRuleCount > 0 {
           Text(
-            "Generated with \(store.localDoHOmittedRuleCount) unsupported or excess rules omitted"
+            "Expanded all representable entries from \(store.localDoHExpandedGeoSiteRuleCount) proxied GEOSITE rules using the protected managed GeoSite database; no domain-count truncation was applied."
+          )
+          .font(.system(size: 10, weight: .medium))
+          .foregroundStyle(DashboardTheme.info)
+          .fixedSize(horizontal: false, vertical: true)
+        }
+
+        if store.localDoHOmittedRuleCount > 0
+          || store.localDoHExactDomainCount > 0
+          || store.localDoHUnrepresentableGeoSiteEntryCount > 0
+        {
+          Text(
+            "Generated with \(store.localDoHOmittedRuleCount) unsupported rules omitted"
+              + (store.localDoHUnrepresentableGeoSiteEntryCount > 0
+                ? ", including \(store.localDoHUnrepresentableGeoSiteEntryCount) GEOSITE keyword, regex, or invalid entries that macOS split DNS cannot express"
+                : "")
               + (store.localDoHExactDomainCount > 0
-                ? " and \(store.localDoHExactDomainCount) exact-domain rules represented as suffixes."
+                ? ", and \(store.localDoHExactDomainCount) exact-domain entries represented as suffixes."
                 : ".")
+          )
+          .font(.system(size: 10, weight: .medium))
+          .foregroundStyle(DashboardTheme.warning)
+          .fixedSize(horizontal: false, vertical: true)
+        }
+
+        if store.localDoHInvertedGeoSiteRuleCount > 0 {
+          Text(
+            "\(store.localDoHInvertedGeoSiteRuleCount) inverted GEOSITE rules could not be represented and were omitted; MihomoBox did not widen Local DoH to global DNS."
           )
           .font(.system(size: 10, weight: .medium))
           .foregroundStyle(DashboardTheme.warning)
