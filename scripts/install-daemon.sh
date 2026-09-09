@@ -12,6 +12,7 @@ COMPONENT_VERSION="$APP_SUPPORT/component-version"
 COMPONENT_PENDING="$APP_SUPPORT/component-update-pending.plist"
 PROVISIONING_STATE="$APP_SUPPORT/provisioning"
 LOCAL_DOH_DIR="$APP_SUPPORT/local-doh"
+LOCAL_DOH_CA_CERT="$LOCAL_DOH_DIR/ca.crt"
 LOCAL_DOH_CERT="$LOCAL_DOH_DIR/server.crt"
 LOCAL_DOH_KEY="$LOCAL_DOH_DIR/server.key"
 LOCAL_DOH_FINGERPRINT="$LOCAL_DOH_DIR/certificate.sha1"
@@ -19,8 +20,6 @@ LOCAL_DOH_STATE="$APP_SUPPORT/local-doh-enabled"
 LOCAL_DOH_PROFILE="$APP_SUPPORT/MihomoBox-Local-DoH.mobileconfig"
 LOCAL_DOH_PROFILE_IDENTIFIER="dev.linsheng.mihomobox.local-doh"
 LOCAL_DOH_ROLLBACK_DIR=""
-LOCAL_DOH_CERT_CREATED=0
-LOCAL_DOH_TRUST_ADDED=0
 LOCAL_DOH_STATE_EXISTED=0
 INSTALL_LOCK="/Library/Application Support/.mihomobox-install.lock"
 CLI_ENTRY="/usr/local/bin/mihomoboxctl"
@@ -1193,7 +1192,11 @@ restore_network() {
 }
 
 local_doh_fingerprint() {
-  /usr/bin/openssl x509 -in "$LOCAL_DOH_CERT" -noout -fingerprint -sha1 \
+  local trust_anchor="$LOCAL_DOH_CERT"
+  if [[ -f "$LOCAL_DOH_CA_CERT" && ! -L "$LOCAL_DOH_CA_CERT" ]]; then
+    trust_anchor="$LOCAL_DOH_CA_CERT"
+  fi
+  /usr/bin/openssl x509 -in "$trust_anchor" -noout -fingerprint -sha1 \
     | /usr/bin/sed 's/^.*=//;s/://g'
 }
 
@@ -1276,8 +1279,16 @@ remove_local_doh_trust() {
   local fingerprint=""
   if [[ -f "$LOCAL_DOH_FINGERPRINT" && ! -L "$LOCAL_DOH_FINGERPRINT" ]]; then
     fingerprint="$(/usr/bin/sed -n '1p' "$LOCAL_DOH_FINGERPRINT")"
-  elif [[ -f "$LOCAL_DOH_CERT" && ! -L "$LOCAL_DOH_CERT" ]]; then
+  elif { [[ -f "$LOCAL_DOH_CA_CERT" && ! -L "$LOCAL_DOH_CA_CERT" ]] ||
+    [[ -f "$LOCAL_DOH_CERT" && ! -L "$LOCAL_DOH_CERT" ]]; }; then
     fingerprint="$(local_doh_fingerprint 2>/dev/null || true)"
+  fi
+  local trust_anchor="$LOCAL_DOH_CERT"
+  if [[ -f "$LOCAL_DOH_CA_CERT" && ! -L "$LOCAL_DOH_CA_CERT" ]]; then
+    trust_anchor="$LOCAL_DOH_CA_CERT"
+  fi
+  if [[ -f "$trust_anchor" && ! -L "$trust_anchor" ]]; then
+    /usr/bin/security remove-trusted-cert -d "$trust_anchor" >/dev/null 2>&1 || true
   fi
   if [[ "$fingerprint" =~ ^[0-9A-Fa-f]{40}$ ]]; then
     /usr/bin/security delete-certificate -Z "$fingerprint" \
@@ -1313,8 +1324,13 @@ rollback_local_doh_install() {
     /bin/cp -p "$LOCAL_DOH_ROLLBACK_DIR/local-doh-enabled" "$LOCAL_DOH_STATE" || true
   fi
   if [[ "$LOCAL_DOH_STATE_EXISTED" -eq 1 && -f "$LOCAL_DOH_CERT" ]]; then
-    /usr/bin/security add-trusted-cert -d -r trustAsRoot -p ssl \
-      -k /Library/Keychains/System.keychain "$LOCAL_DOH_CERT" >/dev/null 2>&1 || true
+    if [[ -f "$LOCAL_DOH_CA_CERT" && ! -L "$LOCAL_DOH_CA_CERT" ]]; then
+      /usr/bin/security add-trusted-cert -d -r trustRoot \
+        -k /Library/Keychains/System.keychain "$LOCAL_DOH_CA_CERT" >/dev/null 2>&1 || true
+    else
+      /usr/bin/security add-trusted-cert -d -r trustAsRoot -p ssl -s 127.0.0.1 \
+        -k /Library/Keychains/System.keychain "$LOCAL_DOH_CERT" >/dev/null 2>&1 || true
+    fi
   fi
   if [[ -f "$PLIST" && ! -f "$PROVISIONING_STATE" ]]; then
     /bin/launchctl bootstrap system "$PLIST" >/dev/null 2>&1 || true
@@ -1369,32 +1385,50 @@ install_local_doh() {
   local regenerate_identity=0
   local certificate_modulus=""
   local private_key_modulus=""
-  if [[ ! -f "$LOCAL_DOH_CERT" || ! -f "$LOCAL_DOH_KEY" ||
-    -L "$LOCAL_DOH_CERT" || -L "$LOCAL_DOH_KEY" ]]; then
+  if [[ ! -f "$LOCAL_DOH_CA_CERT" || ! -f "$LOCAL_DOH_CERT" || ! -f "$LOCAL_DOH_KEY" ||
+    -L "$LOCAL_DOH_CA_CERT" || -L "$LOCAL_DOH_CERT" || -L "$LOCAL_DOH_KEY" ]]; then
     regenerate_identity=1
   else
     certificate_modulus="$(/usr/bin/openssl x509 -in "$LOCAL_DOH_CERT" -noout -modulus 2>/dev/null)"
     private_key_modulus="$(/usr/bin/openssl rsa -in "$LOCAL_DOH_KEY" -noout -modulus 2>/dev/null)"
     if [[ -z "$certificate_modulus" || "$certificate_modulus" != "$private_key_modulus" ]] ||
-      ! /usr/bin/openssl x509 -in "$LOCAL_DOH_CERT" -noout -checkend 86400 >/dev/null 2>&1; then
+      ! /usr/bin/openssl x509 -in "$LOCAL_DOH_CA_CERT" -noout -checkend 86400 >/dev/null 2>&1 ||
+      ! /usr/bin/openssl x509 -in "$LOCAL_DOH_CERT" -noout -checkend 86400 >/dev/null 2>&1 ||
+      ! /usr/bin/openssl verify -CAfile "$LOCAL_DOH_CA_CERT" "$LOCAL_DOH_CERT" >/dev/null 2>&1; then
       regenerate_identity=1
     fi
   fi
   if [[ "$regenerate_identity" -eq 1 ]]; then
     remove_local_doh_trust
-    /bin/rm -f "$LOCAL_DOH_CERT" "$LOCAL_DOH_KEY" "$LOCAL_DOH_FINGERPRINT"
+    /bin/rm -f "$LOCAL_DOH_CA_CERT" "$LOCAL_DOH_CERT" "$LOCAL_DOH_KEY" \
+      "$LOCAL_DOH_FINGERPRINT"
+    local ca_key="$LOCAL_DOH_DIR/.ca.key"
+    local server_csr="$LOCAL_DOH_DIR/.server.csr"
+    local server_extensions="$LOCAL_DOH_DIR/.server.ext"
+    local ca_serial="$LOCAL_DOH_DIR/.ca.srl"
     /usr/bin/openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 825 \
-      -subj "/CN=MihomoBox Local DoH" \
-      -addext "subjectAltName=IP:127.0.0.1,DNS:localhost" \
-      -addext "basicConstraints=critical,CA:FALSE" \
-      -addext "keyUsage=critical,digitalSignature,keyEncipherment" \
-      -addext "extendedKeyUsage=serverAuth" \
-      -keyout "$LOCAL_DOH_KEY" -out "$LOCAL_DOH_CERT" >/dev/null 2>&1
-    LOCAL_DOH_CERT_CREATED=1
+      -subj "/CN=MihomoBox Local DoH Root CA" \
+      -addext "basicConstraints=critical,CA:TRUE,pathlen:0" \
+      -addext "keyUsage=critical,keyCertSign,cRLSign" \
+      -keyout "$ca_key" -out "$LOCAL_DOH_CA_CERT" >/dev/null 2>&1
+    /usr/bin/openssl req -new -newkey rsa:2048 -sha256 -nodes \
+      -subj "/CN=127.0.0.1" \
+      -keyout "$LOCAL_DOH_KEY" -out "$server_csr" >/dev/null 2>&1
+    /usr/bin/printf '%s\n' \
+      'subjectAltName=IP:127.0.0.1,DNS:localhost' \
+      'basicConstraints=critical,CA:FALSE' \
+      'keyUsage=critical,digitalSignature,keyEncipherment' \
+      'extendedKeyUsage=serverAuth' > "$server_extensions"
+    /usr/bin/openssl x509 -req -in "$server_csr" \
+      -CA "$LOCAL_DOH_CA_CERT" -CAkey "$ca_key" -CAcreateserial -CAserial "$ca_serial" \
+      -days 825 -sha256 -extfile "$server_extensions" -out "$LOCAL_DOH_CERT" >/dev/null 2>&1
+    /bin/rm -f "$ca_key" "$server_csr" "$server_extensions" "$ca_serial"
   fi
-  /usr/sbin/chown root:wheel "$LOCAL_DOH_CERT" "$LOCAL_DOH_KEY"
-  /bin/chmod 0644 "$LOCAL_DOH_CERT"
+  /usr/sbin/chown root:wheel "$LOCAL_DOH_CA_CERT" "$LOCAL_DOH_CERT" "$LOCAL_DOH_KEY"
+  /bin/chmod 0644 "$LOCAL_DOH_CA_CERT" "$LOCAL_DOH_CERT"
   /bin/chmod 0600 "$LOCAL_DOH_KEY"
+  /usr/bin/security verify-cert -c "$LOCAL_DOH_CERT" -r "$LOCAL_DOH_CA_CERT" \
+    -p ssl -s 127.0.0.1 >/dev/null
   local fingerprint
   fingerprint="$(local_doh_fingerprint)"
   [[ "$fingerprint" =~ ^[0-9A-Fa-f]{40}$ ]] || {
@@ -1406,11 +1440,17 @@ install_local_doh() {
   /bin/chmod 0600 "$LOCAL_DOH_FINGERPRINT"
   if ! /usr/bin/security verify-cert -c "$LOCAL_DOH_CERT" \
     -p ssl -s 127.0.0.1 >/dev/null 2>&1; then
-    /usr/bin/security add-trusted-cert -d -r trustAsRoot -p ssl \
-      -k /Library/Keychains/System.keychain "$LOCAL_DOH_CERT"
-    LOCAL_DOH_TRUST_ADDED=1
+    if ! /usr/bin/security add-trusted-cert -d -r trustRoot \
+      -k /Library/Keychains/System.keychain "$LOCAL_DOH_CA_CERT" >/dev/null 2>&1; then
+      echo "macOS did not trust the Local DoH certificate authority" >&2
+      return 1
+    fi
   fi
-  /usr/bin/security verify-cert -c "$LOCAL_DOH_CERT" -p ssl -s 127.0.0.1 >/dev/null
+  if ! /usr/bin/security verify-cert -c "$LOCAL_DOH_CERT" \
+    -p ssl -s 127.0.0.1 >/dev/null 2>&1; then
+    echo "macOS did not trust the Local DoH certificate authority" >&2
+    return 1
+  fi
 
   "$AGENT_SOURCE" --config "$APP_SUPPORT/daemon.json" --set-local-doh enabled
   local staged
@@ -1475,7 +1515,7 @@ rollback_local_doh_remove() {
   echo "Local DoH removal failed; recovering classic managed DNS" >&2
   if recover_classic_dns_after_local_doh_failure; then
     remove_local_doh_trust
-    /bin/rm -f "$LOCAL_DOH_CERT" "$LOCAL_DOH_KEY" \
+    /bin/rm -f "$LOCAL_DOH_CA_CERT" "$LOCAL_DOH_CERT" "$LOCAL_DOH_KEY" \
       "$LOCAL_DOH_FINGERPRINT" "$LOCAL_DOH_STATE"
     /bin/rm -f "$LOCAL_DOH_PROFILE"
     /bin/rmdir "$LOCAL_DOH_DIR" >/dev/null 2>&1 || true
@@ -1533,7 +1573,8 @@ remove_local_doh() {
   # If the transition fails, the machine retains a usable recovery endpoint
   # instead of an installed profile pointing at a deleted identity.
   remove_local_doh_trust
-  /bin/rm -f "$LOCAL_DOH_CERT" "$LOCAL_DOH_KEY" "$LOCAL_DOH_FINGERPRINT" "$LOCAL_DOH_STATE"
+  /bin/rm -f "$LOCAL_DOH_CA_CERT" "$LOCAL_DOH_CERT" "$LOCAL_DOH_KEY" \
+    "$LOCAL_DOH_FINGERPRINT" "$LOCAL_DOH_STATE"
   /bin/rm -f "$LOCAL_DOH_PROFILE"
   /bin/rmdir "$LOCAL_DOH_DIR" >/dev/null 2>&1 || true
   trap - ERR

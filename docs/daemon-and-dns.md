@@ -38,11 +38,12 @@ Mihomo -> 127.0.0.1:1054 -> scoped or PrimaryService DHCP DNS
 ```
 
 Mihomo's loopback TLS controller owns `/dns-query`; it is not a second DNS
-implementation. The installer generates a host-only self-signed certificate
-with the `127.0.0.1` IP SAN, keeps its private key root-only, and adds an
-SSL-scoped `trustAsRoot` record to the System keychain. It never unlocks a
-keychain. The profile uses a fixed identifier so regeneration updates the
-existing settings, and removal deletes that exact profile and certificate.
+implementation. The installer generates a local root CA plus a host-only server
+certificate with the `127.0.0.1` IP SAN, keeps the server private key root-only,
+and discards the CA private key after signing. Only the CA certificate is added
+to the System trust store. It never unlocks a keychain. The profile uses a fixed
+identifier so regeneration updates the existing settings, and removal deletes
+that exact profile, trust anchor, and server identity.
 
 The root daemon builds `SupplementalMatchDomains` from enabled `DOMAIN`,
 `DOMAIN-SUFFIX`, and `GEOSITE` rules whose current selector chain resolves to a

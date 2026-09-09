@@ -261,6 +261,11 @@ final class AppServicePolicyTests: XCTestCase {
       InstallerCoordinator.classification("the root-owned Local DoH profile is invalid"),
       "local_doh_profile_generation"
     )
+    XCTAssertEqual(
+      InstallerCoordinator.classification(
+        "macOS did not trust the Local DoH certificate authority"),
+      "local_doh_trust"
+    )
     XCTAssertEqual(InstallerCoordinator.classification("arbitrary profile contents"), "other")
   }
 

@@ -46,6 +46,7 @@ final class AgentSupervisor: @unchecked Sendable {
         guard usesLocalDoH else { return false }
         let support = URL(fileURLWithPath: configPath).deletingLastPathComponent()
         let required: [(String, mode_t)] = [
+            ("local-doh/ca.crt", 0o644),
             ("local-doh/server.crt", 0o644),
             ("local-doh/server.key", 0o600),
             ("local-doh/certificate.sha1", 0o600),

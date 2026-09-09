@@ -70,14 +70,15 @@ managed `GeoSite.dat`. The daemon writes the fixed profile at
 `/Library/Application Support/Mihomo App/MihomoBox-Local-DoH.mobileconfig` as
 root:wheel mode `0644` and returns only aggregate counts. The exact-snapshot
 administrator boundary then validates that artifact before stopping anything,
-repairs the installed components, generates a root-owned loopback
-certificate/private key, trusts only that certificate for SSL, enables
+repairs the installed components, generates a root-owned local CA and loopback
+server certificate/private key, discards the CA private key, trusts the CA
+certificate in the System trust store, enables
 Mihomo's loopback DoH endpoint, and restores MihomoBox's classic Global DNS
 setting. The App opens the validated root-owned profile. Apple requires the
 user to finish installation in **General > Device Management**; **Open Device
 Management** reopens that exact System Settings pane at any time. **Remove Local DoH**
-removes the fixed profile identifier, its exact certificate fingerprint and
-server identity and prepared profile artifact, then restores the classic
+removes the fixed profile identifier, its exact trust-anchor fingerprint,
+server identity, and prepared profile artifact, then restores the classic
 managed-DNS mode. Profile removal is
 verified before the server identity is deleted; if the DNS-mode transition
 fails, the installer retries classic managed DNS and otherwise leaves normal

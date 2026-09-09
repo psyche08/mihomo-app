@@ -49,6 +49,7 @@ enum InstallerCoordinatorError: Error, LocalizedError {
   case timedOut
   case localDoHPrerequisite
   case localDoHProfileGenerationFailed
+  case localDoHTrustFailed
   case localDoHProfileRemovalFailed
   case networkRecoveryRequired
   case failed
@@ -64,6 +65,8 @@ enum InstallerCoordinatorError: Error, LocalizedError {
       "activate a valid Mihomo profile before preparing Local DoH"
     case .localDoHProfileGenerationFailed:
       "the daemon-generated Local DoH profile failed privileged validation; retry after repairing MihomoBox components"
+    case .localDoHTrustFailed:
+      "macOS could not trust the Local DoH certificate authority; retry after checking System keychain access"
     case .localDoHProfileRemovalFailed:
       "macOS did not remove or verify removal of the Local DoH profile; open Device Management and remove it there"
     case .networkRecoveryRequired:
@@ -291,6 +294,9 @@ actor InstallerCoordinator {
       if message.localizedCaseInsensitiveContains("root-owned Local DoH profile") {
         throw InstallerCoordinatorError.localDoHProfileGenerationFailed
       }
+      if message.localizedCaseInsensitiveContains("Local DoH certificate authority") {
+        throw InstallerCoordinatorError.localDoHTrustFailed
+      }
       if message.localizedCaseInsensitiveContains("Local DoH profile") {
         throw InstallerCoordinatorError.localDoHProfileRemovalFailed
       }
@@ -342,6 +348,9 @@ actor InstallerCoordinator {
     if value.localizedCaseInsensitiveContains("configuration file") { return "profile_rejected" }
     if value.localizedCaseInsensitiveContains("root-owned Local DoH profile") {
       return "local_doh_profile_generation"
+    }
+    if value.localizedCaseInsensitiveContains("Local DoH certificate authority") {
+      return "local_doh_trust"
     }
     if value.localizedCaseInsensitiveContains("Local DoH profile") {
       return "local_doh_profile"

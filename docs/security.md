@@ -83,7 +83,8 @@
 - Local DoH setup is another fixed operation of the exact-snapshot installer;
   it accepts no certificate, key, hostname, port, output path, or arbitrary
   domain argument. The installer generates the identity at a fixed root-owned
-  path, imports only its fingerprint into the System keychain for SSL, and
+  path, imports only the generated CA certificate into the System trust store,
+  deletes the CA private key after issuing the loopback server certificate, and
   never unlocks a keychain. A typed daemon mutation derives the profile only
   from authenticated controller rule snapshots and the exact root-owned,
   non-writable managed `GeoSite.dat`; the unprivileged App never receives the
