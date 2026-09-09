@@ -88,6 +88,11 @@
   domain list only from authenticated controller rule snapshots. Unsupported
   rules are omitted, an empty list is rejected, and the generated profile is
   private to the current user until macOS presents its own install review.
+  Domain planning follows the authenticated controller's current selector
+  chains and accepts only concrete reviewed remote-proxy types. Root exposes a
+  separate fixed status operation that returns only server/profile booleans and
+  the installed suffix count. Removal verifies the fixed profile is absent
+  before deleting the exact trust record or server identity.
 - A signed legacy protocol response is not permission to downgrade the App's
   XPC requests. Version 1 is classified only from the authenticated response
   envelope, never from a marker file or error string. The tray disables all

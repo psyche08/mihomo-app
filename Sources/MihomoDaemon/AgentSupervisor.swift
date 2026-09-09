@@ -1,4 +1,5 @@
 import CMihomoDNSSystem
+import Darwin
 import Foundation
 import MihomoDNSCore
 
@@ -39,6 +40,26 @@ final class AgentSupervisor: @unchecked Sendable {
 
     var usesLocalDoH: Bool {
         (try? ProxyConfiguration.load(path: configPath).localDoH) != nil
+    }
+
+    var localDoHIdentityPrepared: Bool {
+        guard usesLocalDoH else { return false }
+        let support = URL(fileURLWithPath: configPath).deletingLastPathComponent()
+        let required: [(String, mode_t)] = [
+            ("local-doh/server.crt", 0o644),
+            ("local-doh/server.key", 0o600),
+            ("local-doh/certificate.sha1", 0o600),
+            ("local-doh-enabled", 0o644),
+        ]
+        return required.allSatisfy { relative, expectedMode in
+            var metadata = stat()
+            let path = support.appendingPathComponent(relative).path
+            return lstat(path, &metadata) == 0
+                && metadata.st_mode & S_IFMT == S_IFREG
+                && metadata.st_uid == 0
+                && metadata.st_gid == 0
+                && metadata.st_mode & 0o777 == expectedMode
+        }
     }
 
     func start() throws {

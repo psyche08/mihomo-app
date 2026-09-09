@@ -47,6 +47,9 @@ enum InstallerCoordinatorError: Error, LocalizedError {
   case cancelled
   case profileRejected
   case timedOut
+  case localDoHPrerequisite
+  case localDoHProfileRemovalFailed
+  case networkRecoveryRequired
   case failed
 
   var errorDescription: String? {
@@ -56,6 +59,12 @@ enum InstallerCoordinatorError: Error, LocalizedError {
     case .cancelled: "the installation was cancelled"
     case .profileRejected: "Mihomo rejected the selected profile; import a valid profile"
     case .timedOut: "the daemon did not become ready in time"
+    case .localDoHPrerequisite:
+      "activate a valid Mihomo profile before preparing Local DoH"
+    case .localDoHProfileRemovalFailed:
+      "macOS did not remove or verify removal of the Local DoH profile; open Device Management and remove it there"
+    case .networkRecoveryRequired:
+      "Local DoH changed, but classic managed DNS recovery requires operator attention"
     case .failed: "the privileged installer did not complete"
     }
   }
@@ -262,16 +271,29 @@ actor InstallerCoordinator {
     AppLog.info("event=privileged_installer action=\(action) phase=started")
     let result = try await Self.runAppleScript(source)
     guard result.status == 0 else {
+      let message = result.output
       if result.status == 1
-        && (result.output.contains("(-128)")
-          || result.output.localizedCaseInsensitiveContains("User canceled"))
+        && (message.contains("(-128)")
+          || message.localizedCaseInsensitiveContains("User canceled"))
       {
         AppLog.info("event=privileged_installer action=\(action) result=cancelled")
         throw InstallerCoordinatorError.cancelled
       }
       AppLog.error(
-        "event=privileged_installer action=\(action) result=failed reason=\(Self.classification(result.output))"
+        "event=privileged_installer action=\(action) result=failed reason=\(Self.classification(message))"
       )
+      if message.localizedCaseInsensitiveContains("install and activate a Mihomo profile") {
+        throw InstallerCoordinatorError.localDoHPrerequisite
+      }
+      if message.localizedCaseInsensitiveContains("Local DoH profile") {
+        throw InstallerCoordinatorError.localDoHProfileRemovalFailed
+      }
+      if message.localizedCaseInsensitiveContains("recovery requires operator attention") {
+        throw InstallerCoordinatorError.networkRecoveryRequired
+      }
+      if message.localizedCaseInsensitiveContains("timed out waiting for") {
+        throw InstallerCoordinatorError.timedOut
+      }
       throw InstallerCoordinatorError.failed
     }
     AppLog.info("event=privileged_installer action=\(action) result=success")
@@ -312,6 +334,12 @@ actor InstallerCoordinator {
   static func classification(_ value: String) -> String {
     if value.localizedCaseInsensitiveContains("test failed") { return "profile_rejected" }
     if value.localizedCaseInsensitiveContains("configuration file") { return "profile_rejected" }
+    if value.localizedCaseInsensitiveContains("Local DoH profile") {
+      return "local_doh_profile"
+    }
+    if value.localizedCaseInsensitiveContains("recovery requires operator attention") {
+      return "recovery_required"
+    }
     if value.localizedCaseInsensitiveContains("timed out") { return "timeout" }
     return "other"
   }

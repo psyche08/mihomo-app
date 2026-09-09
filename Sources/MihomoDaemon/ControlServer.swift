@@ -223,6 +223,23 @@ final class ControlDispatcher: @unchecked Sendable {
                 payload = nil
             case .componentStatus:
                 payload = try components.status()
+            case .localDoHStatus:
+                let health = (try? agent.passiveHealth()).flatMap {
+                    try? JSONDecoder().decode(NetworkConsistencyHealth.self, from: $0)
+                }
+                let profile = LocalDoHStatusProvider.inspectInstalledProfile()
+                let prepared = agent.localDoHIdentityPrepared
+                let status = LocalDoHStatus(
+                    serverPrepared: prepared,
+                    profileInstalled: profile.inspection.installed,
+                    profileInspectionSucceeded: profile.succeeded,
+                    runtimeHealthy: prepared && agent.isRunning
+                        && health?.networkConsistent == true
+                        && health?.systemDNSManaged == false,
+                    systemDNSManaged: health?.systemDNSManaged,
+                    installedDomainCount: profile.inspection.domainCount
+                )
+                payload = try JSONEncoder().encode(status)
             case .upgradeComponents:
                 guard let package = request.payload else {
                     throw serverError("component update package is required")
@@ -315,7 +332,7 @@ final class ControlDispatcher: @unchecked Sendable {
             // because this operation represents both safe reads and bounded
             // mutations, and the typed envelope does not carry the method here.
             return true
-        case .ping, .status, .trayState, .snapshot, .componentStatus,
+        case .ping, .status, .trayState, .snapshot, .componentStatus, .localDoHStatus,
              .controllerVersion, .listRules, .listProxyProviders,
              .listRuleProviders, .listConnections, .controllerStreamMessage,
              .controllerStreamOpen, .controllerStreamNext, .controllerStreamClose,

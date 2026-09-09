@@ -195,6 +195,7 @@ activation transaction.
 | Reload active profile | `profile.reload` |
 | Import/switch profile | `profile.import` / `profile.switch` |
 | Start/stop/restart proxy runtime | `agent.start` / `agent.stop` / `agent.restart` |
+| Read fixed Local DoH server/profile state | `local-doh.status` |
 | SwiftUI controller reads/mutations | typed operations or validated `dashboard.controller-request` |
 | SwiftUI live streams | `dashboard.controller-stream-open/next/close` |
 
@@ -230,12 +231,16 @@ install/relaunch path; the daemon-owned active tunnel does not depend on the App
 process remaining alive.
 
 Config also exposes **Local DNS over HTTPS**. The store reads the current
-authenticated `/rules` snapshot, converts only enabled `DOMAIN` and
-`DOMAIN-SUFFIX` proxy rules to a bounded split-DNS plan, and shows the omitted
-and exact-to-suffix counts. Preparing and removing the root TLS endpoint use
-the verified installer; the App then opens the generated `.mobileconfig` for
-the mandatory macOS review. The busy state disables repeat clicks throughout
-the administrator and profile-generation steps.
+authenticated `/rules` and `/proxies` snapshot, recognizes both YAML
+`DOMAIN-SUFFIX` and controller `DomainSuffix` spellings, follows each current
+selector chain to a concrete remote proxy, and converts only those enabled
+rules to a bounded split-DNS plan. Global/Direct modes, DIRECT selections,
+unknown leaves and selector cycles fail closed. The Config panel shows the
+omitted and exact-to-suffix counts and polls the fixed `local-doh.status`
+projection while visible. Preparing and removing the root TLS endpoint use
+the verified installer; the App then opens the generated `.mobileconfig` and
+the exact Device Management pane for mandatory macOS review. The busy state
+disables repeat clicks throughout the administrator and profile-generation steps.
 
 There is no loopback HTTP server, browser token, WebView, or `mihomoboxctl`
 child process in the desktop data path. The daemon still validates every

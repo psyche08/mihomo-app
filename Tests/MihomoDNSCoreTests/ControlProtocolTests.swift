@@ -9,6 +9,57 @@ final class ControlProtocolTests: XCTestCase {
         XCTAssertTrue(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .status))
         XCTAssertTrue(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .setTUN))
         XCTAssertTrue(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .reloadProfile))
+        XCTAssertTrue(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .localDoHStatus))
+    }
+
+    func testLocalDoHStatusRoundTripsWithoutProfileDetails() throws {
+        let status = LocalDoHStatus(
+            serverPrepared: true,
+            profileInstalled: true,
+            profileInspectionSucceeded: true,
+            runtimeHealthy: true,
+            systemDNSManaged: false,
+            installedDomainCount: 2
+        )
+
+        let decoded = try JSONDecoder().decode(
+            LocalDoHStatus.self,
+            from: JSONEncoder().encode(status)
+        )
+
+        XCTAssertEqual(decoded, status)
+    }
+
+    func testLocalDoHProfileInspectionReturnsOnlyFixedProfileStateAndCount() throws {
+        let profile: [String: Any] = [
+            "_computerlevel": [[
+                "PayloadIdentifier": LocalDoHStatus.profileIdentifier,
+                "PayloadContent": [[
+                    "DNSSettings": [
+                        "SupplementalMatchDomains": ["example.com", "claude.ai"],
+                    ],
+                ]],
+            ]],
+            "unrelated": [[
+                "PayloadIdentifier": "com.example.other",
+                "PayloadContent": [[
+                    "DNSSettings": [
+                        "SupplementalMatchDomains": ["private.example"],
+                    ],
+                ]],
+            ]],
+        ]
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: profile,
+            format: .xml,
+            options: 0
+        )
+
+        XCTAssertEqual(
+            LocalDoHProfileInspection.inspect(propertyList: data),
+            LocalDoHProfileInspection(installed: true, domainCount: 2)
+        )
+        XCTAssertNil(LocalDoHProfileInspection.inspect(propertyList: Data("not a plist".utf8)))
     }
 
     func testComponentUpdatePackageBinaryRoundTrip() throws {

@@ -32,6 +32,7 @@
 		9496E62A642F63C607877114 /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D84D9E2E7EF6A6AE6CABDF01 /* SystemConfiguration.framework */; };
 		9783D5E519CF1697FDF50530 /* ProfileCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FC1578C336FCE0739145892 /* ProfileCoordinator.swift */; };
 		98C089059EDF05B1CDFCD6D5 /* ComponentUpdater.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94FC2085623B0EC98B98BCFD /* ComponentUpdater.swift */; };
+		A0D0C5A705E44B44A66909E1 /* LocalDoHStatusProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D0C5A705E44B44A66909E2 /* LocalDoHStatusProvider.swift */; };
 		9AF4CB1D9A04D47FAE90522C /* MihomoControl in Frameworks */ = {isa = PBXBuildFile; productRef = 0163B2450BA163D262B26FF4 /* MihomoControl */; };
 		AA971BB7DF956F80CC08B9E1 /* AppKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 718411A53B8D16BC13ADA862 /* AppKit.framework */; };
 		ABDB0BE47EA6B2E45C11D443 /* TrayControlClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1BE78C294AFD759604BECDD /* TrayControlClient.swift */; };
@@ -130,6 +131,7 @@
 		8FC1578C336FCE0739145892 /* ProfileCoordinator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ProfileCoordinator.swift; sourceTree = "<group>"; };
 		94FC2085623B0EC98B98BCFD /* ComponentUpdater.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ComponentUpdater.swift; sourceTree = "<group>"; };
 		9FCA8554988DAE36431BF9F4 /* LoginAutostartController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LoginAutostartController.swift; sourceTree = "<group>"; };
+		A0D0C5A705E44B44A66909E2 /* LocalDoHStatusProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LocalDoHStatusProvider.swift; sourceTree = "<group>"; };
 		A2627158FF6F3C0731951B8D /* XcodeCloud-Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = "XcodeCloud-Info.plist"; sourceTree = "<group>"; };
 		AB54A6757D4D0F2BFAEF850F /* AppDelegate.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		B1A7CE955B5C29E6A00F7F01 /* AgentSupervisor.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AgentSupervisor.swift; sourceTree = "<group>"; };
@@ -248,6 +250,7 @@
 				94FC2085623B0EC98B98BCFD /* ComponentUpdater.swift */,
 				E486081D65C450621277681B /* ControlServer.swift */,
 				1E050E31E79C948D86A09618 /* ControllerBroker.swift */,
+				A0D0C5A705E44B44A66909E2 /* LocalDoHStatusProvider.swift */,
 				12FE68725B51DA4DB03D050F /* ProfileBroker.swift */,
 				4DD11BCE5CF49DD4C8501295 /* main.swift */,
 			);
@@ -516,6 +519,7 @@
 				98C089059EDF05B1CDFCD6D5 /* ComponentUpdater.swift in Sources */,
 				1D8D167D0C50453632DC3D6D /* ControlServer.swift in Sources */,
 				D6F34BB1AE03242C7ACF7A82 /* ControllerBroker.swift in Sources */,
+				A0D0C5A705E44B44A66909E1 /* LocalDoHStatusProvider.swift in Sources */,
 				D4A209842538AAE3F3D21C1B /* ProfileBroker.swift in Sources */,
 				B80B59C1113C3B556EBFAAD5 /* main.swift in Sources */,
 			);

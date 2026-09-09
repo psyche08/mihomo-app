@@ -182,6 +182,33 @@ final class DashboardStoreIPCTests: XCTestCase {
     XCTAssertTrue(gateway.calls.isEmpty)
   }
 
+  func testLocalDoHPlanUsesAuthenticatedRulesAndCurrentProxySelection() async {
+    let gateway = FakeDashboardGateway()
+    let service = FakeDashboardLocalDoHService()
+    let store = DashboardStore(gateway: gateway)
+    store.configureLocalDoHService(service)
+
+    await store.prepareLocalDoH()
+
+    XCTAssertEqual(service.preparedPlans.map(\.domains), [["example.com"]])
+    XCTAssertTrue(gateway.calls.contains("fetchRules"))
+    XCTAssertTrue(gateway.calls.contains("fetchSnapshot"))
+    XCTAssertNil(store.actionError)
+  }
+
+  func testLocalDoHRefusesGlobalModeInsteadOfGeneratingGlobalDNSProfile() async throws {
+    let gateway = FakeDashboardGateway()
+    let service = FakeDashboardLocalDoHService()
+    let store = DashboardStore(gateway: gateway)
+    store.configureLocalDoHService(service)
+    _ = try await gateway.applyOutboundMode(.global)
+
+    await store.prepareLocalDoH()
+
+    XCTAssertTrue(service.preparedPlans.isEmpty)
+    XCTAssertTrue(store.actionError?.contains("require Rule mode") == true)
+  }
+
   private func eventually(
     timeout: TimeInterval = 2,
     condition: @MainActor () -> Bool
@@ -207,6 +234,22 @@ private final class FakeDashboardUpdatePreference: DashboardUpdatePreference {
     setValues.append(enabled)
     automaticUpdatesEnabled = enabled
   }
+}
+
+@MainActor
+private final class FakeDashboardLocalDoHService: DashboardLocalDoHService {
+  private(set) var preparedPlans: [LocalDoHDomainPlan] = []
+
+  func status() async -> DashboardLocalDoHStatus {
+    DashboardLocalDoHStatus(available: true)
+  }
+
+  func prepare(plan: LocalDoHDomainPlan) async throws {
+    preparedPlans.append(plan)
+  }
+
+  func openDeviceManagement() async throws {}
+  func remove() async throws {}
 }
 
 private final class FakeDashboardGateway: DashboardControlGateway, @unchecked Sendable {

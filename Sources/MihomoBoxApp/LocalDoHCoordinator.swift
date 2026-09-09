@@ -4,27 +4,42 @@ import MihomoBoxUI
 
 @MainActor
 final class LocalDoHCoordinator: DashboardLocalDoHService {
-  private static let preparedMarker = URL(
-    fileURLWithPath: "/Library/Application Support/Mihomo App/local-doh-enabled"
-  )
   private let installer: InstallerCoordinator
+  private let control: TrayControlClient
   private let fileManager: FileManager
 
   init(
     installer: InstallerCoordinator = InstallerCoordinator(),
+    control: TrayControlClient = TrayControlClient(),
     fileManager: FileManager = .default
   ) {
     self.installer = installer
+    self.control = control
     self.fileManager = fileManager
   }
 
   func status() async -> DashboardLocalDoHStatus {
     let plan = try? storedPlan()
-    return DashboardLocalDoHStatus(
-      available: await installer.installationActionsAvailable,
-      prepared: fileManager.fileExists(atPath: Self.preparedMarker.path),
-      installedDomainCount: plan?.domains.count ?? 0
-    )
+    let available = await installer.installationActionsAvailable
+    do {
+      let root = try await control.localDoHStatus()
+      return DashboardLocalDoHStatus(
+        available: available,
+        statusVerified: root.profileInspectionSucceeded,
+        serverPrepared: root.serverPrepared,
+        profileInstalled: root.profileInstalled,
+        runtimeHealthy: root.runtimeHealthy,
+        systemDNSManaged: root.systemDNSManaged,
+        installedDomainCount: root.installedDomainCount > 0
+          ? root.installedDomainCount : (plan?.domains.count ?? 0)
+      )
+    } catch {
+      return DashboardLocalDoHStatus(
+        available: available,
+        statusVerified: false,
+        installedDomainCount: plan?.domains.count ?? 0
+      )
+    }
   }
 
   func prepare(plan: LocalDoHDomainPlan) async throws {
@@ -38,7 +53,9 @@ final class LocalDoHCoordinator: DashboardLocalDoHService {
     )
     try profileData.write(to: url, options: [.atomic])
     try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-    guard NSWorkspace.shared.open(url) else {
+    let profileOpened = NSWorkspace.shared.open(url)
+    let settingsOpened = NSWorkspace.shared.open(LocalDoHProfileDocument.deviceManagementURL)
+    guard profileOpened && settingsOpened else {
       throw NSError(
         domain: "MihomoBoxLocalDoH",
         code: 2,

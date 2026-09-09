@@ -12,8 +12,8 @@ public struct ConfigView: View {
     ScrollView {
       VStack(alignment: .leading, spacing: DashboardTheme.sectionSpacing) {
         configHeader
-        applicationUpdatePanel
         localDoHPanel
+        applicationUpdatePanel
 
         switch store.configState {
         case .loaded:
@@ -29,6 +29,12 @@ public struct ConfigView: View {
       .padding(DashboardTheme.sectionSpacing)
     }
     .background(DashboardTheme.background)
+    .task {
+      while !Task.isCancelled {
+        await store.refreshLocalDoHStatus()
+        try? await Task.sleep(for: .seconds(5))
+      }
+    }
   }
 
   private var configHeader: some View {
@@ -304,8 +310,8 @@ public struct ConfigView: View {
       VStack(alignment: .leading, spacing: 10) {
         HStack(spacing: 10) {
           StatusPill(
-            store.localDoHPrepared ? "Server Ready" : "Not Configured",
-            color: store.localDoHPrepared ? DashboardTheme.success : DashboardTheme.muted
+            localDoHStatusTitle,
+            color: localDoHStatusColor
           )
           if store.localDoHDomainCount > 0 {
             Text("\(store.localDoHDomainCount) proxy domains")
@@ -316,7 +322,16 @@ public struct ConfigView: View {
         }
 
         Text(
-          "Generates a loopback-only certificate, trusts it in the System keychain, and opens a macOS DNS Settings profile. Only enabled DOMAIN and DOMAIN-SUFFIX proxy rules use local DoH; all other domains keep the current default DNS."
+          localDoHStatusDetail
+        )
+        .font(.system(size: 11, weight: .medium))
+        .foregroundStyle(
+          store.localDoHPhase == .degraded ? DashboardTheme.warning : DashboardTheme.content
+        )
+        .fixedSize(horizontal: false, vertical: true)
+
+        Text(
+          "Setup generates a loopback-only certificate and establishes SSL trust in the System keychain. In Rule mode, only enabled DOMAIN and DOMAIN-SUFFIX rules whose current selector chain reaches a remote proxy are included; all other domains keep the current macOS DNS."
         )
         .font(.system(size: 10))
         .foregroundStyle(DashboardTheme.muted.opacity(0.78))
@@ -352,7 +367,7 @@ public struct ConfigView: View {
           }
           .disabled(!store.localDoHAvailable || store.configAction != nil)
 
-          if store.localDoHPrepared {
+          if store.localDoHPrepared || store.localDoHProfileInstalled {
             actionButton(
               "Open Device Management",
               symbol: "gearshape.fill",
@@ -371,9 +386,66 @@ public struct ConfigView: View {
             ) {
               await store.removeLocalDoH()
             }
+
+            Button {
+              Task { await store.refreshLocalDoHStatus() }
+            } label: {
+              Label("Refresh Status", systemImage: "arrow.clockwise")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(DashboardTheme.muted)
+                .frame(maxWidth: .infinity, minHeight: 36)
+                .background(
+                  DashboardTheme.muted.opacity(0.09),
+                  in: RoundedRectangle(cornerRadius: 8)
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(store.configAction != nil)
           }
         }
       }
+    }
+  }
+
+  private var localDoHStatusTitle: String {
+    switch store.localDoHPhase {
+    case .unavailable: "Unavailable"
+    case .statusUnavailable: "Status Unavailable"
+    case .off:
+      store.localDoHSystemDNSManaged == true ? "Off · Classic DNS Active" : "Off"
+    case .awaitingApproval: "Awaiting macOS Approval"
+    case .active: "Active"
+    case .degraded: "Needs Attention"
+    }
+  }
+
+  private var localDoHStatusColor: Color {
+    switch store.localDoHPhase {
+    case .active: DashboardTheme.success
+    case .awaitingApproval: DashboardTheme.info
+    case .degraded: DashboardTheme.warning
+    case .unavailable, .statusUnavailable, .off: DashboardTheme.muted
+    }
+  }
+
+  private var localDoHStatusDetail: String {
+    switch store.localDoHPhase {
+    case .unavailable:
+      "Run the signed MihomoBox application bundle to prepare Local DoH."
+    case .statusUnavailable:
+      "The authenticated daemon could not verify Local DoH state. Allow component synchronization or use Install / Repair Daemon, then refresh."
+    case .off:
+      if store.localDoHSystemDNSManaged == true {
+        "Local DoH is off. MihomoBox is using its classic managed DNS bridge."
+      } else {
+        "Local DoH is off. Start or repair MihomoBox to restore its classic managed DNS bridge."
+      }
+    case .awaitingApproval:
+      "The local HTTPS server is healthy, but the DNS Settings profile is not installed. Finish the required confirmation in General › Device Management."
+    case .active:
+      "The local HTTPS server and macOS split-DNS profile are both active."
+    case .degraded:
+      "The server and installed profile do not agree. Repair by regenerating the profile, or remove Local DoH to restore classic managed DNS."
     }
   }
 

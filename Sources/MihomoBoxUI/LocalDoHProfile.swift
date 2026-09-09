@@ -1,4 +1,16 @@
 import Foundation
+import MihomoControl
+
+public enum LocalDoHPlanningError: Error, LocalizedError, Equatable, Sendable {
+  case requiresRuleMode(String)
+
+  public var errorDescription: String? {
+    switch self {
+    case .requiresRuleMode(let mode):
+      return "Local DoH split domains require Rule mode; the current mode is \(mode)."
+    }
+  }
+}
 
 public struct LocalDoHDomainPlan: Equatable, Sendable {
   public static let maximumDomains = 4_096
@@ -20,13 +32,18 @@ public struct LocalDoHDomainPlan: Equatable, Sendable {
     self.truncatedDomains = truncatedDomains
   }
 
-  public static func build(from rules: [DashboardRule]) -> Self {
+  public static func build(
+    from rules: [DashboardRule],
+    routeSnapshot: ControllerRouteSnapshot
+  ) -> Self {
     var candidates: [String] = []
     var omitted = 0
     var exact = 0
-    for rule in rules where rule.isEnabled && isProxyTarget(rule.target) {
+    for rule in rules where rule.isEnabled
+      && routeSnapshot.routesThroughRemoteProxy(rule.target)
+    {
       switch rule.type.uppercased() {
-      case "DOMAIN-SUFFIX":
+      case "DOMAIN-SUFFIX", "DOMAINSUFFIX":
         guard let domain = normalizedDomain(rule.payload) else {
           omitted += 1
           continue
@@ -68,15 +85,6 @@ public struct LocalDoHDomainPlan: Equatable, Sendable {
     )
   }
 
-  private static func isProxyTarget(_ value: String) -> Bool {
-    switch value.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() {
-    case "", "DIRECT", "REJECT", "REJECT-DROP", "PASS", "COMPATIBLE":
-      return false
-    default:
-      return true
-    }
-  }
-
   private static func normalizedDomain(_ value: String) -> String? {
     var domain = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     while domain.hasSuffix(".") { domain.removeLast() }
@@ -99,7 +107,7 @@ public struct LocalDoHDomainPlan: Equatable, Sendable {
 }
 
 public enum LocalDoHProfileDocument {
-  public static let identifier = "dev.linsheng.mihomobox.local-doh"
+  public static let identifier = LocalDoHStatus.profileIdentifier
   public static let serverURL = "https://127.0.0.1:9443/dns-query"
   public static let deviceManagementURL = URL(
     string: "x-apple.systempreferences:com.apple.Profiles-Settings.extension"
@@ -150,15 +158,49 @@ public enum LocalDoHProfileDocument {
   }
 }
 
+public enum DashboardLocalDoHPhase: Equatable, Sendable {
+  case unavailable
+  case statusUnavailable
+  case off
+  case awaitingApproval
+  case active
+  case degraded
+}
+
 public struct DashboardLocalDoHStatus: Equatable, Sendable {
   public var available: Bool
-  public var prepared: Bool
+  public var statusVerified: Bool
+  public var serverPrepared: Bool
+  public var profileInstalled: Bool
+  public var runtimeHealthy: Bool
+  public var systemDNSManaged: Bool?
   public var installedDomainCount: Int
 
-  public init(available: Bool, prepared: Bool, installedDomainCount: Int = 0) {
+  public init(
+    available: Bool,
+    statusVerified: Bool = true,
+    serverPrepared: Bool = false,
+    profileInstalled: Bool = false,
+    runtimeHealthy: Bool = false,
+    systemDNSManaged: Bool? = nil,
+    installedDomainCount: Int = 0
+  ) {
     self.available = available
-    self.prepared = prepared
+    self.statusVerified = statusVerified
+    self.serverPrepared = serverPrepared
+    self.profileInstalled = profileInstalled
+    self.runtimeHealthy = runtimeHealthy
+    self.systemDNSManaged = systemDNSManaged
     self.installedDomainCount = installedDomainCount
+  }
+
+  public var phase: DashboardLocalDoHPhase {
+    guard available else { return .unavailable }
+    guard statusVerified else { return .statusUnavailable }
+    if serverPrepared && profileInstalled && runtimeHealthy { return .active }
+    if serverPrepared && !profileInstalled && runtimeHealthy { return .awaitingApproval }
+    if serverPrepared || profileInstalled { return .degraded }
+    return .off
   }
 }
 

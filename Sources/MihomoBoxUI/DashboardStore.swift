@@ -1,4 +1,5 @@
 import Foundation
+import MihomoControl
 import SwiftUI
 
 /// The fixed controller surface consumed by the dashboard state model.
@@ -126,6 +127,10 @@ public final class DashboardStore: ObservableObject {
   @Published public private(set) var automaticUpdatesEnabled = false
   @Published public private(set) var localDoHAvailable = false
   @Published public private(set) var localDoHPrepared = false
+  @Published public private(set) var localDoHProfileInstalled = false
+  @Published public private(set) var localDoHRuntimeHealthy = false
+  @Published public private(set) var localDoHSystemDNSManaged: Bool?
+  @Published public private(set) var localDoHPhase: DashboardLocalDoHPhase = .unavailable
   @Published public private(set) var localDoHDomainCount = 0
   @Published public private(set) var localDoHOmittedRuleCount = 0
   @Published public private(set) var localDoHExactDomainCount = 0
@@ -505,7 +510,13 @@ public final class DashboardStore: ObservableObject {
   public func prepareLocalDoH() async {
     guard let localDoHService else { return }
     await performConfigAction(.preparingLocalDoH) {
-      let catalog = try await gateway.fetchRules()
+      async let rulesRequest = gateway.fetchRules()
+      async let snapshotRequest = gateway.fetchSnapshot()
+      let (catalog, snapshot) = try await (rulesRequest, snapshotRequest)
+      let mode = snapshot.configs.mode.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard mode.caseInsensitiveCompare("rule") == .orderedSame else {
+        throw LocalDoHPlanningError.requiresRuleMode(mode.isEmpty ? "unknown" : mode)
+      }
       let rules = catalog.rules.map {
         DashboardRule(
           id: String($0.index),
@@ -521,7 +532,16 @@ public final class DashboardStore: ObservableObject {
           lastUnmatchedAt: nil
         )
       }
-      let plan = LocalDoHDomainPlan.build(from: rules)
+      let proxies = snapshot.proxies.proxies.mapValues { proxy in
+        ControllerRouteSnapshot.Proxy(
+          name: proxy.name,
+          type: proxy.type,
+          now: proxy.now,
+          all: proxy.all
+        )
+      }
+      let routeSnapshot = ControllerRouteSnapshot(mode: mode, proxies: proxies)
+      let plan = LocalDoHDomainPlan.build(from: rules, routeSnapshot: routeSnapshot)
       try await localDoHService.prepare(plan: plan)
       localDoHOmittedRuleCount = plan.omittedRules + plan.truncatedDomains
       localDoHExactDomainCount = plan.exactDomainApproximations
@@ -550,12 +570,20 @@ public final class DashboardStore: ObservableObject {
     guard let localDoHService else {
       localDoHAvailable = false
       localDoHPrepared = false
+      localDoHProfileInstalled = false
+      localDoHRuntimeHealthy = false
+      localDoHSystemDNSManaged = nil
+      localDoHPhase = .unavailable
       localDoHDomainCount = 0
       return
     }
     let status = await localDoHService.status()
     localDoHAvailable = status.available
-    localDoHPrepared = status.prepared
+    localDoHPrepared = status.serverPrepared
+    localDoHProfileInstalled = status.profileInstalled
+    localDoHRuntimeHealthy = status.runtimeHealthy
+    localDoHSystemDNSManaged = status.systemDNSManaged
+    localDoHPhase = status.phase
     localDoHDomainCount = status.installedDomainCount
   }
 

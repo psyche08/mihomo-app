@@ -81,8 +81,9 @@ validation before exchanging messages:
 
 Requests are typed and versioned. The broker allowlist covers status/snapshot,
 agent start-stop-restart, profile import/switch/reload, Enhanced TUN, outbound
-mode, proxy selection, latency tests, signed component synchronization, and
-the native dashboard's validated controller REST and live stream routes. Component synchronization
+mode, proxy selection, latency tests, signed component synchronization, the
+fixed Local DoH status projection, and the native dashboard's validated
+controller REST and live stream routes. Component synchronization
 accepts exactly three named binary blobs with fixed size limits, validates each
 against the daemon's leaf-certificate requirement, stages and backs up inside
 the root-owned support directory, and rolls back the complete set on failure.

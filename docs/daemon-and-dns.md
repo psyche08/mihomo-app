@@ -44,13 +44,18 @@ SSL-scoped `trustAsRoot` record to the System keychain. It never unlocks a
 keychain. The profile uses a fixed identifier so regeneration updates the
 existing settings, and removal deletes that exact profile and certificate.
 
-Only enabled `DOMAIN` and `DOMAIN-SUFFIX` rules whose target is not a built-in
-direct/reject action are representable in `SupplementalMatchDomains`.
+Only enabled `DOMAIN` and `DOMAIN-SUFFIX` rules whose current selector chain
+resolves to a concrete remote proxy are representable in
+`SupplementalMatchDomains`. The planner accepts both YAML's `DOMAIN-SUFFIX`
+spelling and the controller API's `DomainSuffix` spelling. A selector currently
+ending in DIRECT, an unknown target, or a selector cycle is omitted.
 `DOMAIN` is explicitly widened to suffix semantics. Rule sets, GEO rules,
 regular expressions, keywords, disabled rules, and invalid names are omitted
 and counted in the UI; an empty result fails closed instead of generating a
-global encrypted-DNS profile. Regenerate the profile after changing those
-rules. macOS requires the user to review and install the generated profile in
+global encrypted-DNS profile. Global and Direct outbound modes are also
+rejected because their effective domain scope cannot be represented as a
+bounded split-DNS suffix list. Regenerate the profile after changing those
+rules or proxy selections. macOS requires the user to review and install the generated profile in
 **General > Device Management**.
 
 The separate `1054` listener is mandatory. Pointing Mihomo at macOS `system`
@@ -111,6 +116,13 @@ the port-53 bridge, and treats a live loopback TLS endpoint plus restored
 system DNS as the resolver-health gate. The original-DNS `1054` listener,
 physical-interface binding, route observer, wake recovery, egress probes, and
 generation-bound health snapshots remain active.
+
+The Config page queries a fixed `local-doh.status` operation over authenticated
+XPC. The daemon reduces the fixed system profile identifier, root-owned server
+identity, and passive runtime health to booleans plus a domain count; profile
+contents and domain names never cross XPC or enter logs. The UI distinguishes
+classic DNS, waiting for macOS profile approval, active Local DoH, and a
+profile/server mismatch, and refreshes while Config is visible.
 
 The agent reads `CurrentSet`, then manages:
 

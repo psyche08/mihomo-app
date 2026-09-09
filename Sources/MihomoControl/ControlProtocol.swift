@@ -20,6 +20,7 @@ public enum ControlOperation: String, Codable, Sendable {
     case stopAgent = "agent.stop"
     case restartAgent = "agent.restart"
     case componentStatus = "component.status"
+    case localDoHStatus = "local-doh.status"
     case upgradeComponents = "component.upgrade"
     case setTUN = "runtime.set-tun"
     case setOutboundMode = "runtime.set-outbound-mode"

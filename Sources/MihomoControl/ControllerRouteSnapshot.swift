@@ -63,14 +63,14 @@ public struct ControllerRouteSnapshot: Equatable, Sendable {
 
   public var globalRoutesThroughProxy: Bool {
     guard let target = globalSelection else { return false }
-    return targetRoutesThroughProxy(target, visited: [])
+    return routesThroughRemoteProxy(target)
   }
 
   /// A safe existing or fallback target for the built-in GLOBAL selector.
   public var globalProxyTarget: String? {
     guard let globalGroup else { return nil }
     if !globalGroup.now.isEmpty,
-      targetRoutesThroughProxy(globalGroup.now, visited: [])
+      routesThroughRemoteProxy(globalGroup.now)
     {
       return globalGroup.now
     }
@@ -81,12 +81,12 @@ public struct ControllerRouteSnapshot: Equatable, Sendable {
       else {
         return false
       }
-      return targetRoutesThroughProxy(candidate, visited: [])
+      return routesThroughRemoteProxy(candidate)
     }) {
       return nested
     }
     return globalGroup.all.first {
-      targetRoutesThroughProxy($0, visited: [])
+      routesThroughRemoteProxy($0)
     }
   }
 
@@ -110,6 +110,13 @@ public struct ControllerRouteSnapshot: Equatable, Sendable {
 
   private var globalGroupEntry: (key: String, value: Proxy)? {
     proxies["GLOBAL"].map { ("GLOBAL", $0) }
+  }
+
+  /// Resolves the controller's current selector chain and accepts only a
+  /// concrete remote proxy leaf. Unknown targets, cycles and DIRECT-like
+  /// pseudo-proxies fail closed.
+  public func routesThroughRemoteProxy(_ target: String) -> Bool {
+    targetRoutesThroughProxy(target, visited: [])
   }
 
   private func targetRoutesThroughProxy(_ target: String, visited: Set<String>) -> Bool {

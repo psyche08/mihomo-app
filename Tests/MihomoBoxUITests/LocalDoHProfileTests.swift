@@ -1,4 +1,5 @@
 import Foundation
+import MihomoControl
 import XCTest
 
 @testable import MihomoBoxUI
@@ -6,7 +7,9 @@ import XCTest
 final class LocalDoHProfileTests: XCTestCase {
   func testDomainPlanKeepsOnlyRepresentableProxyRulesAndCollapsesSuffixes() {
     let rules = [
-      rule(0, "DOMAIN-SUFFIX", "Example.COM.", "Proxy"),
+      // Mihomo's controller API emits `DomainSuffix`, while YAML uses
+      // `DOMAIN-SUFFIX`; the production planner must accept both forms.
+      rule(0, "DomainSuffix", "Example.COM.", "Proxy"),
       rule(1, "DOMAIN-SUFFIX", "api.example.com", "Proxy"),
       rule(2, "DOMAIN", "claude.ai", "AI Services"),
       rule(3, "DOMAIN-SUFFIX", "direct.example", "DIRECT"),
@@ -15,12 +18,26 @@ final class LocalDoHProfileTests: XCTestCase {
       rule(6, "DOMAIN-SUFFIX", "bad domain", "Proxy"),
     ]
 
-    let plan = LocalDoHDomainPlan.build(from: rules)
+    let plan = LocalDoHDomainPlan.build(from: rules, routeSnapshot: proxyRoutes())
 
     XCTAssertEqual(plan.domains, ["claude.ai", "example.com"])
     XCTAssertEqual(plan.exactDomainApproximations, 1)
     XCTAssertEqual(plan.omittedRules, 2)
     XCTAssertEqual(plan.truncatedDomains, 0)
+  }
+
+  func testDomainPlanUsesCurrentProxyGroupSelectionAndFailsClosed() {
+    let rules = [
+      rule(0, "DOMAIN-SUFFIX", "proxied.example", "Remote Group"),
+      rule(1, "DOMAIN-SUFFIX", "direct.example", "Direct Group"),
+      rule(2, "DOMAIN-SUFFIX", "cycle.example", "Cycle A"),
+      rule(3, "DOMAIN-SUFFIX", "missing.example", "Missing Group"),
+      rule(4, "DOMAIN-SUFFIX", "leaf.example", "Node"),
+    ]
+
+    let plan = LocalDoHDomainPlan.build(from: rules, routeSnapshot: proxyRoutes())
+
+    XCTAssertEqual(plan.domains, ["leaf.example", "proxied.example"])
   }
 
   func testProfileUsesStableDeviceScopeSplitDNSPayload() throws {
@@ -54,6 +71,39 @@ final class LocalDoHProfileTests: XCTestCase {
     )
   }
 
+  func testDashboardStatusDistinguishesApprovalActiveAndDegradedStates() {
+    XCTAssertEqual(
+      DashboardLocalDoHStatus(
+        available: true,
+        serverPrepared: true,
+        runtimeHealthy: true
+      ).phase,
+      .awaitingApproval
+    )
+    XCTAssertEqual(
+      DashboardLocalDoHStatus(
+        available: true,
+        serverPrepared: true,
+        profileInstalled: true,
+        runtimeHealthy: true
+      ).phase,
+      .active
+    )
+    XCTAssertEqual(
+      DashboardLocalDoHStatus(
+        available: true,
+        serverPrepared: false,
+        profileInstalled: true,
+        runtimeHealthy: false
+      ).phase,
+      .degraded
+    )
+    XCTAssertEqual(
+      DashboardLocalDoHStatus(available: true, statusVerified: false).phase,
+      .statusUnavailable
+    )
+  }
+
   private func rule(
     _ index: Int,
     _ type: String,
@@ -69,5 +119,18 @@ final class LocalDoHProfileTests: XCTestCase {
       target: target,
       isEnabled: enabled
     )
+  }
+
+  private func proxyRoutes() -> ControllerRouteSnapshot {
+    ControllerRouteSnapshot(mode: "rule", proxies: [
+      "Proxy": .init(name: "Proxy", type: "Selector", now: "Remote Group", all: ["Remote Group"]),
+      "Remote Group": .init(name: "Remote Group", type: "Selector", now: "Node", all: ["Node", "DIRECT"]),
+      "AI Services": .init(name: "AI Services", type: "Selector", now: "Node", all: ["Node"]),
+      "Direct Group": .init(name: "Direct Group", type: "Selector", now: "DIRECT", all: ["DIRECT", "Node"]),
+      "Cycle A": .init(name: "Cycle A", type: "Selector", now: "Cycle B", all: ["Cycle B"]),
+      "Cycle B": .init(name: "Cycle B", type: "Selector", now: "Cycle A", all: ["Cycle A"]),
+      "Node": .init(name: "Node", type: "VLESS"),
+      "DIRECT": .init(name: "DIRECT", type: "Direct"),
+    ])
   }
 }

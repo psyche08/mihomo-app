@@ -73,8 +73,18 @@ user's Application Support directory and opens it. Apple requires the user to
 finish installation in **General > Device Management**; **Open Device
 Management** reopens that exact System Settings pane at any time. **Remove Local DoH**
 removes the fixed profile identifier, its exact certificate fingerprint and
-server identity, then restores the classic managed-DNS mode. Helper uninstall
+server identity, then restores the classic managed-DNS mode. Profile removal is
+verified before the server identity is deleted; if the DNS-mode transition
+fails, the installer retries classic managed DNS and otherwise leaves normal
+macOS DNS restored with an explicit recovery-required error. Helper uninstall
 performs the same profile/trust cleanup before deleting the root installation.
+
+Config shows separate `Awaiting macOS Approval`, `Active`, and `Needs Attention`
+states. It refreshes authenticated root/profile state while visible, so
+finishing approval in System Settings does not require relaunching the App.
+Preparation is limited to Rule mode and follows each rule target through the
+controller's current selector chain; changing a selector or domain rule
+requires regenerating the profile.
 
 There are two intentionally separate startup mechanisms. The root
 LaunchDaemon starts the managed network service at system startup with the

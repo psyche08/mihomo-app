@@ -112,6 +112,26 @@ final class TrayControlClientTests: XCTestCase {
     XCTAssertFalse(localActive)
     XCTAssertEqual(session.operations, [.listProfiles, .listProfiles])
   }
+
+  func testLocalDoHStatusUsesAuthenticatedTypedResponse() async throws {
+    let expected = LocalDoHStatus(
+      serverPrepared: true,
+      profileInstalled: false,
+      profileInspectionSucceeded: true,
+      runtimeHealthy: true,
+      systemDNSManaged: false,
+      installedDomainCount: 12
+    )
+    let session = QueueSession(responses: [
+      ControlResponse(success: true, payload: try JSONEncoder().encode(expected))
+    ])
+    let client = TrayControlClient(makeSession: { session })
+
+    let observed = try await client.localDoHStatus()
+
+    XCTAssertEqual(observed, expected)
+    XCTAssertEqual(session.operations, [.localDoHStatus])
+  }
 }
 
 private final class QueueSession: AppControlSession, @unchecked Sendable {

@@ -49,6 +49,7 @@ env \
   /usr/bin/swift test --disable-sandbox
 /bin/bash Tests/test_release_common.sh
 /bin/bash Tests/test_installer_lock.sh
+/bin/bash Tests/test_local_doh_installer.sh
 /bin/bash Tests/test_release_product.sh
 /bin/bash -n scripts/*.sh Tests/e2e.sh
 /bin/zsh -n scripts/*.zsh

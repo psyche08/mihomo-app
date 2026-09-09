@@ -153,6 +153,12 @@ actor TrayControlClient {
     return try JSONDecoder().decode(ComponentStatus.self, from: payload)
   }
 
+  func localDoHStatus() throws -> LocalDoHStatus {
+    let payload = try send(ControlRequest(operation: .localDoHStatus), retryReadOnce: true)
+    guard !payload.isEmpty else { throw TrayControlError.missingPayload }
+    return try JSONDecoder().decode(LocalDoHStatus.self, from: payload)
+  }
+
   func upgradeComponents(_ package: ComponentUpdatePackage, daemonWillRestart: Bool) throws {
     do {
       _ = try send(
