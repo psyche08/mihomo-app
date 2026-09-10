@@ -16,6 +16,7 @@ public enum MihomoSupervisorError: Error, CustomStringConvertible {
 
 public final class MihomoSupervisor: @unchecked Sendable {
     private let configuration: MihomoProcessConfiguration
+    private let localDoH: LocalDoHConfiguration?
     private let logWriter: RotatingFileWriter
     private let lock = NSLock()
     private let restartQueue = DispatchQueue(label: "dev.linsheng.mihomo-app.restart")
@@ -26,8 +27,12 @@ public final class MihomoSupervisor: @unchecked Sendable {
     private var circuitOpen = false
     private var restartBackoff: RestartBackoffPolicy
 
-    public init(configuration: MihomoProcessConfiguration) {
+    public init(
+        configuration: MihomoProcessConfiguration,
+        localDoH: LocalDoHConfiguration? = nil
+    ) {
         self.configuration = configuration
+        self.localDoH = localDoH
         logWriter = RotatingFileWriter(path: configuration.logPath)
         restartBackoff = RestartBackoffPolicy(
             baseDelayMilliseconds: configuration.restartDelayMilliseconds
@@ -119,6 +124,10 @@ public final class MihomoSupervisor: @unchecked Sendable {
         let child = Process()
         child.executableURL = URL(fileURLWithPath: configuration.binaryPath)
         child.arguments = ["-d", configuration.configDirectory, "-f", configuration.configPath]
+        child.environment = Self.processEnvironment(
+            base: ProcessInfo.processInfo.environment,
+            localDoH: localDoH
+        )
         child.standardOutput = pipe.fileHandleForWriting
         child.standardError = pipe.fileHandleForWriting
         child.terminationHandler = { [weak self] terminated in
@@ -169,6 +178,26 @@ public final class MihomoSupervisor: @unchecked Sendable {
                 reason: child.terminationReason
             )
         }
+    }
+
+    /// Mihomo 1.19.9 and later reject certificate files outside `-d` unless
+    /// their directory is present in SAFE_PATHS. Keep that exception scoped to
+    /// the fixed root-owned Local DoH identity and only while Local DoH is the
+    /// validated runtime mode. Never inherit a broader launch environment
+    /// exception into the privileged kernel process.
+    static func processEnvironment(
+        base: [String: String],
+        localDoH: LocalDoHConfiguration?
+    ) -> [String: String] {
+        var environment = base
+        environment.removeValue(forKey: "SAFE_PATHS")
+        guard let localDoH, localDoH == LocalDoHConfiguration() else {
+            return environment
+        }
+        environment["SAFE_PATHS"] = URL(fileURLWithPath: localDoH.certificatePath)
+            .deletingLastPathComponent()
+            .path
+        return environment
     }
 
     private func processTerminated(pid: Int32, status: Int32, reason: Process.TerminationReason) {

@@ -475,6 +475,30 @@ final class CoreTests: XCTestCase {
         }
     }
 
+    func testMihomoProcessAllowsOnlyTheManagedLocalDoHIdentityPath() {
+        let inherited = ["PATH": "/usr/bin", "SAFE_PATHS": "/tmp:/etc"]
+        let classic = MihomoSupervisor.processEnvironment(
+            base: inherited,
+            localDoH: nil
+        )
+        XCTAssertNil(classic["SAFE_PATHS"], "classic mode must not inherit a broad exception")
+
+        let localDoH = MihomoSupervisor.processEnvironment(
+            base: inherited,
+            localDoH: LocalDoHConfiguration()
+        )
+        XCTAssertEqual(
+            localDoH["SAFE_PATHS"],
+            "/Library/Application Support/Mihomo App/local-doh"
+        )
+
+        let altered = MihomoSupervisor.processEnvironment(
+            base: inherited,
+            localDoH: LocalDoHConfiguration(certificatePath: "/tmp/server.crt")
+        )
+        XCTAssertNil(altered["SAFE_PATHS"], "an altered identity path must fail closed")
+    }
+
     func testExistingLoopbackAliasIsIgnored() throws {
         let marker = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)

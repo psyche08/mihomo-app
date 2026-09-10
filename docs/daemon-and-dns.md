@@ -45,6 +45,12 @@ to the System trust store. It never unlocks a keychain. The profile uses a fixed
 identifier so regeneration updates the existing settings, and removal deletes
 that exact profile, trust anchor, and server identity.
 
+Mihomo's child process receives `SAFE_PATHS` only in Local DoH mode and only for
+the fixed root-owned identity directory. Classic mode removes any inherited
+value, and an altered certificate path fails closed. This is required by
+Mihomo's file-access boundary for TLS material outside its `-d` directory; it
+does not widen access to Application Support as a whole.
+
 The root daemon builds `SupplementalMatchDomains` from enabled `DOMAIN`,
 `DOMAIN-SUFFIX`, and `GEOSITE` rules whose current selector chain resolves to a
 concrete remote proxy. It accepts both YAML's `DOMAIN-SUFFIX` and the controller

@@ -44,7 +44,9 @@ public final class ProxyService {
             servers: [configuration.systemDNSListen.host],
             backupPath: configuration.systemDNSBackupPath
         )
-        self.mihomoSupervisor = configuration.mihomoProcess.map(MihomoSupervisor.init)
+        self.mihomoSupervisor = configuration.mihomoProcess.map {
+            MihomoSupervisor(configuration: $0, localDoH: configuration.localDoH)
+        }
     }
 
     public func start() throws {
