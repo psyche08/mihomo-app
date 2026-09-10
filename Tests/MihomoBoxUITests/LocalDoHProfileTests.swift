@@ -154,7 +154,11 @@ final class LocalDoHProfileTests: XCTestCase {
 
   func testProfileUsesStableRootOwnedDeviceScopeSplitDNSPayload() throws {
     let plan = LocalDoHDomainPlan(domains: ["claude.ai", "example.com"])
-    let data = try LocalDoHProfileDocument.data(for: plan)
+    let rootCertificate = Data([0x30, 0x03, 0x02, 0x01, 0x00])
+    let data = try LocalDoHProfileDocument.data(
+      for: plan,
+      rootCertificate: rootCertificate
+    )
     let value = try PropertyListSerialization.propertyList(from: data, options: [], format: nil)
     let profile = try XCTUnwrap(value as? [String: Any])
     XCTAssertEqual(profile["PayloadIdentifier"] as? String, LocalDoHProfileDocument.identifier)
@@ -164,7 +168,19 @@ final class LocalDoHProfileTests: XCTestCase {
       "/Library/Application Support/Mihomo App/MihomoBox-Local-DoH.mobileconfig"
     )
     let payloads = try XCTUnwrap(profile["PayloadContent"] as? [[String: Any]])
-    let settings = try XCTUnwrap(payloads.first?["DNSSettings"] as? [String: Any])
+    XCTAssertEqual(payloads.count, 2)
+    let certificatePayload = try XCTUnwrap(payloads.first(where: {
+      $0["PayloadType"] as? String == "com.apple.security.root"
+    }))
+    XCTAssertEqual(
+      certificatePayload["PayloadIdentifier"] as? String,
+      LocalDoHProfileDocument.rootCertificatePayloadIdentifier
+    )
+    XCTAssertEqual(certificatePayload["PayloadContent"] as? Data, rootCertificate)
+    let dnsPayload = try XCTUnwrap(payloads.first(where: {
+      $0["PayloadType"] as? String == "com.apple.dnsSettings.managed"
+    }))
+    let settings = try XCTUnwrap(dnsPayload["DNSSettings"] as? [String: Any])
     XCTAssertEqual(settings["DNSProtocol"] as? String, "HTTPS")
     XCTAssertEqual(settings["ServerURL"] as? String, LocalDoHProfileDocument.serverURL)
     XCTAssertEqual(settings["ServerAddresses"] as? [String], ["127.0.0.1"])
@@ -176,7 +192,10 @@ final class LocalDoHProfileTests: XCTestCase {
 
   func testEmptyPlanFailsInsteadOfBecomingGlobalDNS() {
     XCTAssertThrowsError(
-      try LocalDoHProfileDocument.data(for: LocalDoHDomainPlan(domains: []))
+      try LocalDoHProfileDocument.data(
+        for: LocalDoHDomainPlan(domains: []),
+        rootCertificate: Data([0x01])
+      )
     )
   }
 

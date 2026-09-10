@@ -6,6 +6,7 @@ INSTALLER="$ROOT/scripts/install-daemon.sh"
 STATUS_PROVIDER="$ROOT/Sources/MihomoDaemon/LocalDoHStatusProvider.swift"
 XPC_MANAGER="$ROOT/Sources/MihomoDaemon/LocalDoHManager.swift"
 APP_COORDINATOR="$ROOT/Sources/MihomoBoxApp/LocalDoHCoordinator.swift"
+PROFILE_DOCUMENT="$ROOT/Sources/MihomoControl/LocalDoHPlanning.swift"
 
 /bin/bash -n "$INSTALLER"
 
@@ -60,6 +61,13 @@ fi
 /usr/bin/grep -Fq 'case removeLocalDoH = "local-doh.remove"' \
   "$ROOT/Sources/MihomoControl/ControlProtocol.swift"
 /usr/bin/grep -Fq 'profiles.transitionLocalDoH(' "$XPC_MANAGER"
+/usr/bin/grep -Fq '"PayloadType": "com.apple.security.root"' "$PROFILE_DOCUMENT"
+/usr/bin/grep -Fq 'expectedRootCertificate: rootCertificate' \
+  "$ROOT/Sources/MihomoDaemon/LocalDoHStatusProvider.swift"
+if /usr/bin/grep -Eq 'add-trusted-cert|remove-trusted-cert|delete-certificate' "$XPC_MANAGER"; then
+  echo "the headless XPC helper must leave certificate trust to profile approval" >&2
+  exit 1
+fi
 /usr/bin/grep -Fq 'try await control.installLocalDoH()' "$APP_COORDINATOR"
 /usr/bin/grep -Fq 'try await control.removeLocalDoH()' "$APP_COORDINATOR"
 if /usr/bin/grep -Eq 'InstallerCoordinator|osascript|runSpecialInstaller' "$APP_COORDINATOR"; then

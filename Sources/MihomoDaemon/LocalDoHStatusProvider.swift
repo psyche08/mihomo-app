@@ -52,7 +52,25 @@ struct LocalDoHStatusProvider {
               let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
             return .init(installed: false)
         }
-        guard let domainCount = LocalDoHProfileDocument.validatedDomainCount(in: data) else {
+        let certificatePath = URL(fileURLWithPath: path)
+            .deletingLastPathComponent()
+            .appendingPathComponent("local-doh/ca.der")
+        var certificateMetadata = stat()
+        guard lstat(certificatePath.path, &certificateMetadata) == 0,
+              certificateMetadata.st_mode & S_IFMT == S_IFREG,
+              certificateMetadata.st_uid == 0,
+              certificateMetadata.st_gid == 0,
+              certificateMetadata.st_mode & 0o777 == 0o644,
+              certificateMetadata.st_size > 0,
+              certificateMetadata.st_size <= 128 * 1_024,
+              let rootCertificate = try? Data(
+                  contentsOf: certificatePath,
+                  options: [.mappedIfSafe]
+              ),
+              let domainCount = LocalDoHProfileDocument.validatedDomainCount(
+                  in: data,
+                  expectedRootCertificate: rootCertificate
+              ) else {
             return .init(installed: false)
         }
         return .init(installed: true, domainCount: domainCount)

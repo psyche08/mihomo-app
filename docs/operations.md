@@ -68,21 +68,23 @@ From the Config page, **Prepare & Open Profile** first asks the authenticated
 root daemon to build the split-DNS plan from the current controller routes and
 managed `GeoSite.dat`. The daemon writes the fixed profile at
 `/Library/Application Support/Mihomo App/MihomoBox-Local-DoH.mobileconfig` as
-root:wheel mode `0644` and returns only aggregate counts. In the same typed XPC
-transaction, the already-installed root daemon validates that artifact, keeps
-its control service online, stops only the supervised network agent, generates
-a root-owned local CA and loopback server certificate/private key, discards the
-CA private key, trusts the CA certificate in the System trust store, enables
-Mihomo's loopback DoH endpoint, restores MihomoBox's classic Global DNS setting,
-and proves the restarted runtime healthy. Failure restores the previous
-identity, trust, runtime files, and managed network before returning an error.
+root:wheel mode `0644` and returns only aggregate counts. The profile contains
+both a `com.apple.security.root` certificate payload and the split-DNS payload,
+so the later macOS approval owns both trust and resolver installation. In the
+same typed XPC transaction, the already-installed root daemon validates that
+artifact, keeps its control service online, stops only the supervised network
+agent, generates a root-owned local CA and loopback server certificate/private
+key, discards the CA private key, enables Mihomo's loopback DoH endpoint,
+restores MihomoBox's classic Global DNS setting, and proves the restarted runtime
+healthy. Failure restores the previous identity, prepared profile, runtime files,
+and managed network before returning an error.
 No administrator dialog, `sudo`, or AppleScript is used after the helper is
 installed. The App opens the validated root-owned profile. Apple requires the
 user to finish installation in **General > Device Management**; **Open Device
 Management** reopens that exact System Settings pane at any time. **Remove Local DoH**
-asks the same typed XPC helper to remove the fixed profile identifier, restore
-classic managed-DNS mode, then delete its exact trust-anchor fingerprint,
-server identity, and prepared profile artifact. Profile removal is
+asks the same typed XPC helper to remove the fixed profile identifier (which also
+removes its certificate payload), restore classic managed-DNS mode, then delete
+the server identity and prepared profile artifact. Profile removal is
 verified before the server identity is deleted; if the DNS-mode transition
 fails, the installer retries classic managed DNS and otherwise leaves normal
 macOS DNS restored with an explicit recovery-required error. Helper uninstall

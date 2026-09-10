@@ -73,10 +73,18 @@ final class ControlProtocolTests: XCTestCase {
     }
 
     func testPreparedLocalDoHProfileRejectsAlteredPrivilegedFields() throws {
+        let rootCertificate = Data([0x30, 0x03, 0x02, 0x01, 0x00])
         let valid = try LocalDoHProfileDocument.data(
-            for: LocalDoHDomainPlan(domains: ["example.com", "claude.ai"])
+            for: LocalDoHDomainPlan(domains: ["example.com", "claude.ai"]),
+            rootCertificate: rootCertificate
         )
-        XCTAssertEqual(LocalDoHProfileDocument.validatedDomainCount(in: valid), 2)
+        XCTAssertEqual(
+            LocalDoHProfileDocument.validatedDomainCount(
+                in: valid,
+                expectedRootCertificate: rootCertificate
+            ),
+            2
+        )
 
         var object = try XCTUnwrap(
             PropertyListSerialization.propertyList(
@@ -86,9 +94,12 @@ final class ControlProtocolTests: XCTestCase {
             ) as? [String: Any]
         )
         var content = try XCTUnwrap(object["PayloadContent"] as? [[String: Any]])
-        var settings = try XCTUnwrap(content[0]["DNSSettings"] as? [String: Any])
+        let dnsIndex = try XCTUnwrap(content.firstIndex(where: {
+            $0["PayloadType"] as? String == "com.apple.dnsSettings.managed"
+        }))
+        var settings = try XCTUnwrap(content[dnsIndex]["DNSSettings"] as? [String: Any])
         settings["ServerURL"] = "https://example.invalid/dns-query"
-        content[0]["DNSSettings"] = settings
+        content[dnsIndex]["DNSSettings"] = settings
         object["PayloadContent"] = content
         let altered = try PropertyListSerialization.data(
             fromPropertyList: object,
@@ -96,6 +107,12 @@ final class ControlProtocolTests: XCTestCase {
             options: 0
         )
         XCTAssertNil(LocalDoHProfileDocument.validatedDomainCount(in: altered))
+        XCTAssertNil(
+            LocalDoHProfileDocument.validatedDomainCount(
+                in: valid,
+                expectedRootCertificate: Data([0x01])
+            )
+        )
     }
 
     func testLocalDoHProfileInspectionReturnsOnlyFixedProfileStateAndCount() throws {

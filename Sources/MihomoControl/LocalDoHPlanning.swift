@@ -285,11 +285,27 @@ public struct LocalDoHDomainPlan: Equatable, Sendable {
 public enum LocalDoHProfileDocument {
   public static let identifier = LocalDoHStatus.profileIdentifier
   public static let serverURL = "https://127.0.0.1:9443/dns-query"
+  public static let rootCertificatePayloadIdentifier = "\(identifier).root-ca"
   public static let managedProfilePath =
     "/Library/Application Support/Mihomo App/MihomoBox-Local-DoH.mobileconfig"
 
-  public static func data(for plan: LocalDoHDomainPlan) throws -> Data {
+  public static func data(
+    for plan: LocalDoHDomainPlan,
+    rootCertificate: Data
+  ) throws -> Data {
     guard !plan.domains.isEmpty else { throw LocalDoHPlanningError.emptyPlan }
+    guard !rootCertificate.isEmpty, rootCertificate.count <= 128 * 1_024 else {
+      throw LocalDoHPlanningError.profileWriteFailed
+    }
+    let certificatePayload: [String: Any] = [
+      "PayloadType": "com.apple.security.root",
+      "PayloadVersion": 1,
+      "PayloadIdentifier": rootCertificatePayloadIdentifier,
+      "PayloadUUID": "B9192423-380F-49AD-AF98-545B076985CB",
+      "PayloadDisplayName": "MihomoBox Local DoH Root CA",
+      "PayloadCertificateFileName": "MihomoBox-Local-DoH-Root-CA.cer",
+      "PayloadContent": rootCertificate,
+    ]
     let dnsPayload: [String: Any] = [
       "PayloadType": "com.apple.dnsSettings.managed",
       "PayloadVersion": 1,
@@ -314,7 +330,10 @@ public enum LocalDoHProfileDocument {
       "PayloadOrganization": "MihomoBox",
       "PayloadScope": "System",
       "PayloadRemovalDisallowed": false,
-      "PayloadContent": [dnsPayload],
+      // The manually installed profile is the macOS authorization boundary:
+      // it installs both the root CA and the split-DNS settings together.
+      // The root LaunchDaemon never edits Admin Trust Settings directly.
+      "PayloadContent": [certificatePayload, dnsPayload],
     ]
     return try PropertyListSerialization.data(
       fromPropertyList: profile,
@@ -326,7 +345,10 @@ public enum LocalDoHProfileDocument {
   /// Validates the exact root-prepared artifact before any privileged runtime
   /// mutation. Returning only a count keeps the expanded domain list inside
   /// the root boundary.
-  public static func validatedDomainCount(in data: Data) -> Int? {
+  public static func validatedDomainCount(
+    in data: Data,
+    expectedRootCertificate: Data? = nil
+  ) -> Int? {
     guard let profile = try? PropertyListSerialization.propertyList(
       from: data,
       options: [],
@@ -336,10 +358,22 @@ public enum LocalDoHProfileDocument {
       profile["PayloadType"] as? String == "Configuration",
       profile["PayloadScope"] as? String == "System",
       let content = profile["PayloadContent"] as? [[String: Any]],
-      content.count == 1,
-      content[0]["PayloadIdentifier"] as? String == "\(identifier).dns",
-      content[0]["PayloadType"] as? String == "com.apple.dnsSettings.managed",
-      let settings = content[0]["DNSSettings"] as? [String: Any],
+      content.count == 2,
+      let certificatePayload = content.first(where: {
+        $0["PayloadIdentifier"] as? String == rootCertificatePayloadIdentifier
+      }),
+      certificatePayload["PayloadType"] as? String == "com.apple.security.root",
+      certificatePayload["PayloadCertificateFileName"] as? String
+        == "MihomoBox-Local-DoH-Root-CA.cer",
+      let rootCertificate = certificatePayload["PayloadContent"] as? Data,
+      !rootCertificate.isEmpty,
+      rootCertificate.count <= 128 * 1_024,
+      expectedRootCertificate.map({ $0 == rootCertificate }) ?? true,
+      let dnsPayload = content.first(where: {
+        $0["PayloadIdentifier"] as? String == "\(identifier).dns"
+      }),
+      dnsPayload["PayloadType"] as? String == "com.apple.dnsSettings.managed",
+      let settings = dnsPayload["DNSSettings"] as? [String: Any],
       settings["DNSProtocol"] as? String == "HTTPS",
       settings["ServerURL"] as? String == serverURL,
       settings["ServerAddresses"] as? [String] == ["127.0.0.1"],

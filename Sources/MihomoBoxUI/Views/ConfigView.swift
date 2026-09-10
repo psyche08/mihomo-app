@@ -331,7 +331,7 @@ public struct ConfigView: View {
         .fixedSize(horizontal: false, vertical: true)
 
         Text(
-          "Setup generates a loopback-only certificate and establishes SSL trust in the System keychain. In Rule mode, enabled DOMAIN, DOMAIN-SUFFIX, and GEOSITE rules are included only when their current selector chain reaches a remote proxy; all other domains keep the current macOS DNS."
+          "Setup generates a loopback-only certificate and embeds its root CA in the same profile as split DNS. In Rule mode, enabled DOMAIN, DOMAIN-SUFFIX, and GEOSITE rules are included only when their current selector chain reaches a remote proxy; all other domains keep the current macOS DNS."
         )
         .font(.system(size: 10))
         .foregroundStyle(DashboardTheme.muted.opacity(0.78))
@@ -374,7 +374,7 @@ public struct ConfigView: View {
         }
 
         Text(
-          "The privileged helper prepares the server and system trust without another password prompt. macOS still requires one final confirmation in General › Device Management. Re-run Prepare after changing proxy-domain rules to update the profile."
+          "The privileged helper prepares the server and profile without another password prompt. macOS applies certificate trust and split DNS together after one final confirmation in General › Device Management. Re-run Prepare after changing proxy-domain rules to update the profile."
         )
         .font(.system(size: 10))
         .foregroundStyle(DashboardTheme.muted.opacity(0.72))

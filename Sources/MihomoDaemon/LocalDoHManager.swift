@@ -13,7 +13,6 @@ final class LocalDoHManager: @unchecked Sendable {
     private struct IdentitySnapshot {
         let directory: URL
         let hadIdentityDirectory: Bool
-        let wasTrusted: Bool
     }
 
     private let agent: AgentSupervisor
@@ -22,6 +21,7 @@ final class LocalDoHManager: @unchecked Sendable {
     private let root: URL
     private let identityDirectory: URL
     private let caCertificate: URL
+    private let caCertificateDER: URL
     private let serverCertificate: URL
     private let serverKey: URL
     private let fingerprintFile: URL
@@ -42,6 +42,7 @@ final class LocalDoHManager: @unchecked Sendable {
         self.root = root
         identityDirectory = root.appendingPathComponent("local-doh", isDirectory: true)
         caCertificate = identityDirectory.appendingPathComponent("ca.crt")
+        caCertificateDER = identityDirectory.appendingPathComponent("ca.der")
         serverCertificate = identityDirectory.appendingPathComponent("server.crt")
         serverKey = identityDirectory.appendingPathComponent("server.key")
         fingerprintFile = identityDirectory.appendingPathComponent("certificate.sha1")
@@ -51,20 +52,29 @@ final class LocalDoHManager: @unchecked Sendable {
         guard agent.isRunning else {
             throw localDoHError("Mihomo agent is not running")
         }
-        let summary = try controller.prepareLocalDoHProfile()
-        guard LocalDoHStatusProvider.inspectPreparedProfile().installed else {
-            throw localDoHError("the fixed root-owned Local DoH profile is invalid")
-        }
+        let plan = try controller.localDoHPlan()
 
         let snapshot = try captureIdentitySnapshot()
         defer { try? FileManager.default.removeItem(at: snapshot.directory) }
         try profiles.transitionLocalDoH(
             enabled: true,
-            afterNetworkStopped: { try self.prepareIdentity() },
+            afterNetworkStopped: {
+                try self.prepareIdentity()
+                let rootCertificate = try self.readRootCertificateDER()
+                try self.controller.writeLocalDoHProfile(
+                    plan: plan,
+                    rootCertificate: rootCertificate
+                )
+                guard LocalDoHStatusProvider.inspectPreparedProfile().installed else {
+                    throw self.localDoHError(
+                        "the fixed root-owned Local DoH profile is invalid"
+                    )
+                }
+            },
             rollbackAfterNetworkStopped: { try self.restoreIdentity(snapshot) }
         )
         ServiceLog.info("event=local_doh_install result=prepared_for_profile_approval")
-        return summary
+        return plan.summary
     }
 
     func remove() throws {
@@ -93,7 +103,6 @@ final class LocalDoHManager: @unchecked Sendable {
             afterNetworkStopped: {},
             rollbackAfterNetworkStopped: {}
         )
-        try removeCurrentTrust()
         if FileManager.default.fileExists(atPath: identityDirectory.path) {
             try validateIdentityDirectory()
             try FileManager.default.removeItem(at: identityDirectory)
@@ -124,8 +133,7 @@ final class LocalDoHManager: @unchecked Sendable {
             }
             return IdentitySnapshot(
                 directory: snapshot,
-                hadIdentityDirectory: exists,
-                wasTrusted: identityIsSystemTrusted()
+                hadIdentityDirectory: exists
             )
         } catch {
             try? FileManager.default.removeItem(at: snapshot)
@@ -134,7 +142,6 @@ final class LocalDoHManager: @unchecked Sendable {
     }
 
     private func restoreIdentity(_ snapshot: IdentitySnapshot) throws {
-        try removeCurrentTrust()
         if FileManager.default.fileExists(atPath: identityDirectory.path) {
             try validateIdentityDirectory()
             try FileManager.default.removeItem(at: identityDirectory)
@@ -146,12 +153,6 @@ final class LocalDoHManager: @unchecked Sendable {
         }
         try FileManager.default.copyItem(at: backup, to: identityDirectory)
         try validateIdentityDirectory()
-        if snapshot.wasTrusted {
-            try addCurrentTrust()
-            guard identityIsSystemTrusted() else {
-                throw localDoHError("the previous Local DoH trust could not be restored")
-            }
-        }
     }
 
     private func prepareIdentity() throws {
@@ -166,7 +167,6 @@ final class LocalDoHManager: @unchecked Sendable {
         }
 
         if !identityIsValid() {
-            try removeCurrentTrust()
             try FileManager.default.removeItem(at: identityDirectory)
             try FileManager.default.createDirectory(
                 at: identityDirectory,
@@ -188,12 +188,6 @@ final class LocalDoHManager: @unchecked Sendable {
         guard chown(fingerprintFile.path, 0, 0) == 0,
               chmod(fingerprintFile.path, 0o600) == 0 else {
             throw localDoHError("the Local DoH fingerprint metadata could not be secured")
-        }
-        if !identityIsSystemTrusted() {
-            try addCurrentTrust()
-        }
-        guard identityIsSystemTrusted() else {
-            throw localDoHError("macOS did not trust the Local DoH certificate authority")
         }
     }
 
@@ -217,6 +211,13 @@ final class LocalDoHManager: @unchecked Sendable {
                 "-keyout", caKey.path, "-out", caCertificate.path,
             ],
             timeout: 30
+        )
+        try command.run(
+            "/usr/bin/openssl",
+            [
+                "x509", "-in", caCertificate.path, "-outform", "DER",
+                "-out", caCertificateDER.path,
+            ]
         )
         try command.run(
             "/usr/bin/openssl",
@@ -250,11 +251,19 @@ final class LocalDoHManager: @unchecked Sendable {
 
     private func identityIsValid() -> Bool {
         guard isRegularRootFile(caCertificate, maximumBytes: 128 * 1_024),
+              isRegularRootFile(caCertificateDER, maximumBytes: 128 * 1_024),
               isRegularRootFile(serverCertificate, maximumBytes: 128 * 1_024),
               isRegularRootFile(serverKey, maximumBytes: 128 * 1_024),
               command.succeeds(
                   "/usr/bin/openssl",
                   ["x509", "-in", caCertificate.path, "-noout", "-checkend", "86400"]
+              ),
+              command.succeeds(
+                  "/usr/bin/openssl",
+                  [
+                      "x509", "-inform", "DER", "-in", caCertificateDER.path,
+                      "-noout", "-checkend", "86400",
+                  ]
               ),
               command.succeeds(
                   "/usr/bin/openssl",
@@ -271,55 +280,27 @@ final class LocalDoHManager: @unchecked Sendable {
               let keyModulus = try? command.output(
                   "/usr/bin/openssl",
                   ["rsa", "-in", serverKey.path, "-noout", "-modulus"]
+              ),
+              let pemFingerprint = try? command.output(
+                  "/usr/bin/openssl",
+                  ["x509", "-in", caCertificate.path, "-noout", "-fingerprint", "-sha256"]
+              ),
+              let derFingerprint = try? command.output(
+                  "/usr/bin/openssl",
+                  [
+                      "x509", "-inform", "DER", "-in", caCertificateDER.path,
+                      "-noout", "-fingerprint", "-sha256",
+                  ]
               ) else { return false }
         return !certificateModulus.isEmpty && certificateModulus == keyModulus
+            && !pemFingerprint.isEmpty && pemFingerprint == derFingerprint
     }
 
-    private func identityIsSystemTrusted() -> Bool {
-        guard isRegularRootFile(serverCertificate, maximumBytes: 128 * 1_024) else {
-            return false
+    private func readRootCertificateDER() throws -> Data {
+        guard isRegularRootFile(caCertificateDER, maximumBytes: 128 * 1_024) else {
+            throw localDoHError("the Local DoH root certificate is unavailable")
         }
-        return command.succeeds(
-            "/usr/bin/security",
-            [
-                "verify-cert", "-c", serverCertificate.path,
-                "-p", "ssl", "-s", "127.0.0.1",
-            ]
-        )
-    }
-
-    private func addCurrentTrust() throws {
-        guard isRegularRootFile(caCertificate, maximumBytes: 128 * 1_024) else {
-            throw localDoHError("the Local DoH certificate authority is unavailable")
-        }
-        try command.run(
-            "/usr/bin/security",
-            [
-                "add-trusted-cert", "-d", "-r", "trustRoot",
-                "-k", "/Library/Keychains/System.keychain", caCertificate.path,
-            ]
-        )
-    }
-
-    private func removeCurrentTrust() throws {
-        let anchor = isRegularRootFile(caCertificate, maximumBytes: 128 * 1_024)
-            ? caCertificate
-            : serverCertificate
-        if isRegularRootFile(anchor, maximumBytes: 128 * 1_024) {
-            command.runAllowingFailure(
-                "/usr/bin/security",
-                ["remove-trusted-cert", "-d", anchor.path]
-            )
-        }
-        if let fingerprint = try? currentFingerprint() {
-            command.runAllowingFailure(
-                "/usr/bin/security",
-                [
-                    "delete-certificate", "-Z", fingerprint,
-                    "/Library/Keychains/System.keychain",
-                ]
-            )
-        }
+        return try Data(contentsOf: caCertificateDER, options: [.mappedIfSafe])
     }
 
     private func currentFingerprint() throws -> String {
@@ -354,7 +335,7 @@ final class LocalDoHManager: @unchecked Sendable {
               chown(identityDirectory.path, 0, 0) == 0 else {
             throw localDoHError("the Local DoH identity directory could not be secured")
         }
-        for file in [caCertificate, serverCertificate] {
+        for file in [caCertificate, caCertificateDER, serverCertificate] {
             guard chown(file.path, 0, 0) == 0, chmod(file.path, 0o644) == 0 else {
                 throw localDoHError("the Local DoH certificate metadata could not be secured")
             }
@@ -418,10 +399,6 @@ private struct FixedLocalDoHCommandRunner {
 
     func succeeds(_ executable: String, _ arguments: [String]) -> Bool {
         (try? execute(executable, arguments, captureOutput: false, timeout: 15)) != nil
-    }
-
-    func runAllowingFailure(_ executable: String, _ arguments: [String]) {
-        _ = try? execute(executable, arguments, captureOutput: false, timeout: 15)
     }
 
     private func execute(

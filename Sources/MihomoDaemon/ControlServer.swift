@@ -249,10 +249,9 @@ final class ControlDispatcher: @unchecked Sendable {
                 )
                 payload = try JSONEncoder().encode(status)
             case .prepareLocalDoHProfile:
-                guard agent.isRunning else {
-                    throw serverError("Mihomo agent is not running")
-                }
-                payload = try JSONEncoder().encode(controller.prepareLocalDoHProfile())
+                throw serverError(
+                    "Local DoH profile preparation must use the atomic install operation"
+                )
             case .installLocalDoH:
                 payload = try JSONEncoder().encode(localDoH.install())
             case .removeLocalDoH:

@@ -82,10 +82,9 @@ final class ControllerBroker: @unchecked Sendable {
         throw lastError ?? ControllerBrokerCriticalError.unsafeGlobalRuntime
     }
 
-    /// Builds the split-DNS profile entirely inside the root trust boundary.
-    /// The caller receives aggregate counts only; expanded domain names are
-    /// written to the fixed root-owned profile and never cross XPC or logs.
-    func prepareLocalDoHProfile() throws -> LocalDoHPlanSummary {
+    /// Builds the split-DNS plan entirely inside the root trust boundary.
+    /// Expanded domain names remain in the daemon and never cross XPC or logs.
+    func localDoHPlan() throws -> LocalDoHDomainPlan {
         let configuration = try ProxyConfiguration.load(path: configPath)
         let snapshot = try routeSnapshot(configuration)
         guard snapshot.mode == "rule" else {
@@ -118,8 +117,19 @@ final class ControllerBroker: @unchecked Sendable {
             routeSnapshot: snapshot,
             geoSiteDatabase: geoSiteDatabase
         )
-        try writeManagedLocalDoHProfile(LocalDoHProfileDocument.data(for: plan))
-        return plan.summary
+        return plan
+    }
+
+    func writeLocalDoHProfile(
+        plan: LocalDoHDomainPlan,
+        rootCertificate: Data
+    ) throws {
+        try writeManagedLocalDoHProfile(
+            LocalDoHProfileDocument.data(
+                for: plan,
+                rootCertificate: rootCertificate
+            )
+        )
     }
 
     deinit {

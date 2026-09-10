@@ -87,6 +87,7 @@ final class ProfileBroker: @unchecked Sendable {
             let protected = [
                 "daemon.json", "controller.json", "controller-secret",
                 "mihomo-data/config.yaml", "local-doh-enabled",
+                "MihomoBox-Local-DoH.mobileconfig",
             ]
             var backupDigests: [String: String] = [:]
             for relative in protected {

@@ -83,9 +83,10 @@
 - Local DoH setup is a fixed authenticated XPC operation of the already
   installed root daemon; it accepts no certificate, key, hostname, port,
   output path, or arbitrary domain argument. The daemon generates the identity at a fixed root-owned
-  path, imports only the generated CA certificate into the System trust store,
-  deletes the CA private key after issuing the loopback server certificate, and
-  never unlocks a keychain. It derives the profile only
+  path and deletes the CA private key after issuing the loopback server
+  certificate. The root CA is embedded as a `com.apple.security.root` payload
+  in the same manually approved profile as split DNS; the daemon never edits
+  Admin Trust Settings and never unlocks a keychain. It derives the profile only
   from authenticated controller rule snapshots and the exact root-owned,
   non-writable managed `GeoSite.dat`; the unprivileged App never receives the
   expanded domain list. Domain planning follows current selector chains and
@@ -96,7 +97,7 @@
   one fixed root-owned profile artifact and validates its ownership, mode and
   fixed payload fields before changing runtime state. The root XPC service
   remains available while only the supervised agent is stopped; runtime files,
-  identity and trust are rolled back before the previous network is restarted.
+  identity and prepared profile are rolled back before the previous network is restarted.
   XPC returns only
   server/profile booleans and aggregate counts. Removal verifies the fixed
   installed profile is absent before deleting the exact trust record, server
