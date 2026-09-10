@@ -487,7 +487,15 @@ public enum MihomoConfigurator {
     }
 
     private static func jsonQuoted(_ value: String) -> String {
-        let data = try? JSONSerialization.data(withJSONObject: [value], options: [])
+        // JSONSerialization escapes every slash as `\/` by default. That is
+        // legal JSON but not a legal escape in a YAML double-quoted scalar, so
+        // absolute paths such as the Local DoH certificate made Mihomo reject
+        // an otherwise valid generated profile. JSON's remaining escapes are
+        // also valid YAML escapes and still round-trip through parseScalar.
+        let data = try? JSONSerialization.data(
+            withJSONObject: [value],
+            options: [.withoutEscapingSlashes]
+        )
         guard let data, let text = String(data: data, encoding: .utf8) else { return "\"\(value)\"" }
         return String(text.dropFirst().dropLast())
     }

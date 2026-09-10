@@ -372,6 +372,10 @@ extension ConfiguratorTests {
             MihomoConfigurator.directScalar(resultLines, section: "tls", key: "private-key"),
             "/Library/Application Support/Mihomo App/local-doh/server.key"
         )
+        XCTAssertFalse(
+            result.contains(#"\/Library\/Application Support"#),
+            "JSON-style escaped slashes are invalid in a YAML double-quoted scalar"
+        )
         XCTAssertFalse(result.contains("/tmp/user.crt"))
     }
 
