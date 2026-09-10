@@ -374,7 +374,7 @@ public struct ConfigView: View {
         }
 
         Text(
-          "macOS requires one final confirmation in General › Device Management. Re-run Prepare after changing proxy-domain rules to update the profile."
+          "The privileged helper prepares the server and system trust without another password prompt. macOS still requires one final confirmation in General › Device Management. Re-run Prepare after changing proxy-domain rules to update the profile."
         )
         .font(.system(size: 10))
         .foregroundStyle(DashboardTheme.muted.opacity(0.72))

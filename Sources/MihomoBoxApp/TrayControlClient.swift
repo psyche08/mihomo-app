@@ -159,13 +159,17 @@ actor TrayControlClient {
     return try JSONDecoder().decode(LocalDoHStatus.self, from: payload)
   }
 
-  func prepareLocalDoHProfile() throws -> LocalDoHPlanSummary {
+  func installLocalDoH() throws -> LocalDoHPlanSummary {
     let payload = try send(
-      ControlRequest(operation: .prepareLocalDoHProfile),
+      ControlRequest(operation: .installLocalDoH),
       retryReadOnce: false
     )
     guard !payload.isEmpty else { throw TrayControlError.missingPayload }
     return try JSONDecoder().decode(LocalDoHPlanSummary.self, from: payload)
+  }
+
+  func removeLocalDoH() throws {
+    _ = try send(ControlRequest(operation: .removeLocalDoH), retryReadOnce: false)
   }
 
   func upgradeComponents(_ package: ComponentUpdatePackage, daemonWillRestart: Bool) throws {

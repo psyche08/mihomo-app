@@ -128,12 +128,13 @@ system DNS as the resolver-health gate. The original-DNS `1054` listener,
 physical-interface binding, route observer, wake recovery, egress probes, and
 generation-bound health snapshots remain active.
 
-The Config page asks the daemon to prepare the fixed root-owned profile through
-the typed `local-doh.prepare-profile` mutation, then queries
-`local-doh.status`. The daemon reduces preparation, the fixed system profile
-identifier, root-owned server identity, and passive runtime health to booleans
-plus numeric counts. Profile contents, expanded domain names, and GeoSite
-entries never cross XPC or enter logs. The UI distinguishes classic DNS,
+The Config page asks the daemon to prepare the fixed root-owned profile,
+identity, trust and runtime through the typed `local-doh.install` transaction,
+then queries `local-doh.status`. The daemon stays online while its supervised
+agent is stopped and restarted. It reduces preparation, the fixed system
+profile identifier, root-owned server identity, and passive runtime health to
+booleans plus numeric counts. Profile contents, expanded domain names, and
+GeoSite entries never cross XPC or enter logs. The UI distinguishes classic DNS,
 waiting for macOS profile approval, active Local DoH, and a profile/server
 mismatch, and refreshes while Config is visible.
 

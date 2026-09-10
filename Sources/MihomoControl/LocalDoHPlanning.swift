@@ -322,6 +322,33 @@ public enum LocalDoHProfileDocument {
       options: 0
     )
   }
+
+  /// Validates the exact root-prepared artifact before any privileged runtime
+  /// mutation. Returning only a count keeps the expanded domain list inside
+  /// the root boundary.
+  public static func validatedDomainCount(in data: Data) -> Int? {
+    guard let profile = try? PropertyListSerialization.propertyList(
+      from: data,
+      options: [],
+      format: nil
+    ) as? [String: Any],
+      profile["PayloadIdentifier"] as? String == identifier,
+      profile["PayloadType"] as? String == "Configuration",
+      profile["PayloadScope"] as? String == "System",
+      let content = profile["PayloadContent"] as? [[String: Any]],
+      content.count == 1,
+      content[0]["PayloadIdentifier"] as? String == "\(identifier).dns",
+      content[0]["PayloadType"] as? String == "com.apple.dnsSettings.managed",
+      let settings = content[0]["DNSSettings"] as? [String: Any],
+      settings["DNSProtocol"] as? String == "HTTPS",
+      settings["ServerURL"] as? String == serverURL,
+      settings["ServerAddresses"] as? [String] == ["127.0.0.1"],
+      let domains = settings["SupplementalMatchDomains"] as? [String],
+      !domains.isEmpty,
+      domains.allSatisfy({ !$0.isEmpty && $0 != "." })
+    else { return nil }
+    return Set(domains).count
+  }
 }
 
 public struct GeoSiteDatabase: Sendable {

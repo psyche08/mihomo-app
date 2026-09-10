@@ -11,6 +11,7 @@ final class ControlDispatcher: @unchecked Sendable {
     private let agent: AgentSupervisor
     private let controller: ControllerBroker
     private let profiles: ProfileBroker
+    private let localDoH: LocalDoHManager
     private let components: ComponentUpdater
     private let startupClock: MonotonicStartupClock
     private let mutationLock = NSLock()
@@ -30,6 +31,11 @@ final class ControlDispatcher: @unchecked Sendable {
         profiles = ProfileBroker(
             agent: agent,
             validateStartedRuntime: validateStartedRuntime
+        )
+        localDoH = LocalDoHManager(
+            agent: agent,
+            controller: controllerBroker,
+            profiles: profiles
         )
         components = try ComponentUpdater(
             agent: agent,
@@ -247,6 +253,11 @@ final class ControlDispatcher: @unchecked Sendable {
                     throw serverError("Mihomo agent is not running")
                 }
                 payload = try JSONEncoder().encode(controller.prepareLocalDoHProfile())
+            case .installLocalDoH:
+                payload = try JSONEncoder().encode(localDoH.install())
+            case .removeLocalDoH:
+                try localDoH.remove()
+                payload = nil
             case .upgradeComponents:
                 guard let package = request.payload else {
                     throw serverError("component update package is required")
@@ -331,7 +342,8 @@ final class ControlDispatcher: @unchecked Sendable {
         case .startAgent, .stopAgent, .restartAgent, .upgradeComponents,
              .importProfile, .switchProfile, .reloadProfile, .setTUN,
              .setOutboundMode, .selectProxy, .refreshProxyProvider,
-             .closeAllConnections, .prepareLocalDoHProfile:
+             .closeAllConnections, .prepareLocalDoHProfile,
+             .installLocalDoH, .removeLocalDoH:
             return true
         case .controllerRequest:
             // ControllerRequestPolicy is still the authority for the exact

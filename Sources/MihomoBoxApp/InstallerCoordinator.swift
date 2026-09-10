@@ -47,11 +47,6 @@ enum InstallerCoordinatorError: Error, LocalizedError {
   case cancelled
   case profileRejected
   case timedOut
-  case localDoHPrerequisite
-  case localDoHProfileGenerationFailed
-  case localDoHTrustFailed
-  case localDoHProfileRemovalFailed
-  case networkRecoveryRequired
   case failed
 
   var errorDescription: String? {
@@ -61,16 +56,6 @@ enum InstallerCoordinatorError: Error, LocalizedError {
     case .cancelled: "the installation was cancelled"
     case .profileRejected: "Mihomo rejected the selected profile; import a valid profile"
     case .timedOut: "the daemon did not become ready in time"
-    case .localDoHPrerequisite:
-      "activate a valid Mihomo profile before preparing Local DoH"
-    case .localDoHProfileGenerationFailed:
-      "the daemon-generated Local DoH profile failed privileged validation; retry after repairing MihomoBox components"
-    case .localDoHTrustFailed:
-      "macOS could not trust the Local DoH certificate authority; retry after checking System keychain access"
-    case .localDoHProfileRemovalFailed:
-      "macOS did not remove or verify removal of the Local DoH profile; open Device Management and remove it there"
-    case .networkRecoveryRequired:
-      "Local DoH changed, but classic managed DNS recovery requires operator attention"
     case .failed: "the privileged installer did not complete"
     }
   }
@@ -241,74 +226,6 @@ actor InstallerCoordinator {
       throw InstallerCoordinatorError.failed
     }
     AppLog.info("event=privileged_installer action=uninstall result=success")
-  }
-
-  func prepareLocalDoH() async throws {
-    try await runSpecialInstaller(arguments: ["--install-local-doh"], action: "install_local_doh")
-  }
-
-  func removeLocalDoH() async throws {
-    try await runSpecialInstaller(arguments: ["--remove-local-doh"], action: "remove_local_doh")
-  }
-
-  private func runSpecialInstaller(arguments: [String], action: String) async throws {
-    guard let bundleURL, bundleURL.pathExtension == "app" else {
-      throw InstallerCoordinatorError.appBundleUnavailable
-    }
-    let script = bundleURL.appendingPathComponent(
-      "Contents/Resources/scripts/install-daemon.sh"
-    )
-    guard Self.isRegularExecutable(script) else {
-      throw InstallerCoordinatorError.installerMissing
-    }
-    let requirements = try Self.exactSigningRequirements(
-      bundleURL: bundleURL,
-      callerRelativeExecutable: Self.callerRelativeExecutable
-    )
-    let command = Self.bootstrapCommand(
-      sourceBundlePath: bundleURL.standardizedFileURL.path,
-      appRequirement: requirements.app,
-      callerRequirement: requirements.caller,
-      callerRelativeExecutable: Self.callerRelativeExecutable,
-      installerArguments: arguments,
-      detached: false
-    )
-    let source = "do shell script \(Self.appleScriptQuote(command)) with administrator privileges"
-    AppLog.info("event=privileged_installer action=\(action) phase=started")
-    let result = try await Self.runAppleScript(source)
-    guard result.status == 0 else {
-      let message = result.output
-      if result.status == 1
-        && (message.contains("(-128)")
-          || message.localizedCaseInsensitiveContains("User canceled"))
-      {
-        AppLog.info("event=privileged_installer action=\(action) result=cancelled")
-        throw InstallerCoordinatorError.cancelled
-      }
-      AppLog.error(
-        "event=privileged_installer action=\(action) result=failed reason=\(Self.classification(message))"
-      )
-      if message.localizedCaseInsensitiveContains("install and activate a Mihomo profile") {
-        throw InstallerCoordinatorError.localDoHPrerequisite
-      }
-      if message.localizedCaseInsensitiveContains("root-owned Local DoH profile") {
-        throw InstallerCoordinatorError.localDoHProfileGenerationFailed
-      }
-      if message.localizedCaseInsensitiveContains("Local DoH certificate authority") {
-        throw InstallerCoordinatorError.localDoHTrustFailed
-      }
-      if message.localizedCaseInsensitiveContains("Local DoH profile") {
-        throw InstallerCoordinatorError.localDoHProfileRemovalFailed
-      }
-      if message.localizedCaseInsensitiveContains("recovery requires operator attention") {
-        throw InstallerCoordinatorError.networkRecoveryRequired
-      }
-      if message.localizedCaseInsensitiveContains("timed out waiting for") {
-        throw InstallerCoordinatorError.timedOut
-      }
-      throw InstallerCoordinatorError.failed
-    }
-    AppLog.info("event=privileged_installer action=\(action) result=success")
   }
 
   private static func runAppleScript(_ source: String) async throws -> (

@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import MihomoControl
+import MihomoDNSCore
 
 final class ProfileBroker: @unchecked Sendable {
     private let agent: AgentSupervisor
@@ -50,6 +51,110 @@ final class ProfileBroker: @unchecked Sendable {
                 return try listUnlocked()
             default:
                 throw profileError("operation is not a profile operation")
+            }
+        }
+    }
+
+    /// Changes DNS ownership while the root daemon and its authenticated XPC
+    /// service remain online. Only the supervised network agent is stopped.
+    /// The caller supplies fixed Local DoH identity work that is safe only
+    /// after normal macOS DNS has been restored, plus its matching rollback.
+    func transitionLocalDoH(
+        enabled: Bool,
+        afterNetworkStopped: () throws -> Void,
+        rollbackAfterNetworkStopped: () throws -> Void
+    ) throws {
+        try queue.sync {
+            guard agent.isRunning else {
+                throw profileError("Mihomo agent is not running")
+            }
+            let active = try activeProfileName()
+            let source = root.appendingPathComponent("profiles").appendingPathComponent(active)
+            let data = try readStoredProfile(source)
+            try validate(name: active, data: data)
+
+            let transaction = root.appendingPathComponent(
+                ".local-doh-transaction-\(UUID().uuidString)",
+                isDirectory: true
+            )
+            try FileManager.default.createDirectory(
+                at: transaction,
+                withIntermediateDirectories: false,
+                attributes: [.posixPermissions: 0o700]
+            )
+            defer { try? FileManager.default.removeItem(at: transaction) }
+
+            let protected = [
+                "daemon.json", "controller.json", "controller-secret",
+                "mihomo-data/config.yaml", "local-doh-enabled",
+            ]
+            var backupDigests: [String: String] = [:]
+            for relative in protected {
+                let current = root.appendingPathComponent(relative)
+                guard FileManager.default.fileExists(atPath: current.path) else { continue }
+                let backup = transaction.appendingPathComponent("backup")
+                    .appendingPathComponent(relative)
+                try FileManager.default.createDirectory(
+                    at: backup.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try FileManager.default.copyItem(at: current, to: backup)
+                backupDigests[relative] = ComponentUpdatePackage.digest(
+                    try Data(contentsOf: backup, options: [.mappedIfSafe])
+                )
+            }
+
+            do {
+                guard agent.stopAndRestoreVerified() else {
+                    throw ControllerBrokerCriticalError.unsafeGlobalRuntime
+                }
+                try afterNetworkStopped()
+                try LocalDoHConfigurationStore.setEnabled(
+                    enabled,
+                    configurationPath: root.appendingPathComponent("daemon.json").path
+                )
+                let configured = try preparedProfile(data: data, publishController: true)
+                defer {
+                    try? FileManager.default.removeItem(
+                        at: configured.deletingLastPathComponent()
+                    )
+                }
+                try validateMihomo(path: configured)
+                try replace(
+                    configured,
+                    root.appendingPathComponent("mihomo-data/config.yaml"),
+                    permissions: 0o600
+                )
+                let state = root.appendingPathComponent("local-doh-enabled")
+                if enabled {
+                    try writePrivate(Data(), to: state, permissions: 0o644)
+                } else if FileManager.default.fileExists(atPath: state.path) {
+                    try FileManager.default.removeItem(at: state)
+                }
+                try agent.start()
+                try validateStartedRuntime()
+            } catch {
+                let transitionError = error
+                _ = agent.stopAndRestoreVerified()
+                do {
+                    try rollbackAfterNetworkStopped()
+                    try restoreProtected(
+                        protected,
+                        transaction: transaction,
+                        backupDigests: backupDigests
+                    )
+                    try agent.start()
+                    try validateStartedRuntime()
+                } catch {
+                    _ = agent.stopAndRestoreVerified()
+                    throw ControllerBrokerCriticalError.unsafeGlobalRuntime
+                }
+                if transitionError is ControllerBrokerCriticalError {
+                    throw profileError(
+                        "Local DoH transition failed; the previous managed network was restored"
+                    )
+                }
+                throw transitionError
             }
         }
     }

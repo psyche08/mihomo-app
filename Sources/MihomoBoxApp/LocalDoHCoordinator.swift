@@ -8,23 +8,17 @@ final class LocalDoHCoordinator: DashboardLocalDoHService {
   private static let deviceManagementURL = URL(
     string: "x-apple.systempreferences:com.apple.Profiles-Settings.extension"
   )!
-  private let installer: InstallerCoordinator
   private let control: TrayControlClient
 
-  init(
-    installer: InstallerCoordinator = InstallerCoordinator(),
-    control: TrayControlClient = TrayControlClient()
-  ) {
-    self.installer = installer
+  init(control: TrayControlClient = TrayControlClient()) {
     self.control = control
   }
 
   func status() async -> DashboardLocalDoHStatus {
-    let available = await installer.installationActionsAvailable
     do {
       let root = try await control.localDoHStatus()
       return DashboardLocalDoHStatus(
-        available: available,
+        available: true,
         statusVerified: root.profileInspectionSucceeded,
         serverPrepared: root.serverPrepared,
         profileInstalled: root.profileInstalled,
@@ -35,15 +29,14 @@ final class LocalDoHCoordinator: DashboardLocalDoHService {
       )
     } catch {
       return DashboardLocalDoHStatus(
-        available: available,
+        available: false,
         statusVerified: false
       )
     }
   }
 
   func prepare() async throws -> LocalDoHPlanSummary {
-    let summary = try await control.prepareLocalDoHProfile()
-    try await installer.prepareLocalDoH()
+    let summary = try await control.installLocalDoH()
     let url = URL(fileURLWithPath: LocalDoHProfileDocument.managedProfilePath)
     let profileOpened = NSWorkspace.shared.open(url)
     let settingsOpened = NSWorkspace.shared.open(Self.deviceManagementURL)
@@ -61,7 +54,7 @@ final class LocalDoHCoordinator: DashboardLocalDoHService {
   }
 
   func remove() async throws {
-    try await installer.removeLocalDoH()
+    try await control.removeLocalDoH()
   }
 
   func openDeviceManagement() async throws {

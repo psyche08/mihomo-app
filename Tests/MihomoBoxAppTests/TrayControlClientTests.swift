@@ -133,7 +133,7 @@ final class TrayControlClientTests: XCTestCase {
     XCTAssertEqual(session.operations, [.localDoHStatus])
   }
 
-  func testLocalDoHProfilePreparationReturnsCountsButNoDomains() async throws {
+  func testLocalDoHInstallationReturnsCountsButNoDomains() async throws {
     let expected = LocalDoHPlanSummary(
       domainCount: 5_123,
       omittedRuleCount: 2,
@@ -149,9 +149,18 @@ final class TrayControlClientTests: XCTestCase {
     ])
     let client = TrayControlClient(makeSession: { session })
 
-    let observed = try await client.prepareLocalDoHProfile()
+    let observed = try await client.installLocalDoH()
     XCTAssertEqual(observed, expected)
-    XCTAssertEqual(session.operations, [.prepareLocalDoHProfile])
+    XCTAssertEqual(session.operations, [.installLocalDoH])
+  }
+
+  func testLocalDoHRemovalUsesAuthenticatedTypedMutation() async throws {
+    let session = QueueSession(responses: [ControlResponse(success: true)])
+    let client = TrayControlClient(makeSession: { session })
+
+    try await client.removeLocalDoH()
+
+    XCTAssertEqual(session.operations, [.removeLocalDoH])
   }
 }
 

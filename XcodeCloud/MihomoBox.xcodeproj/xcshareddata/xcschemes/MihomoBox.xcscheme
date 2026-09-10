@@ -14,7 +14,7 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "F05E6785C89698A525A214EF"
+               BlueprintIdentifier = "F7D14065FC73E464AB203B7B"
                BuildableName = "MihomoBox.app"
                BlueprintName = "MihomoBox"
                ReferencedContainer = "container:MihomoBox.xcodeproj">
@@ -30,7 +30,7 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "F05E6785C89698A525A214EF"
+            BlueprintIdentifier = "F7D14065FC73E464AB203B7B"
             BuildableName = "MihomoBox.app"
             BlueprintName = "MihomoBox"
             ReferencedContainer = "container:MihomoBox.xcodeproj">
@@ -53,7 +53,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "F05E6785C89698A525A214EF"
+            BlueprintIdentifier = "F7D14065FC73E464AB203B7B"
             BuildableName = "MihomoBox.app"
             BlueprintName = "MihomoBox"
             ReferencedContainer = "container:MihomoBox.xcodeproj">
@@ -70,7 +70,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "F05E6785C89698A525A214EF"
+            BlueprintIdentifier = "F7D14065FC73E464AB203B7B"
             BuildableName = "MihomoBox.app"
             BlueprintName = "MihomoBox"
             ReferencedContainer = "container:MihomoBox.xcodeproj">

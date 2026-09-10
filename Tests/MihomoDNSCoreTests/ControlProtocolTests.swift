@@ -11,6 +11,8 @@ final class ControlProtocolTests: XCTestCase {
         XCTAssertTrue(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .reloadProfile))
         XCTAssertTrue(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .localDoHStatus))
         XCTAssertTrue(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .prepareLocalDoHProfile))
+        XCTAssertTrue(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .installLocalDoH))
+        XCTAssertTrue(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .removeLocalDoH))
     }
 
     func testLocalDoHStatusRoundTripsWithoutProfileDetails() throws {
@@ -68,6 +70,32 @@ final class ControlProtocolTests: XCTestCase {
             ),
             summary
         )
+    }
+
+    func testPreparedLocalDoHProfileRejectsAlteredPrivilegedFields() throws {
+        let valid = try LocalDoHProfileDocument.data(
+            for: LocalDoHDomainPlan(domains: ["example.com", "claude.ai"])
+        )
+        XCTAssertEqual(LocalDoHProfileDocument.validatedDomainCount(in: valid), 2)
+
+        var object = try XCTUnwrap(
+            PropertyListSerialization.propertyList(
+                from: valid,
+                options: [],
+                format: nil
+            ) as? [String: Any]
+        )
+        var content = try XCTUnwrap(object["PayloadContent"] as? [[String: Any]])
+        var settings = try XCTUnwrap(content[0]["DNSSettings"] as? [String: Any])
+        settings["ServerURL"] = "https://example.invalid/dns-query"
+        content[0]["DNSSettings"] = settings
+        object["PayloadContent"] = content
+        let altered = try PropertyListSerialization.data(
+            fromPropertyList: object,
+            format: .xml,
+            options: 0
+        )
+        XCTAssertNil(LocalDoHProfileDocument.validatedDomainCount(in: altered))
     }
 
     func testLocalDoHProfileInspectionReturnsOnlyFixedProfileStateAndCount() throws {

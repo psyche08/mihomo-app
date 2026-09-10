@@ -196,7 +196,8 @@ activation transaction.
 | Import/switch profile | `profile.import` / `profile.switch` |
 | Start/stop/restart proxy runtime | `agent.start` / `agent.stop` / `agent.restart` |
 | Read fixed Local DoH server/profile state | `local-doh.status` |
-| Prepare root-owned Local DoH profile | `local-doh.prepare-profile` |
+| Prepare identity/runtime and root-owned Local DoH profile | `local-doh.install` |
+| Remove Local DoH and restore classic DNS | `local-doh.remove` |
 | SwiftUI controller reads/mutations | typed operations or validated `dashboard.controller-request` |
 | SwiftUI live streams | `dashboard.controller-stream-open/next/close` |
 

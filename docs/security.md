@@ -80,12 +80,12 @@
   network health before clearing it. Power loss or failed health restores the
   complete prior signed set with same-filesystem atomic replacement. While
   recovery is incomplete, runtime mutations fail closed.
-- Local DoH setup is another fixed operation of the exact-snapshot installer;
-  it accepts no certificate, key, hostname, port, output path, or arbitrary
-  domain argument. The installer generates the identity at a fixed root-owned
+- Local DoH setup is a fixed authenticated XPC operation of the already
+  installed root daemon; it accepts no certificate, key, hostname, port,
+  output path, or arbitrary domain argument. The daemon generates the identity at a fixed root-owned
   path, imports only the generated CA certificate into the System trust store,
   deletes the CA private key after issuing the loopback server certificate, and
-  never unlocks a keychain. A typed daemon mutation derives the profile only
+  never unlocks a keychain. It derives the profile only
   from authenticated controller rule snapshots and the exact root-owned,
   non-writable managed `GeoSite.dat`; the unprivileged App never receives the
   expanded domain list. Domain planning follows current selector chains and
@@ -93,8 +93,11 @@
   intersected, unsupported protobuf entry kinds are counted, whole-set
   inversions are omitted without widening scope, an empty list is rejected,
   and there is no silent domain-count truncation. The daemon atomically writes
-  one fixed root-owned profile artifact; the installer validates its ownership,
-  mode and fixed payload fields before changing runtime state. XPC returns only
+  one fixed root-owned profile artifact and validates its ownership, mode and
+  fixed payload fields before changing runtime state. The root XPC service
+  remains available while only the supervised agent is stopped; runtime files,
+  identity and trust are rolled back before the previous network is restarted.
+  XPC returns only
   server/profile booleans and aggregate counts. Removal verifies the fixed
   installed profile is absent before deleting the exact trust record, server
   identity, or prepared artifact.

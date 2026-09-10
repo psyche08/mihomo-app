@@ -52,7 +52,9 @@ struct LocalDoHStatusProvider {
               let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
             return .init(installed: false)
         }
-        return LocalDoHProfileInspection.inspect(propertyList: data)
-            ?? .init(installed: false)
+        guard let domainCount = LocalDoHProfileDocument.validatedDomainCount(in: data) else {
+            return .init(installed: false)
+        }
+        return .init(installed: true, domainCount: domainCount)
     }
 }

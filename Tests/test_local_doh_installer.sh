@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 INSTALLER="$ROOT/scripts/install-daemon.sh"
 STATUS_PROVIDER="$ROOT/Sources/MihomoDaemon/LocalDoHStatusProvider.swift"
+XPC_MANAGER="$ROOT/Sources/MihomoDaemon/LocalDoHManager.swift"
+APP_COORDINATOR="$ROOT/Sources/MihomoBoxApp/LocalDoHCoordinator.swift"
 
 /bin/bash -n "$INSTALLER"
 
@@ -50,6 +52,18 @@ fi
 /usr/bin/grep -Fq '"-output", "stdout-xml"' "$STATUS_PROVIDER"
 if /usr/bin/grep -Fq '"-output", "-"' "$STATUS_PROVIDER"; then
   echo "profile status inspection must not create a literal -.plist file" >&2
+  exit 1
+fi
+
+/usr/bin/grep -Fq 'case installLocalDoH = "local-doh.install"' \
+  "$ROOT/Sources/MihomoControl/ControlProtocol.swift"
+/usr/bin/grep -Fq 'case removeLocalDoH = "local-doh.remove"' \
+  "$ROOT/Sources/MihomoControl/ControlProtocol.swift"
+/usr/bin/grep -Fq 'profiles.transitionLocalDoH(' "$XPC_MANAGER"
+/usr/bin/grep -Fq 'try await control.installLocalDoH()' "$APP_COORDINATOR"
+/usr/bin/grep -Fq 'try await control.removeLocalDoH()' "$APP_COORDINATOR"
+if /usr/bin/grep -Eq 'InstallerCoordinator|osascript|runSpecialInstaller' "$APP_COORDINATOR"; then
+  echo "Local DoH App actions must use the installed authenticated XPC helper" >&2
   exit 1
 fi
 
