@@ -81,6 +81,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     coordinator.stopBackgroundServices()
 
     // Deliberately no agent.stop call here. The root LaunchDaemon continues to
-    // own Mihomo, Enhanced TUN, DNS and restoration after the UI exits.
+    // own Mihomo, Enhanced TUN, LocalHttpDns and legacy restoration after
+    // the UI exits.
   }
 }

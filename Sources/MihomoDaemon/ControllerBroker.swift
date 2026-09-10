@@ -176,13 +176,26 @@ final class ControllerBroker: @unchecked Sendable {
             ]
             return try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
         case .setTUN:
+            guard let value = request.arguments["enabled"],
+                  let enabled = ["true": true, "false": false][value] else {
+                throw brokerError("Enhanced TUN enabled state is required")
+            }
+            if !enabled {
+                let response = try sendJSON(
+                    configuration,
+                    method: "PATCH",
+                    path: "/configs",
+                    object: ["tun": ["enable": false]]
+                )
+                guard try !tunEnabled(configuration) else {
+                    throw ControllerBrokerCriticalError.unsafeGlobalRuntime
+                }
+                return response
+            }
             let safeBeforeTUN = try repairUnsafeGlobalIfNeeded(
                 configuration,
                 snapshot: routeSnapshot(configuration)
             )
-            guard request.arguments["enabled"] == "true" else {
-                throw brokerError("Enhanced TUN disable requires the agent stop operation")
-            }
             do {
                 let response = try sendJSON(
                     configuration,

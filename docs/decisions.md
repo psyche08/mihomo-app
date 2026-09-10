@@ -81,19 +81,23 @@ healthy, it applies a one-time current-user login-start default. This also
 migrates an already-healthy installation. A later user override is retained;
 the App does not repeatedly re-register the item. The unprivileged login item
 only restores the hidden tray App, while the root LaunchDaemon independently
-restores the managed network service with `tun.enable: true` at system startup.
+restores LocalHttpDns and the persisted standby/Enhanced state at system startup.
 
-## SystemConfiguration DNS by default, opt-in split DoH profile
+## LocalHttpDns as the base service, Enhanced TUN as an optional layer
 
-The agent uses public SystemConfiguration preference APIs, manages the active
-PrimaryService, and observes per-service resolver changes in the default mode.
-An opt-in local DoH mode exists for hosts where another DNS proxy repeatedly
-captures or rewrites cleartext port 53. It restores MihomoBox's Global DNS
-write, exposes Mihomo's own DoH handler only on loopback TLS, and uses a manual
-DNS Settings profile with `SupplementalMatchDomains`. This keeps nonmatching
-domains on the current macOS resolver and avoids implementing a second DNS
-policy engine. Manual profile confirmation is retained because macOS 11 and
-later do not permit the `profiles` CLI to install configuration profiles.
+MihomoBox no longer manages the active PrimaryService or Global DNS server
+list. Installing the root helper establishes a valid controller/DNS standby
+with TUN off. The daemon then prepares a manual DNS Settings profile with
+`SupplementalMatchDomains` and an embedded local root certificate. Enhanced
+TUN is unavailable until macOS reports that fixed profile installed and the
+daemon-owned `127.0.0.1:9443` endpoint is live.
+
+The endpoint remains available when Mihomo restarts or TUN is disabled. It
+prefers Mihomo DNS only for a completely healthy Enhanced runtime and otherwise
+resolves through the current physical/scoped DNS. Manual profile confirmation
+is retained because macOS does not permit the `profiles` CLI to install a
+configuration profile interactively on the user's behalf. Removing
+LocalHttpDns is therefore part of full helper uninstall, not a runtime mode.
 
 ## Separate port 53 and port 1054
 

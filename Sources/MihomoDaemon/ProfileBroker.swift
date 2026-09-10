@@ -55,26 +55,23 @@ final class ProfileBroker: @unchecked Sendable {
         }
     }
 
-    /// Changes DNS ownership while the root daemon and its authenticated XPC
-    /// service remain online. Only the supervised network agent is stopped.
-    /// The caller supplies fixed Local DoH identity work that is safe only
-    /// after normal macOS DNS has been restored, plus its matching rollback.
-    func transitionLocalDoH(
-        enabled: Bool,
-        afterNetworkStopped: () throws -> Void,
-        rollbackAfterNetworkStopped: () throws -> Void
-    ) throws {
+    /// Upgrades legacy helper state before the first managed process starts.
+    /// The migration always lands in controller/DNS standby: LocalHttpDns is
+    /// configured, macOS DNS preferences are left alone, and TUN is disabled
+    /// until the certificate/profile prerequisite is approved.
+    func ensureLocalHttpDNSBaseConfiguration(allowEnhancedTUN: Bool) throws {
         try queue.sync {
-            guard agent.isRunning else {
-                throw profileError("Mihomo agent is not running")
+            let configurationPath = root.appendingPathComponent("daemon.json")
+            let current = try ProxyConfiguration.load(path: configurationPath.path)
+            if current.localDoH == LocalDoHConfiguration(),
+               !current.manageSystemDNS,
+               current.enhancedTUNEnabled != nil,
+               !current.expectsEnhancedTUN || allowEnhancedTUN {
+                return
             }
-            let active = try activeProfileName()
-            let source = root.appendingPathComponent("profiles").appendingPathComponent(active)
-            let data = try readStoredProfile(source)
-            try validate(name: active, data: data)
 
             let transaction = root.appendingPathComponent(
-                ".local-doh-transaction-\(UUID().uuidString)",
+                ".local-http-dns-migration-\(UUID().uuidString)",
                 isDirectory: true
             )
             try FileManager.default.createDirectory(
@@ -86,8 +83,87 @@ final class ProfileBroker: @unchecked Sendable {
 
             let protected = [
                 "daemon.json", "controller.json", "controller-secret",
-                "mihomo-data/config.yaml", "local-doh-enabled",
-                "MihomoBox-Local-DoH.mobileconfig",
+                "mihomo-data/config.yaml",
+            ]
+            var backupDigests: [String: String] = [:]
+            for relative in protected {
+                let source = root.appendingPathComponent(relative)
+                guard FileManager.default.fileExists(atPath: source.path) else { continue }
+                let backup = transaction.appendingPathComponent("backup")
+                    .appendingPathComponent(relative)
+                try FileManager.default.createDirectory(
+                    at: backup.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try FileManager.default.copyItem(at: source, to: backup)
+                backupDigests[relative] = ComponentUpdatePackage.digest(
+                    try Data(contentsOf: backup, options: [.mappedIfSafe])
+                )
+            }
+
+            do {
+                try LocalDoHConfigurationStore.ensureBaseService(
+                    configurationPath: configurationPath.path
+                )
+                let activeMarker = root.appendingPathComponent("active-profile")
+                if FileManager.default.fileExists(atPath: activeMarker.path) {
+                    let active = try activeProfileName()
+                    let source = root.appendingPathComponent("profiles")
+                        .appendingPathComponent(active)
+                    let data = try readStoredProfile(source)
+                    let configured = try preparedProfile(data: data, publishController: true)
+                    defer {
+                        try? FileManager.default.removeItem(
+                            at: configured.deletingLastPathComponent()
+                        )
+                    }
+                    try validateMihomo(path: configured)
+                    try replace(
+                        configured,
+                        root.appendingPathComponent("mihomo-data/config.yaml"),
+                        permissions: 0o600
+                    )
+                }
+            } catch {
+                try restoreProtected(
+                    protected,
+                    transaction: transaction,
+                    backupDigests: backupDigests
+                )
+                throw profileError(
+                    "LocalHttpDns base migration failed; the previous configuration was restored"
+                )
+            }
+        }
+    }
+
+    /// Persists the desired TUN state and regenerates the managed profile as
+    /// one root-only transaction. LocalHttpDns is a daemon base service and
+    /// remains bound throughout this supervised agent restart.
+    func setEnhancedTUN(_ enabled: Bool) throws {
+        try queue.sync {
+            guard agent.isRunning else {
+                throw profileError("Mihomo agent is not running")
+            }
+            let active = try activeProfileName()
+            let source = root.appendingPathComponent("profiles").appendingPathComponent(active)
+            let data = try readStoredProfile(source)
+            try validate(name: active, data: data)
+
+            let transaction = root.appendingPathComponent(
+                ".enhanced-tun-transaction-\(UUID().uuidString)",
+                isDirectory: true
+            )
+            try FileManager.default.createDirectory(
+                at: transaction,
+                withIntermediateDirectories: false,
+                attributes: [.posixPermissions: 0o700]
+            )
+            defer { try? FileManager.default.removeItem(at: transaction) }
+
+            let protected = [
+                "daemon.json", "controller.json", "controller-secret",
+                "mihomo-data/config.yaml",
             ]
             var backupDigests: [String: String] = [:]
             for relative in protected {
@@ -109,8 +185,7 @@ final class ProfileBroker: @unchecked Sendable {
                 guard agent.stopAndRestoreVerified() else {
                     throw ControllerBrokerCriticalError.unsafeGlobalRuntime
                 }
-                try afterNetworkStopped()
-                try LocalDoHConfigurationStore.setEnabled(
+                try LocalDoHConfigurationStore.setEnhancedTUN(
                     enabled,
                     configurationPath: root.appendingPathComponent("daemon.json").path
                 )
@@ -126,19 +201,12 @@ final class ProfileBroker: @unchecked Sendable {
                     root.appendingPathComponent("mihomo-data/config.yaml"),
                     permissions: 0o600
                 )
-                let state = root.appendingPathComponent("local-doh-enabled")
-                if enabled {
-                    try writePrivate(Data(), to: state, permissions: 0o644)
-                } else if FileManager.default.fileExists(atPath: state.path) {
-                    try FileManager.default.removeItem(at: state)
-                }
                 try agent.start()
                 try validateStartedRuntime()
             } catch {
                 let transitionError = error
                 _ = agent.stopAndRestoreVerified()
                 do {
-                    try rollbackAfterNetworkStopped()
                     try restoreProtected(
                         protected,
                         transaction: transaction,
@@ -152,7 +220,7 @@ final class ProfileBroker: @unchecked Sendable {
                 }
                 if transitionError is ControllerBrokerCriticalError {
                     throw profileError(
-                        "Local DoH transition failed; the previous managed network was restored"
+                        "Enhanced TUN transition failed; the previous runtime was restored"
                     )
                 }
                 throw transitionError
@@ -161,10 +229,9 @@ final class ProfileBroker: @unchecked Sendable {
     }
 
     /// Reloading an already-active profile does not mutate its files. Keep the
-    /// agent, DNS listeners, alias, and Global DNS ownership alive and replace
-    /// only the Mihomo child. Profile import/switch still uses the full atomic
-    /// activation transaction below because those operations change files and
-    /// controller credentials.
+    /// daemon-owned LocalHttpDns listener alive and replace only the agent-owned
+    /// Mihomo child. Profile import/switch still uses the full atomic activation
+    /// transaction because those operations change files and credentials.
     private func reloadActiveRuntime() throws {
         do {
             if agent.isRunning {

@@ -357,10 +357,10 @@ legacy bridge remains available on its historical release; 0.9.3 and later do
 not regenerate or publish that format.
 
 Replacing the App is not proof that privileged migration succeeded. A real
-0.7 acceptance run must continue after relaunch: the native App must classify
-the authenticated version-1 daemon as repair-required, keep incompatible
+legacy acceptance run must continue after relaunch: the native App must classify
+an authenticated older daemon as repair-required, keep incompatible
 controls disabled, and migrate only after the operator explicitly selects the
-verified installer. Acceptance then requires protocol version 2, a current
+verified installer. Acceptance then requires protocol version 3, a current
 root-owned `component-version`, matching daemon/agent/Mihomo/CLI artifacts,
 exactly one managed runtime, and complete TUN/Fake-IP/DNS health. Also replay
 the mixed state produced by 0.8.0 (0.8 App with a 0.7 daemon) and the normal

@@ -12,6 +12,11 @@ import Foundation
 /// Only the keys listed here are touched. A profile is otherwise the user's
 /// document, and the backup taken on first apply is what `restore` puts back.
 public enum MihomoConfigurator {
+    struct RuntimeProfilePolicy {
+        var localDoH: LocalDoHConfiguration?
+        var enhancedTUNEnabled: Bool
+    }
+
     public enum ConfiguratorError: Error, LocalizedError, Equatable {
         case blockNotFound(String)
         case tunDisabled
@@ -23,7 +28,7 @@ public enum MihomoConfigurator {
         public var errorDescription: String? {
             switch self {
             case .blockNotFound(let name): return "top-level \(name): block not found"
-            case .tunDisabled: return "managed system DNS requires tun.enable: true"
+            case .tunDisabled: return "Enhanced TUN capability requires tun.enable: true in the profile"
             case .invalidController(let reason): return "external-controller \(reason)"
             case .invalidSecret: return "controller secret is invalid"
             case .backupMissing: return "no backup to restore"
@@ -82,7 +87,24 @@ public enum MihomoConfigurator {
         var lines = try String(contentsOfFile: paths.config, encoding: .utf8).keepingLines()
         let controller = try normalizeController(topLevelScalar(lines, "external-controller"))
         let secret = try resolveSecret(topLevelScalar(lines, "secret"), secretFile: paths.secretFile)
-        let localDoH = try resolveLocalDoH(runtimeConfig: paths.runtimeConfig ?? paths.daemonConfig)
+        let runtime = try resolveRuntimeConfiguration(
+            runtimeConfig: paths.runtimeConfig ?? paths.daemonConfig
+        )
+        let localDoH = runtime?.localDoH
+
+        guard directScalar(lines, section: "tun", key: "enable")?.lowercased() == "true" else {
+            throw ConfiguratorError.tunDisabled
+        }
+        if let runtime {
+            let (tunStart, tunEnd) = try block(lines, named: "tun")
+            var tun = Array(lines[(tunStart + 1) ..< tunEnd])
+            tun = replaceScalar(
+                tun,
+                key: "enable",
+                value: runtime.enhancedTUNEnabled ? "true" : "false"
+            )
+            lines = Array(lines[...tunStart]) + tun + Array(lines[tunEnd...])
+        }
 
         let (dnsStart, dnsEnd) = try block(lines, named: "dns")
         var dns = Array(lines[(dnsStart + 1) ..< dnsEnd])
@@ -100,26 +122,15 @@ public enum MihomoConfigurator {
         // logs held nothing at all. Volume is handled by retaining a bounded
         // sample of the text rather than by discarding the level.
         lines = replaceTopLevelScalar(lines, key: "log-level", value: "warning")
-        if let localDoH {
-            lines = replaceTopLevelScalar(
-                lines,
-                key: "external-controller-tls",
-                value: "\(localDoH.endpoint.host):\(localDoH.endpoint.port)"
-            )
-            lines = replaceTopLevelScalar(lines, key: "external-doh-server", value: "/dns-query")
-            lines = replaceTopLevelMapping(
-                lines,
-                key: "tls",
-                values: [
-                    ("certificate", jsonQuoted(localDoH.certificatePath)),
-                    ("private-key", jsonQuoted(localDoH.privateKeyPath)),
-                ]
-            )
+        if localDoH != nil {
+            // Port 9443 belongs to the daemon's independent DoH server. Mihomo
+            // must not bind it or read the server identity, so proxy/TUN
+            // lifecycle can never take the encrypted resolver down.
+            for key in ["external-controller-tls", "external-doh-server", "tls"] {
+                lines = removeTopLevelValue(lines, key: key)
+            }
         }
 
-        guard directScalar(lines, section: "tun", key: "enable")?.lowercased() == "true" else {
-            throw ConfiguratorError.tunDisabled
-        }
         lines = excludeProxyServersFromTunnel(lines, resolver: resolver)
 
         try lines.joined().write(toFile: paths.config, atomically: true, encoding: .utf8)
@@ -249,19 +260,28 @@ public enum MihomoConfigurator {
         return secret
     }
 
-    static func resolveLocalDoH(runtimeConfig: String?) throws -> LocalDoHConfiguration? {
+    static func resolveRuntimeConfiguration(runtimeConfig: String?) throws -> RuntimeProfilePolicy? {
         guard let runtimeConfig else { return nil }
         guard let data = FileManager.default.contents(atPath: runtimeConfig),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw ConfiguratorError.daemonConfigUnreadable
         }
-        guard let value = object["localDoH"] else { return nil }
-        guard !(value is NSNull), JSONSerialization.isValidJSONObject(value),
-              let localData = try? JSONSerialization.data(withJSONObject: value),
-              let localDoH = try? JSONDecoder().decode(LocalDoHConfiguration.self, from: localData) else {
-            throw ConfiguratorError.daemonConfigUnreadable
+        var localDoH: LocalDoHConfiguration?
+        if let value = object["localDoH"], !(value is NSNull) {
+            guard JSONSerialization.isValidJSONObject(value),
+                  let localData = try? JSONSerialization.data(withJSONObject: value),
+                  let decoded = try? JSONDecoder().decode(
+                    LocalDoHConfiguration.self,
+                    from: localData
+                  ) else {
+                throw ConfiguratorError.daemonConfigUnreadable
+            }
+            localDoH = decoded
         }
-        return localDoH
+        return RuntimeProfilePolicy(
+            localDoH: localDoH,
+            enhancedTUNEnabled: object["enhancedTUNEnabled"] as? Bool ?? true
+        )
     }
 
     private static func persistController(
@@ -397,6 +417,26 @@ public enum MihomoConfigurator {
             }
         }
         return Array(lines[..<start]) + replacement + Array(lines[end...])
+    }
+
+    static func removeTopLevelValue(_ lines: [String], key: String) -> [String] {
+        guard let start = lines.firstIndex(where: { line in
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !line.hasPrefix(" ") && !line.hasPrefix("\t")
+                && !trimmed.hasPrefix("#")
+                && (trimmed.hasPrefix("\(key):") || trimmed.hasPrefix("\(key) :"))
+        }) else { return lines }
+        var end = start + 1
+        while end < lines.count {
+            let line = lines[end]
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty, !trimmed.hasPrefix("#"),
+               !line.hasPrefix(" "), !line.hasPrefix("\t") {
+                break
+            }
+            end += 1
+        }
+        return Array(lines[..<start]) + Array(lines[end...])
     }
 
     static func topLevelScalar(_ lines: [String], _ key: String) -> String? {

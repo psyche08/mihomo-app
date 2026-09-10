@@ -52,5 +52,4 @@ public protocol DashboardLocalDoHService: AnyObject {
   func status() async -> DashboardLocalDoHStatus
   func prepare() async throws -> LocalDoHPlanSummary
   func openDeviceManagement() async throws
-  func remove() async throws
 }

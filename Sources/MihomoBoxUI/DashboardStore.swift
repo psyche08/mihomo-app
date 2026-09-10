@@ -64,7 +64,6 @@ public enum DashboardConfigAction: Equatable, Sendable {
   case updatingGeoData
   case preparingLocalDoH
   case openingDeviceManagement
-  case removingLocalDoH
 
   public var progressTitle: String {
     switch self {
@@ -76,7 +75,6 @@ public enum DashboardConfigAction: Equatable, Sendable {
     case .updatingGeoData: "Updating GEO data…"
     case .preparingLocalDoH: "Preparing local DoH…"
     case .openingDeviceManagement: "Opening Device Management…"
-    case .removingLocalDoH: "Removing local DoH…"
     }
   }
 }
@@ -519,19 +517,6 @@ public final class DashboardStore: ObservableObject {
       localDoHExpandedGeoSiteRuleCount = summary.expandedGeoSiteRuleCount
       localDoHUnrepresentableGeoSiteEntryCount = summary.unrepresentableGeoSiteEntryCount
       localDoHInvertedGeoSiteRuleCount = summary.invertedGeoSiteRuleCount
-      await refreshLocalDoHStatus()
-    }
-  }
-
-  public func removeLocalDoH() async {
-    guard let localDoHService else { return }
-    await performConfigAction(.removingLocalDoH) {
-      try await localDoHService.remove()
-      localDoHOmittedRuleCount = 0
-      localDoHExactDomainCount = 0
-      localDoHExpandedGeoSiteRuleCount = 0
-      localDoHUnrepresentableGeoSiteEntryCount = 0
-      localDoHInvertedGeoSiteRuleCount = 0
       await refreshLocalDoHStatus()
     }
   }

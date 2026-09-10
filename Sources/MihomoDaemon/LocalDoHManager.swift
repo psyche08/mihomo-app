@@ -6,18 +6,19 @@ import MihomoDNSCore
 /// Owns the fixed Local DoH privileged mutation behind authenticated XPC.
 ///
 /// This deliberately exposes no paths, certificate material, hostnames,
-/// ports, domains, or arbitrary commands. The daemon stays alive throughout;
-/// ProfileBroker stops only the supervised network agent and rolls its runtime
-/// configuration back before returning an error.
+/// ports, domains, or arbitrary commands. It updates only the daemon-owned TLS
+/// identity and prepared profile; the standby Mihomo/controller stays alive so
+/// the domain plan can be generated before Enhanced TUN is enabled.
 final class LocalDoHManager: @unchecked Sendable {
     private struct IdentitySnapshot {
         let directory: URL
         let hadIdentityDirectory: Bool
+        let hadPreparedProfile: Bool
     }
 
     private let agent: AgentSupervisor
     private let controller: ControllerBroker
-    private let profiles: ProfileBroker
+    private let server: IndependentLocalDoHServer
     private let root: URL
     private let identityDirectory: URL
     private let caCertificate: URL
@@ -30,7 +31,7 @@ final class LocalDoHManager: @unchecked Sendable {
     init(
         agent: AgentSupervisor,
         controller: ControllerBroker,
-        profiles: ProfileBroker,
+        server: IndependentLocalDoHServer,
         root: URL = URL(
             fileURLWithPath: "/Library/Application Support/Mihomo App",
             isDirectory: true
@@ -38,7 +39,7 @@ final class LocalDoHManager: @unchecked Sendable {
     ) {
         self.agent = agent
         self.controller = controller
-        self.profiles = profiles
+        self.server = server
         self.root = root
         identityDirectory = root.appendingPathComponent("local-doh", isDirectory: true)
         caCertificate = identityDirectory.appendingPathComponent("ca.crt")
@@ -52,66 +53,36 @@ final class LocalDoHManager: @unchecked Sendable {
         guard agent.isRunning else {
             throw localDoHError("Mihomo agent is not running")
         }
+        guard agent.usesLocalDoH, !agent.managesSystemDNS else {
+            throw localDoHError("Install or repair the root helper before preparing LocalHttpDns")
+        }
         let plan = try controller.localDoHPlan()
 
         let snapshot = try captureIdentitySnapshot()
         defer { try? FileManager.default.removeItem(at: snapshot.directory) }
-        try profiles.transitionLocalDoH(
-            enabled: true,
-            afterNetworkStopped: {
-                try self.prepareIdentity()
-                let rootCertificate = try self.readRootCertificateDER()
-                try self.controller.writeLocalDoHProfile(
-                    plan: plan,
-                    rootCertificate: rootCertificate
-                )
-                guard LocalDoHStatusProvider.inspectPreparedProfile().installed else {
-                    throw self.localDoHError(
-                        "the fixed root-owned Local DoH profile is invalid"
-                    )
-                }
-            },
-            rollbackAfterNetworkStopped: { try self.restoreIdentity(snapshot) }
-        )
+        do {
+            // Reload the in-memory TLS identity when regeneration replaces an
+            // expired certificate at the same fixed paths.
+            if !identityIsValid() {
+                server.stopServing()
+            }
+            try prepareIdentity()
+            let rootCertificate = try readRootCertificateDER()
+            try controller.writeLocalDoHProfile(plan: plan, rootCertificate: rootCertificate)
+            guard LocalDoHStatusProvider.inspectPreparedProfile().installed else {
+                throw localDoHError("the fixed root-owned Local DoH profile is invalid")
+            }
+            guard try server.startIfPrepared() else {
+                throw localDoHError("the independent Local DoH server did not start")
+            }
+        } catch {
+            server.stopServing()
+            try restoreIdentity(snapshot)
+            _ = try server.startIfPrepared()
+            throw error
+        }
         ServiceLog.info("event=local_doh_install result=prepared_for_profile_approval")
         return plan.summary
-    }
-
-    func remove() throws {
-        let installed = LocalDoHStatusProvider.inspectInstalledProfile()
-        guard installed.succeeded else {
-            throw localDoHError("macOS could not inspect the Local DoH profile")
-        }
-        if installed.inspection.installed {
-            try command.run(
-                "/usr/bin/profiles",
-                [
-                    "remove", "-type", "configuration",
-                    "-identifier", LocalDoHStatus.profileIdentifier,
-                    "-forced",
-                ],
-                timeout: 30
-            )
-            let verified = LocalDoHStatusProvider.inspectInstalledProfile()
-            guard verified.succeeded, !verified.inspection.installed else {
-                throw localDoHError("macOS did not confirm Local DoH profile removal")
-            }
-        }
-
-        try profiles.transitionLocalDoH(
-            enabled: false,
-            afterNetworkStopped: {},
-            rollbackAfterNetworkStopped: {}
-        )
-        if FileManager.default.fileExists(atPath: identityDirectory.path) {
-            try validateIdentityDirectory()
-            try FileManager.default.removeItem(at: identityDirectory)
-        }
-        let profile = URL(fileURLWithPath: LocalDoHProfileDocument.managedProfilePath)
-        if FileManager.default.fileExists(atPath: profile.path) {
-            try FileManager.default.removeItem(at: profile)
-        }
-        ServiceLog.info("event=local_doh_remove result=success")
     }
 
     private func captureIdentitySnapshot() throws -> IdentitySnapshot {
@@ -133,7 +104,8 @@ final class LocalDoHManager: @unchecked Sendable {
             }
             return IdentitySnapshot(
                 directory: snapshot,
-                hadIdentityDirectory: exists
+                hadIdentityDirectory: exists,
+                hadPreparedProfile: try capturePreparedProfile(in: snapshot)
             )
         } catch {
             try? FileManager.default.removeItem(at: snapshot)
@@ -146,13 +118,38 @@ final class LocalDoHManager: @unchecked Sendable {
             try validateIdentityDirectory()
             try FileManager.default.removeItem(at: identityDirectory)
         }
-        guard snapshot.hadIdentityDirectory else { return }
-        let backup = snapshot.directory.appendingPathComponent("identity", isDirectory: true)
-        guard FileManager.default.fileExists(atPath: backup.path) else {
-            throw localDoHError("the Local DoH identity rollback snapshot is incomplete")
+        if snapshot.hadIdentityDirectory {
+            let backup = snapshot.directory.appendingPathComponent("identity", isDirectory: true)
+            guard FileManager.default.fileExists(atPath: backup.path) else {
+                throw localDoHError("the Local DoH identity rollback snapshot is incomplete")
+            }
+            try FileManager.default.copyItem(at: backup, to: identityDirectory)
+            try validateIdentityDirectory()
         }
-        try FileManager.default.copyItem(at: backup, to: identityDirectory)
-        try validateIdentityDirectory()
+        try restorePreparedProfile(from: snapshot)
+    }
+
+    private func capturePreparedProfile(in snapshot: URL) throws -> Bool {
+        let profile = URL(fileURLWithPath: LocalDoHProfileDocument.managedProfilePath)
+        guard FileManager.default.fileExists(atPath: profile.path) else { return false }
+        try FileManager.default.copyItem(
+            at: profile,
+            to: snapshot.appendingPathComponent("prepared.mobileconfig")
+        )
+        return true
+    }
+
+    private func restorePreparedProfile(from snapshot: IdentitySnapshot) throws {
+        let profile = URL(fileURLWithPath: LocalDoHProfileDocument.managedProfilePath)
+        if FileManager.default.fileExists(atPath: profile.path) {
+            try FileManager.default.removeItem(at: profile)
+        }
+        guard snapshot.hadPreparedProfile else { return }
+        let backup = snapshot.directory.appendingPathComponent("prepared.mobileconfig")
+        guard FileManager.default.fileExists(atPath: backup.path) else {
+            throw localDoHError("the Local DoH profile rollback snapshot is incomplete")
+        }
+        try FileManager.default.copyItem(at: backup, to: profile)
     }
 
     private func prepareIdentity() throws {

@@ -116,12 +116,12 @@ updates: one operation is shown with an inline spinner and duplicate clicks are
 discarded instead of queued behind the daemon transaction.
 
 An authenticated protocol-version mismatch is distinct from an unavailable
-daemon. A version-1 daemon is shown as `Network: Daemon upgrade required`; all
+daemon. Any older daemon is shown as `Network: Daemon upgrade required`; all
 tray XPC-backed TUN, profile, mode, and proxy controls are disabled, while
 an emphasized `Upgrade Daemon…` action and `Tools > Install / Repair Daemon…
 (Required)` remain available. The App stays hidden and never opens an
 administrator prompt automatically. Selecting the action first explains that
-Mihomo, Enhanced TUN and managed DNS will restart briefly, then enters the
+Mihomo and Enhanced TUN will restart briefly while LocalHttpDns stays available, then enters the
 existing exact-signature verified installer. A newer daemon is shown as
 requiring an App update and cannot be repaired by the older App.
 
@@ -143,17 +143,15 @@ network restoration cannot be proved, the daemon stops the agent and restores
 DNS. The App sends one typed XPC request and renders the returned snapshot; it
 does not repeat rollback or stop decisions outside the privilege boundary.
 
-Managed system DNS requires Enhanced TUN. This item is also the service
-lifecycle entry point: without a selected profile it first tells the user to
-add one; when the daemon is absent it opens the signed installer with
-administrator authorization and supplies the selected profile for the first
-start; when installed but stopped it starts the service safely; when the
-controller is reachable with TUN disabled it enables TUN; and when checked it
-confirms before stopping the service and restoring real system DNS. Profile
-activation validates `tun.enable: true`, stops the agent so its unified
-shutdown restores real DNS, atomically replaces the configuration, restarts
-the agent, and accepts success only after controller, TUN, Fake-IP route, DNS
-bridge, Mihomo DNS, and system DNS are all healthy.
+LocalHttpDns is the service prerequisite for Enhanced TUN. Without a selected
+profile the item first tells the user to add one. When the daemon is absent it
+opens the signed installer with administrator authorization and supplies the
+selected profile for the first standby start. It then prepares the fixed
+certificate/profile and opens Device Management. Until macOS reports that
+profile installed, enabling TUN is rejected. Once approved, the same item
+persists `tun.enable: true`; turning it off persists `false` and returns to a
+healthy controller/DNS standby. Neither action stops LocalHttpDns or writes the
+macOS system DNS server list.
 
 The first time an installed App observes that Enhanced TUN and the managed
 network are both healthy, the native App enables a current-user macOS login
@@ -197,7 +195,6 @@ activation transaction.
 | Start/stop/restart proxy runtime | `agent.start` / `agent.stop` / `agent.restart` |
 | Read fixed Local DoH server/profile state | `local-doh.status` |
 | Prepare identity/runtime and root-owned Local DoH profile | `local-doh.install` |
-| Remove Local DoH and restore classic DNS | `local-doh.remove` |
 | SwiftUI controller reads/mutations | typed operations or validated `dashboard.controller-request` |
 | SwiftUI live streams | `dashboard.controller-stream-open/next/close` |
 
@@ -243,10 +240,11 @@ cap. Global/Direct modes, DIRECT selections, unknown leaves and selector cycles
 fail closed. The Config panel shows expanded-GeoSite, omitted,
 unrepresentable-entry, inversion, and exact-to-suffix counts and polls the fixed
 `local-doh.status` projection while visible. Domain names never leave the root
-daemon. Preparing and removing the root TLS endpoint use the verified
-installer; the App opens the fixed root-owned `.mobileconfig` and the exact
-Device Management pane for mandatory macOS review. The busy state disables
-repeat clicks throughout the administrator and profile-generation steps.
+daemon. After the signed helper is installed, authenticated XPC prepares the
+fixed root TLS endpoint and `.mobileconfig`; the App opens that profile and the
+exact Device Management pane for mandatory macOS review. Only full helper
+uninstall removes the LocalHttpDns state. The busy state disables repeat clicks
+throughout the administrator and profile-generation steps.
 
 There is no loopback HTTP server, browser token, WebView, or `mihomoboxctl`
 child process in the desktop data path. The daemon still validates every
@@ -255,9 +253,10 @@ Swift gateway exposes fixed actions and safe runtime patches only; controller
 identity, DNS recursion-boundary keys, and every TUN field remain
 unrepresentable. Profile reload maps to `profile.reload`, runtime restart maps
 to `agent.restart`. The daemon accepts either restart only after a bounded,
-generation-matched agent snapshot proves controller, TUN, Fake-IP mode and
-route, both DNS bridges, system DNS ownership, and network consistency,
-followed by a safe Global selector-chain check. The daemon does not issue
+generation-matched agent snapshot proves either controller/DNS standby or the
+complete controller/TUN/Fake-IP route, plus restored system DNS and network
+consistency. Enhanced mode is followed by a safe Global selector-chain check.
+The daemon does not issue
 repeated DNS probes while it waits for that snapshot.
 Failure rolls the profile back when possible and otherwise stops the runtime;
 the window only waits for the resulting authoritative snapshot. Backend/UI self-upgrade
@@ -292,7 +291,7 @@ root-owned; Desktop and CLI receive typed state/results rather than the secret.
 - Startup: hidden.
 - Login startup: after the one-time default above has been applied, macOS starts
   the current-user App hidden. The root LaunchDaemon separately restores the
-  managed service and its `tun.enable: true` profile at system startup.
+  always-on LocalHttpDns service and the persisted standby/Enhanced state.
 - `Show Main Window`: create or reuse the single SwiftUI `NSWindow`, unminimize,
   show, and focus it. The store immediately loads an authenticated XPC snapshot
   and starts four independent bounded streams. If the daemon/controller is

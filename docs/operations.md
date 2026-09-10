@@ -19,9 +19,10 @@ Use `Install / Repair Daemon…` from the tray. The App invokes the bundled
 installer through the standard macOS administrator authorization dialog.
 If no previously authenticated active profile exists, installation stages a
 REJECT-only provisioning profile and starts only the authenticated XPC daemon;
-the agent, TUN, and managed DNS remain stopped. The selected user profile is
-then activated over typed XPC. Only a full-health readback starts networking
-and clears provisioning; a failed activation leaves real system DNS intact.
+the agent and TUN remain stopped. The selected user profile is then activated
+over typed XPC into a controller/DNS standby state with TUN off. LocalHttpDns
+certificate/profile preparation follows; a failed activation leaves the macOS
+system DNS list untouched.
 
 For a remote Mac, first transfer a release App through an authenticated channel
 and verify the complete bundle, then invoke the detached entry point **without**
@@ -60,9 +61,10 @@ The installer:
 3. forces only the loopback controller and DNS recursion-boundary keys;
 4. validates the copied Mihomo configuration;
 5. stops a running Homebrew Mihomo service to prevent duplicate owners;
-6. installs the XPC Mach service and starts the root daemon, which launches the agent;
-7. verifies controller, TUN, Fake-IP route, DNS bridge, Mihomo DNS, persisted
-   PrimaryService DNS, and effective resolver state.
+6. installs the XPC Mach service and starts the root daemon, which launches the
+   agent in TUN-off standby;
+7. verifies controller, Mihomo DNS, absent TUN/Fake-IP route, and that no
+   MihomoBox address remains in persistent or effective system DNS.
 
 From the Config page, **Prepare & Open Profile** first asks the authenticated
 root daemon to build the split-DNS plan from the current controller routes and
@@ -72,23 +74,21 @@ root:wheel mode `0644` and returns only aggregate counts. The profile contains
 both a `com.apple.security.root` certificate payload and the split-DNS payload,
 so the later macOS approval owns both trust and resolver installation. In the
 same typed XPC transaction, the already-installed root daemon validates that
-artifact, keeps its control service online, stops only the supervised network
-agent, generates a root-owned local CA and loopback server certificate/private
-key, discards the CA private key, enables Mihomo's loopback DoH endpoint,
-restores MihomoBox's classic Global DNS setting, and proves the restarted runtime
-healthy. Failure restores the previous identity, prepared profile, runtime files,
-and managed network before returning an error.
+artifact, keeps its control service and standby agent online, generates a
+root-owned local CA and loopback server certificate/private key, discards the
+CA private key, and starts the daemon-owned DoH endpoint. The endpoint is
+validated independently; profile preparation does not require TUN or a Fake-IP
+route. It uses Mihomo DNS only when the complete proxy path is healthy and
+otherwise keeps resolving through physical DNS. Failure restores the previous
+identity and prepared profile atomically before returning an error.
 No administrator dialog, `sudo`, or AppleScript is used after the helper is
 installed. The App opens the validated root-owned profile. Apple requires the
 user to finish installation in **General > Device Management**; **Open Device
-Management** reopens that exact System Settings pane at any time. **Remove Local DoH**
-asks the same typed XPC helper to remove the fixed profile identifier (which also
-removes its certificate payload), restore classic managed-DNS mode, then delete
-the server identity and prepared profile artifact. Profile removal is
-verified before the server identity is deleted; if the DNS-mode transition
-fails, the installer retries classic managed DNS and otherwise leaves normal
-macOS DNS restored with an explicit recovery-required error. Helper uninstall
-performs the same profile/trust cleanup before deleting the root installation.
+Management** reopens that exact System Settings pane at any time. There is no
+normal LocalHttpDns-off action: after approval it remains available whether
+Enhanced TUN is on or off. Full helper uninstall verifies removal of the fixed
+profile identifier before deleting legacy trust residue, server identity and
+the root installation.
 
 Config shows separate `Awaiting macOS Approval`, `Active`, and `Needs Attention`
 states. It refreshes authenticated root/profile state while visible, so
@@ -99,9 +99,10 @@ expanded with attribute filtering; unsupported entry kinds and unrepresentable
 inversions are counted in the panel. Changing a selector, domain rule, or
 GeoSite database requires regenerating the profile.
 
-There are two intentionally separate startup mechanisms. The root
-LaunchDaemon starts the managed network service at system startup with the
-active profile, whose managed configuration requires `tun.enable: true`. Once
+There are two intentionally separate startup mechanisms. The root LaunchDaemon
+starts LocalHttpDns and the managed Mihomo runtime at system startup. The
+persisted `enhancedTUNEnabled` value chooses controller/DNS standby or Enhanced
+TUN; LocalHttpDns is unchanged by that choice. Once
 the App has observed a healthy Enhanced TUN runtime, it also applies a one-time
 current-user login-item default so the hidden tray App returns after login.
 Only an installed copy under `/Applications` or `~/Applications` applies this
@@ -151,10 +152,10 @@ health; App and CLI report success only after that commit. Plist, path-layout,
 signing-certificate, or control-protocol migrations still require **Install /
 Repair Daemon**.
 
-### Migrating a 0.7 daemon
+### Migrating an older control protocol
 
-The 0.8.1 App recognizes the authenticated version-1 response emitted by an
-installed 0.7 daemon. It does not reinterpret a connection failure, malformed
+The App recognizes an authenticated response from any older control protocol.
+It does not reinterpret a connection failure, malformed
 reply, missing marker file, or error string as proof of a legacy daemon. In the
 confirmed legacy state the tray shows `Daemon upgrade required` and disables
 all incompatible XPC actions. Select the emphasized `Upgrade Daemon…` item (or
@@ -162,12 +163,12 @@ all incompatible XPC actions. Select the emphasized `Upgrade Daemon…` item (or
 verified installer. Repair preserves the root-owned active profile and does
 not import user profile bytes again.
 
-The repair briefly restarts Mihomo, Enhanced TUN and managed DNS. It succeeds
-only after a version-2 tray-state response is received; cancellation, timeout,
-rollback, or another version-1 response leaves the repair-required state
+The repair briefly restarts Mihomo and migrates legacy DNS state to
+LocalHttpDns standby. It succeeds only after a version-3 tray-state response is
+received; cancellation, timeout, rollback, or another older response leaves the repair-required state
 visible. An installation with a root-owned active profile must also pass the
 full controller/TUN/Fake-IP/DNS health gate. Without one, repair safely remains
-in REJECT-only provisioning with the agent, TUN, and managed DNS stopped until
+in REJECT-only provisioning with the agent and TUN stopped until
 the user activates a profile. Verify that `component-version` reports the
 current App version and the root daemon/agent/Mihomo and root-owned CLI came
 from the verified App snapshot. The root installer rejects a version below its
@@ -235,9 +236,10 @@ installation files:
 mihomoboxctl stop
 ```
 
-The tray exposes the same operation through authenticated XPC.
-It restores system DNS, removes the managed alias, flushes system/Mihomo DNS
-caches, stops TUN, and removes its routes.
+The tray no longer uses this as the Enhanced TUN switch: disabling Enhanced TUN
+returns to standby and keeps LocalHttpDns active. The explicit CLI stop remains
+a recovery operation for Mihomo; it also restores any legacy DNS backup,
+removes a daemon-created alias, flushes caches, stops TUN, and removes its routes.
 
 To remove the installed service and files entirely, invoke the CLI inside the
 signed App (the standalone root-owned CLI deliberately cannot authorize an App
@@ -402,10 +404,10 @@ Provisioning installation also requires no managed
 agent or Mihomo process, no TUN or Fake-IP route, and no managed DNS listener
 before it reports a safely stopped runtime.
 
-`--health` reports controller, TUN, Fake-IP route, DNS bridge, Mihomo DNS, and
-system-DNS consistency. The first failed observation immediately disables
-Fake-IP answers. Domains still owned by Fake-IP fail closed instead of leaking
-to original DNS; only domains explicitly excluded by the active Fake-IP policy
-may receive real upstream answers. Recovery starts after three consecutive
-failures; only a failed recovery window rolls back real system DNS and stops
-the managed Mihomo child.
+`--health` reports controller, TUN, Fake-IP route, Mihomo DNS, absence of legacy
+system-DNS ownership, and overall consistency. The first failed Enhanced-mode
+observation immediately disables Fake-IP answers. Domains still owned by
+Fake-IP fail closed instead of leaking to original DNS; only domains explicitly
+excluded by the active Fake-IP policy may receive real upstream answers.
+Recovery starts after three consecutive failures. TUN-off standby does not
+accrue those failures, and LocalHttpDns remains available through physical DNS.

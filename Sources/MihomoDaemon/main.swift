@@ -40,6 +40,7 @@ do {
         configPath: configPath,
         startupClock: startupClock
     )
+    defer { dispatcher.stopIndependentServices() }
     let server = try ControlServer(dispatcher: dispatcher)
 
     let signalQueue = DispatchQueue(label: "dev.linsheng.mihomo.daemon.signal")

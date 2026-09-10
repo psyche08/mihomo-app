@@ -175,13 +175,13 @@ final class TrayModelTests: XCTestCase {
       systemDNSManaged: false,
       healthTUNEnabled: false
     )
-    XCTAssertEqual(snapshot.networkStatusTitle, "Network: Stopped — DNS restored")
+    XCTAssertEqual(snapshot.networkStatusTitle, "Network: Mihomo stopped")
 
     snapshot.networkHealthy = nil
-    XCTAssertEqual(snapshot.networkStatusTitle, "Network: Stopped — restore unconfirmed")
+    XCTAssertEqual(snapshot.networkStatusTitle, "Network: Mihomo stopped — state unconfirmed")
     snapshot.networkHealthy = true
     snapshot.systemDNSManaged = true
-    XCTAssertEqual(snapshot.networkStatusTitle, "Network: Stopped — restore unconfirmed")
+    XCTAssertEqual(snapshot.networkStatusTitle, "Network: Mihomo stopped — state unconfirmed")
   }
 
   func testBusyNetworkStatusNamesTheCurrentPhase() {

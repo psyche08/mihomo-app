@@ -2,6 +2,7 @@ import Foundation
 import CMihomoDNSSystem
 import Darwin
 @preconcurrency import NIOCore
+@preconcurrency import NIOHTTP1
 @preconcurrency import NIOPosix
 import SystemConfiguration
 import XCTest
@@ -473,30 +474,67 @@ final class CoreTests: XCTestCase {
         ).validate()) { error in
             XCTAssertEqual(error as? ConfigurationError, .incompatibleDNSOwnership)
         }
+        XCTAssertThrowsError(try ProxyConfiguration(
+            manageSystemDNS: false,
+            enhancedTUNEnabled: true,
+            localDoH: nil
+        ).validate()) { error in
+            XCTAssertEqual(error as? ConfigurationError, .incompatibleDNSOwnership)
+        }
     }
 
-    func testMihomoProcessAllowsOnlyTheManagedLocalDoHIdentityPath() {
+    func testMihomoProcessNeverInheritsSafePaths() {
         let inherited = ["PATH": "/usr/bin", "SAFE_PATHS": "/tmp:/etc"]
-        let classic = MihomoSupervisor.processEnvironment(
-            base: inherited,
-            localDoH: nil
-        )
-        XCTAssertNil(classic["SAFE_PATHS"], "classic mode must not inherit a broad exception")
+        let environment = MihomoSupervisor.processEnvironment(base: inherited)
+        XCTAssertNil(environment["SAFE_PATHS"])
+        XCTAssertEqual(environment["PATH"], "/usr/bin")
+    }
 
-        let localDoH = MihomoSupervisor.processEnvironment(
-            base: inherited,
-            localDoH: LocalDoHConfiguration()
+    func testIndependentLocalDoHAcceptsPostAndGetWireQueries() throws {
+        let query = try XCTUnwrap(DNSMessage.addressQuery(for: "example.com"))
+        var body = ByteBufferAllocator().buffer(capacity: query.count)
+        body.writeBytes(query)
+        var post = HTTPRequestHead(version: .http1_1, method: .POST, uri: "/dns-query")
+        post.headers.add(name: "content-type", value: "application/dns-message")
+        XCTAssertEqual(try LocalDoHHTTPRequest.query(head: post, body: body), query)
+
+        let encoded = query.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        let get = HTTPRequestHead(
+            version: .http1_1,
+            method: .GET,
+            uri: "/dns-query?dns=\(encoded)"
         )
         XCTAssertEqual(
-            localDoH["SAFE_PATHS"],
-            "/Library/Application Support/Mihomo App/local-doh"
+            try LocalDoHHTTPRequest.query(
+                head: get,
+                body: ByteBufferAllocator().buffer(capacity: 0)
+            ),
+            query
         )
+    }
 
-        let altered = MihomoSupervisor.processEnvironment(
-            base: inherited,
-            localDoH: LocalDoHConfiguration(certificatePath: "/tmp/server.crt")
-        )
-        XCTAssertNil(altered["SAFE_PATHS"], "an altered identity path must fail closed")
+    func testIndependentLocalDoHRejectsNonDoHRequests() throws {
+        let query = try XCTUnwrap(DNSMessage.addressQuery(for: "example.com"))
+        var body = ByteBufferAllocator().buffer(capacity: query.count)
+        body.writeBytes(query)
+        let wrongPath = HTTPRequestHead(version: .http1_1, method: .POST, uri: "/")
+        XCTAssertThrowsError(try LocalDoHHTTPRequest.query(head: wrongPath, body: body)) {
+            XCTAssertEqual($0 as? LocalDoHHTTPError, .notFound)
+        }
+
+        var wrongType = HTTPRequestHead(version: .http1_1, method: .POST, uri: "/dns-query")
+        wrongType.headers.add(name: "content-type", value: "application/json")
+        XCTAssertThrowsError(try LocalDoHHTTPRequest.query(head: wrongType, body: body)) {
+            XCTAssertEqual($0 as? LocalDoHHTTPError, .unsupportedMediaType)
+        }
+
+        let missingType = HTTPRequestHead(version: .http1_1, method: .POST, uri: "/dns-query")
+        XCTAssertThrowsError(try LocalDoHHTTPRequest.query(head: missingType, body: body)) {
+            XCTAssertEqual($0 as? LocalDoHHTTPError, .unsupportedMediaType)
+        }
     }
 
     func testExistingLoopbackAliasIsIgnored() throws {

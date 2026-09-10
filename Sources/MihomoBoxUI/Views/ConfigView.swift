@@ -209,7 +209,7 @@ public struct ConfigView: View {
         }
 
         Text(
-          "Enhanced TUN remains read-only here. Its lifecycle, DNS restore and startup transaction stay in the signed daemon and menu bar."
+          "Enhanced TUN remains read-only here. LocalHttpDns must be installed first and stays active when TUN is turned off. MihomoBox does not replace the system DNS server list."
         )
         .font(.system(size: 10))
         .foregroundStyle(DashboardTheme.muted.opacity(0.72))
@@ -306,7 +306,7 @@ public struct ConfigView: View {
   }
 
   private var localDoHPanel: some View {
-    configPanel("Local DNS over HTTPS", symbol: "lock.shield") {
+    configPanel("LocalHttpDns", symbol: "lock.shield") {
       VStack(alignment: .leading, spacing: 10) {
         HStack(spacing: 10) {
           StatusPill(
@@ -374,7 +374,7 @@ public struct ConfigView: View {
         }
 
         Text(
-          "The privileged helper prepares the server and profile without another password prompt. macOS applies certificate trust and split DNS together after one final confirmation in General › Device Management. Re-run Prepare after changing proxy-domain rules to update the profile."
+          "After the root helper is installed, prepare and approve this certificate/profile once. LocalHttpDns then remains active on port 9443 whether Enhanced TUN is on or off. With TUN off it resolves through physical DNS; with TUN healthy it may use Mihomo DNS. MihomoBox never replaces the system DNS server list. Re-run Prepare after changing proxy-domain rules."
         )
         .font(.system(size: 10))
         .foregroundStyle(DashboardTheme.muted.opacity(0.72))
@@ -402,15 +402,6 @@ public struct ConfigView: View {
             }
             .disabled(store.configAction != nil)
 
-            actionButton(
-              "Remove Local DoH",
-              symbol: "trash",
-              tint: DashboardTheme.warning,
-              actionKind: .removingLocalDoH
-            ) {
-              await store.removeLocalDoH()
-            }
-
             Button {
               Task { await store.refreshLocalDoHStatus() }
             } label: {
@@ -436,7 +427,7 @@ public struct ConfigView: View {
     case .unavailable: "Unavailable"
     case .statusUnavailable: "Status Unavailable"
     case .off:
-      store.localDoHSystemDNSManaged == true ? "Off · Classic DNS Active" : "Off"
+      "Setup Required"
     case .awaitingApproval: "Awaiting macOS Approval"
     case .active: "Active"
     case .degraded: "Needs Attention"
@@ -459,17 +450,13 @@ public struct ConfigView: View {
     case .statusUnavailable:
       "The authenticated daemon could not verify Local DoH state. Allow component synchronization or use Install / Repair Daemon, then refresh."
     case .off:
-      if store.localDoHSystemDNSManaged == true {
-        "Local DoH is off. MihomoBox is using its classic managed DNS bridge."
-      } else {
-        "Local DoH is off. Start or repair MihomoBox to restore its classic managed DNS bridge."
-      }
+      "Install the root helper, then prepare and approve the LocalHttpDns profile before enabling Enhanced TUN."
     case .awaitingApproval:
       "The local HTTPS server is healthy, but the DNS Settings profile is not installed. Finish the required confirmation in General › Device Management."
     case .active:
-      "The local HTTPS server and macOS split-DNS profile are both active."
+      "The independent local HTTPS server and macOS split-DNS profile are both active; proxy or TUN failure does not stop DNS on port 9443."
     case .degraded:
-      "The server and installed profile do not agree. Repair by regenerating the profile, or remove Local DoH to restore classic managed DNS."
+      "The server and installed profile do not agree. Regenerate and approve the LocalHttpDns profile; Enhanced TUN remains unavailable until it is healthy."
     }
   }
 

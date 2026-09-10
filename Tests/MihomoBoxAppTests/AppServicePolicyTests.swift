@@ -45,7 +45,7 @@ final class AppServicePolicyTests: XCTestCase {
         enhancedTUN: true, profileSelected: true, daemonInstalled: true,
         controllerReachable: true
       ),
-      .stopAndRestore
+      .disableTUN
     )
     XCTAssertEqual(
       EnhancedTUNActionPolicy.resolve(
@@ -77,18 +77,18 @@ final class AppServicePolicyTests: XCTestCase {
     )
   }
 
-  func testProtocolMismatchClassificationOnlyRepairsExactLegacyV1() {
+  func testProtocolMismatchClassificationRepairsAllOlderDaemonProtocols() {
     XCTAssertEqual(
-      TrayStateCoordinator.protocolCompatibility(expected: 2, received: 1),
+      TrayStateCoordinator.protocolCompatibility(expected: 3, received: 1),
       .legacyRepairRequired(peerVersion: 1)
     )
     XCTAssertEqual(
-      TrayStateCoordinator.protocolCompatibility(expected: 2, received: 3),
-      .appUpdateRequired(peerVersion: 3)
+      TrayStateCoordinator.protocolCompatibility(expected: 3, received: 2),
+      .legacyRepairRequired(peerVersion: 2)
     )
     XCTAssertEqual(
-      TrayStateCoordinator.protocolCompatibility(expected: 3, received: 1),
-      .incompatible(peerVersion: 1)
+      TrayStateCoordinator.protocolCompatibility(expected: 3, received: 4),
+      .appUpdateRequired(peerVersion: 4)
     )
   }
 

@@ -31,8 +31,16 @@ struct LocalDoHStatusProvider {
             // `profiles` exits successfully with a short plain-text message
             // when the fixed identifier is absent. Only plist output can prove
             // installation; absence is still a successful inspection.
-            let inspection = LocalDoHProfileInspection.inspect(propertyList: data)
-                ?? .init(installed: false)
+            let certificatePath = URL(
+                fileURLWithPath: LocalDoHProfileDocument.managedProfilePath
+            ).deletingLastPathComponent().appendingPathComponent("local-doh/ca.der")
+            let rootCertificate = secureRootCertificate(at: certificatePath)
+            let inspection = rootCertificate.flatMap {
+                LocalDoHProfileInspection.validatedInstalled(
+                    propertyList: data,
+                    expectedRootCertificate: $0
+                )
+            } ?? .init(installed: false)
             return (true, inspection)
         } catch {
             return (false, .init(installed: false))
@@ -74,5 +82,17 @@ struct LocalDoHStatusProvider {
             return .init(installed: false)
         }
         return .init(installed: true, domainCount: domainCount)
+    }
+
+    private static func secureRootCertificate(at url: URL) -> Data? {
+        var metadata = stat()
+        guard lstat(url.path, &metadata) == 0,
+              metadata.st_mode & S_IFMT == S_IFREG,
+              metadata.st_uid == 0,
+              metadata.st_gid == 0,
+              metadata.st_mode & 0o777 == 0o644,
+              metadata.st_size > 0,
+              metadata.st_size <= 128 * 1_024 else { return nil }
+        return try? Data(contentsOf: url, options: [.mappedIfSafe])
     }
 }

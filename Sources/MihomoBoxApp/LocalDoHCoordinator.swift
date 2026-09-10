@@ -53,10 +53,6 @@ final class LocalDoHCoordinator: DashboardLocalDoHService {
     return summary
   }
 
-  func remove() async throws {
-    try await control.removeLocalDoH()
-  }
-
   func openDeviceManagement() async throws {
     guard NSWorkspace.shared.open(Self.deviceManagementURL) else {
       throw NSError(

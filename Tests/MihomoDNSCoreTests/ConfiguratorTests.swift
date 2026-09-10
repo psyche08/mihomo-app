@@ -330,7 +330,7 @@ extension ConfiguratorTests {
         XCTAssertEqual(daemon["loopbackAlias"] as? String, "127.0.0.53")
     }
 
-    func testLocalDoHRuntimeInjectsLoopbackTLSAndRestoresFromRawProfile() throws {
+    func testLocalDoHRuntimeRemovesMihomoTLSDoHOwnership() throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let config = directory.appendingPathComponent("config.yaml")
@@ -349,6 +349,7 @@ extension ConfiguratorTests {
         """.write(to: config, atomically: true, encoding: .utf8)
         let runtimeConfiguration = ProxyConfiguration(
             manageSystemDNS: false,
+            enhancedTUNEnabled: false,
             localDoH: LocalDoHConfiguration()
         )
         let encoder = JSONEncoder()
@@ -360,40 +361,61 @@ extension ConfiguratorTests {
             runtimeConfig: runtime.path
         ), resolver: StubResolver(answers: [:]))
         let result = try String(contentsOf: config, encoding: .utf8)
-        XCTAssertTrue(result.contains("external-controller-tls: 127.0.0.1:9443\n"))
-        XCTAssertTrue(result.contains("external-doh-server: /dns-query\n"))
-        let resultLines = result.split(separator: "\n", omittingEmptySubsequences: false)
-            .map { String($0) + "\n" }
-        XCTAssertEqual(
-            MihomoConfigurator.directScalar(resultLines, section: "tls", key: "certificate"),
-            "/Library/Application Support/Mihomo App/local-doh/server.crt"
-        )
-        XCTAssertEqual(
-            MihomoConfigurator.directScalar(resultLines, section: "tls", key: "private-key"),
-            "/Library/Application Support/Mihomo App/local-doh/server.key"
-        )
-        XCTAssertFalse(
-            result.contains(#"\/Library\/Application Support"#),
-            "JSON-style escaped slashes are invalid in a YAML double-quoted scalar"
-        )
+        XCTAssertFalse(result.contains("external-controller-tls:"))
+        XCTAssertFalse(result.contains("external-doh-server:"))
+        XCTAssertFalse(result.contains("\ntls:"))
         XCTAssertFalse(result.contains("/tmp/user.crt"))
+        XCTAssertTrue(result.contains("tun:\n  enable: false"))
     }
 
-    func testLocalDoHConfigurationStoreMakesDNSOwnershipMutuallyExclusive() throws {
+    func testLocalDoHConfigurationStoreKeepsBaseDNSWhileTUNToggles() throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let runtime = directory.appendingPathComponent("daemon.json")
         let encoder = JSONEncoder()
-        try encoder.encode(ProxyConfiguration()).write(to: runtime)
+        try encoder.encode(ProxyConfiguration(
+            manageSystemDNS: false,
+            enhancedTUNEnabled: true,
+            localDoH: LocalDoHConfiguration()
+        )).write(to: runtime)
 
-        try LocalDoHConfigurationStore.setEnabled(true, configurationPath: runtime.path)
+        try LocalDoHConfigurationStore.ensureBaseService(configurationPath: runtime.path)
         var configured = try ProxyConfiguration.load(path: runtime.path)
         XCTAssertFalse(configured.manageSystemDNS)
         XCTAssertEqual(configured.localDoH?.endpoint, Endpoint(host: "127.0.0.1", port: 9443))
+        XCTAssertFalse(configured.expectsEnhancedTUN)
 
-        try LocalDoHConfigurationStore.setEnabled(false, configurationPath: runtime.path)
+        try LocalDoHConfigurationStore.setEnhancedTUN(true, configurationPath: runtime.path)
         configured = try ProxyConfiguration.load(path: runtime.path)
-        XCTAssertTrue(configured.manageSystemDNS)
-        XCTAssertNil(configured.localDoH)
+        XCTAssertTrue(configured.expectsEnhancedTUN)
+        XCTAssertFalse(configured.manageSystemDNS)
+        XCTAssertNotNil(configured.localDoH)
+
+        try LocalDoHConfigurationStore.setEnhancedTUN(false, configurationPath: runtime.path)
+        configured = try ProxyConfiguration.load(path: runtime.path)
+        XCTAssertFalse(configured.expectsEnhancedTUN)
+        XCTAssertFalse(configured.manageSystemDNS)
+        XCTAssertNotNil(configured.localDoH)
+    }
+
+    func testLegacyRuntimeWithoutExplicitTUNIntentPreservesEnabledProfile() throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let config = directory.appendingPathComponent("config.yaml")
+        let runtime = directory.appendingPathComponent("daemon.json")
+        try profile.write(to: config, atomically: true, encoding: .utf8)
+        try #"{"localDoH":{"endpoint":{"host":"127.0.0.1","port":9443},"serverURL":"https://127.0.0.1:9443/dns-query","certificatePath":"/Library/Application Support/Mihomo App/local-doh/server.crt","privateKeyPath":"/Library/Application Support/Mihomo App/local-doh/server.key"}}"#
+            .write(to: runtime, atomically: true, encoding: .utf8)
+
+        try MihomoConfigurator.apply(MihomoConfigurator.Paths(
+            config: config.path,
+            backup: directory.appendingPathComponent("backup.yaml").path,
+            runtimeConfig: runtime.path
+        ), resolver: StubResolver(answers: [:]))
+
+        XCTAssertTrue(
+            try String(contentsOf: config, encoding: .utf8)
+                .contains("tun:\n  enable: true")
+        )
     }
 }

@@ -74,6 +74,20 @@ actor TrayControlClient {
     return observed
   }
 
+  func disableEnhancedTUN() throws -> TrayControlPoll {
+    _ = try send(
+      ControlRequest(operation: .setTUN, arguments: ["enabled": "false"]),
+      retryReadOnce: false
+    )
+    let observed = try poll()
+    guard observed.agentRunning, observed.controllerReachable,
+      !observed.enhancedTUN, observed.networkHealthy == true
+    else {
+      throw TrayControlError.readbackMismatch("Enhanced TUN standby")
+    }
+    return observed
+  }
+
   func startAgent() throws -> TrayControlPoll? {
     _ = try send(ControlRequest(operation: .startAgent), retryReadOnce: false)
     return try? poll()
@@ -166,10 +180,6 @@ actor TrayControlClient {
     )
     guard !payload.isEmpty else { throw TrayControlError.missingPayload }
     return try JSONDecoder().decode(LocalDoHPlanSummary.self, from: payload)
-  }
-
-  func removeLocalDoH() throws {
-    _ = try send(ControlRequest(operation: .removeLocalDoH), retryReadOnce: false)
   }
 
   func upgradeComponents(_ package: ComponentUpdatePackage, daemonWillRestart: Bool) throws {

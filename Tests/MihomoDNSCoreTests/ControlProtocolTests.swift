@@ -10,9 +10,7 @@ final class ControlProtocolTests: XCTestCase {
         XCTAssertTrue(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .setTUN))
         XCTAssertTrue(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .reloadProfile))
         XCTAssertTrue(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .localDoHStatus))
-        XCTAssertTrue(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .prepareLocalDoHProfile))
         XCTAssertTrue(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .installLocalDoH))
-        XCTAssertTrue(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .removeLocalDoH))
     }
 
     func testLocalDoHStatusRoundTripsWithoutProfileDetails() throws {
@@ -145,6 +143,52 @@ final class ControlProtocolTests: XCTestCase {
             LocalDoHProfileInspection(installed: true, domainCount: 2)
         )
         XCTAssertNil(LocalDoHProfileInspection.inspect(propertyList: Data("not a plist".utf8)))
+    }
+
+    func testInstalledLocalDoHProfileMustMatchCurrentRootCertificate() throws {
+        let plan = LocalDoHDomainPlan(
+            domains: ["example.com"],
+            omittedRules: 0,
+            exactDomainApproximations: 0,
+            expandedGeoSiteRules: 0,
+            unrepresentableGeoSiteEntries: 0,
+            invertedGeoSiteRules: 0
+        )
+        let currentRoot = Data([0x01, 0x02, 0x03])
+        let document = try LocalDoHProfileDocument.data(
+            for: plan,
+            rootCertificate: currentRoot
+        )
+        let installed: [String: Any] = [
+            "_computerlevel": [
+                try XCTUnwrap(
+                    PropertyListSerialization.propertyList(
+                        from: document,
+                        options: [],
+                        format: nil
+                    ) as? [String: Any]
+                )
+            ]
+        ]
+        let output = try PropertyListSerialization.data(
+            fromPropertyList: installed,
+            format: .xml,
+            options: 0
+        )
+
+        XCTAssertEqual(
+            LocalDoHProfileInspection.validatedInstalled(
+                propertyList: output,
+                expectedRootCertificate: currentRoot
+            ),
+            LocalDoHProfileInspection(installed: true, domainCount: 1)
+        )
+        XCTAssertNil(
+            LocalDoHProfileInspection.validatedInstalled(
+                propertyList: output,
+                expectedRootCertificate: Data([0xff])
+            )
+        )
     }
 
     func testComponentUpdatePackageBinaryRoundTrip() throws {
@@ -427,7 +471,7 @@ extension ControlProtocolTests {
             XCTAssertTrue(controlError.localizedDescription.contains("Install / Repair Daemon"))
         }
 
-        response.version = 3
+        response.version = mihomoControlProtocolVersion + 1
         XCTAssertThrowsError(try response.validated()) { error in
             guard let controlError = error as? ControlError else {
                 return XCTFail("expected ControlError, got \(error)")
@@ -436,7 +480,7 @@ extension ControlProtocolTests {
                 return XCTFail("expected protocolVersionMismatch, got \(controlError)")
             }
             XCTAssertEqual(expected, mihomoControlProtocolVersion)
-            XCTAssertEqual(received, 3)
+            XCTAssertEqual(received, mihomoControlProtocolVersion + 1)
             XCTAssertFalse(controlError.isLegacyDaemonProtocol)
             XCTAssertFalse(controlError.isDisconnection)
             XCTAssertTrue(controlError.localizedDescription.contains("update MihomoBox"))

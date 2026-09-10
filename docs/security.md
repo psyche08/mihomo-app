@@ -42,7 +42,7 @@
   When no root-owned active-profile marker exists, the installer always stages
   the bundled REJECT-only provisioning profile and never reuses an unowned
   legacy config. The LaunchDaemon exposes authenticated XPC but does not start
-  the agent, TUN, or managed DNS in this state. The App activates the selected
+  the agent or TUN in this state. The App activates the selected
   profile through typed XPC; only its full-health transaction clears the
   provisioning marker and starts networking. A failed first activation keeps
   real system DNS and cannot silently direct or block traffic. Provisioning is
@@ -80,7 +80,7 @@
   network health before clearing it. Power loss or failed health restores the
   complete prior signed set with same-filesystem atomic replacement. While
   recovery is incomplete, runtime mutations fail closed.
-- Local DoH setup is a fixed authenticated XPC operation of the already
+- LocalHttpDns setup is a fixed authenticated XPC operation of the already
   installed root daemon; it accepts no certificate, key, hostname, port,
   output path, or arbitrary domain argument. The daemon generates the identity at a fixed root-owned
   path and deletes the CA private key after issuing the loopback server
@@ -95,20 +95,19 @@
   inversions are omitted without widening scope, an empty list is rejected,
   and there is no silent domain-count truncation. The daemon atomically writes
   one fixed root-owned profile artifact and validates its ownership, mode and
-  fixed payload fields before changing runtime state. The root XPC service
-  remains available while only the supervised agent is stopped; runtime files,
-  identity and prepared profile are rolled back before the previous network is restarted.
-  XPC returns only
-  server/profile booleans and aggregate counts. Removal verifies the fixed
-  installed profile is absent before deleting the exact trust record, server
-  identity, or prepared artifact.
+  fixed payload fields before publication. The root XPC service, standby agent
+  and existing LocalHttpDns listener remain available; identity and prepared
+  profile are rolled back together on failure. XPC returns only server/profile
+  booleans and aggregate counts. Full helper uninstall verifies the fixed
+  installed profile is absent before deleting legacy trust residue, server
+  identity, or the prepared artifact.
 - A signed legacy protocol response is not permission to downgrade the App's
-  XPC requests. Version 1 is classified only from the authenticated response
+  XPC requests. An older version is classified only from the authenticated response
   envelope, never from a marker file or error string. The tray disables all
   incompatible mutations and requires the user to select the exact-CDHash
   verified installer; polling and component synchronization cannot open an
   administrator prompt. An already-open dashboard request still fails at the
-  typed version-2 boundary and cannot mutate or elevate. A peer newer than the
+  typed version-3 boundary and cannot mutate or elevate. A peer newer than the
   App disables repair to prevent signed downgrade. The legacy component-update
   path is never re-enabled.
 - The privileged root LaunchDaemon executes stable root-owned copies, never
@@ -197,12 +196,13 @@ bytes to the daemon through XPC.
 
 ## Recovery Guarantees
 
-- Original DNS is backed up before mutation.
-- Restore is compare-before-write and respects external changes.
-- Pre-existing `127.0.0.53` aliases are not removed.
+- Legacy original DNS is restored once during protocol-3 migration; its backup
+  and compare-before-write guarantees are retained for uninstall/recovery.
+- Pre-existing `127.0.0.53` aliases are not removed by legacy cleanup.
 - Original-DNS sockets bind to the physical interface to avoid TUN recursion.
-- Local DoH and direct SystemConfiguration DNS ownership cannot be enabled at
-  the same time; local DoH health requires the old managed DNS to be restored.
+- LocalHttpDns is the only normal DNS integration and never writes the system
+  DNS server list. Enhanced TUN cannot be enabled until the fixed identity,
+  installed profile and live 9443 listener are all verified.
 - A stale PID is terminated only after executable-path verification.
 - Profile reload is serialized by the daemon and rolls back configuration and
   agent state together on failure.

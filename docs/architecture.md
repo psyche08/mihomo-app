@@ -18,13 +18,14 @@ MihomoBox.app (current user)
 └── mihomo-daemon                   privileged XPC broker only
     ├── validates every peer's code-signing requirement
     ├── owns privileged lifecycle/profile transactions
+    ├── keeps 127.0.0.1:9443 Local DoH alive independently of TUN
     └── launches and monitors exactly one mihomo-agent
               │
               ▼
     mihomo-agent (root worker)
     ├── launches and supervises the pinned Mihomo process
-    ├── listens on 127.0.0.53:53 and 127.0.0.1:1054
-    ├── manages CurrentSet/Network/Service/<PrimaryService>/DNS
+    ├── listens on 127.0.0.1:1054 for Mihomo's original-DNS escape
+    ├── never replaces CurrentSet/Network/Service/*/DNS in normal use
     └── observes DHCP, interface, route, and split-DNS changes
 ```
 
@@ -40,10 +41,10 @@ set through that XPC boundary without modifying the LaunchDaemon plist.
 
 An install without an existing root-owned active-profile marker stages the
 bundled REJECT provisioning profile, but the LaunchDaemon starts only its XPC
-control plane. The agent, TUN, and DNS ownership remain stopped until the App
-activates its bounded snapshot of the selected user profile and the daemon
-proves full network health. This avoids both a DIRECT window and a temporary
-traffic outage while keeping user-controlled paths outside the root bootstrap.
+control plane. After profile activation the agent starts in controller/DNS
+standby with TUN off. The App then prepares the LocalHttpDns certificate and
+split-DNS profile; only explicit macOS approval makes Enhanced TUN eligible.
+This avoids both a DIRECT window and user-controlled paths inside root bootstrap.
 
 ## Ownership
 
@@ -55,11 +56,14 @@ traffic outage while keeping user-controlled paths outside the root bootstrap.
 | Desktop/CLI control requests | signed XPC client | no direct privileged or controller access |
 | XPC authentication and command authorization | root daemon | one narrow privilege boundary |
 | Agent lifecycle and profile transactions | root daemon | serialized, rollback-capable mutations |
-| Mihomo process, DNS, network observation | root agent | one runtime owner keeps network state coherent |
+| Mihomo process, original-DNS escape, network observation | root agent | one runtime owner keeps proxy network state coherent |
+| LocalHttpDns TLS endpoint and physical-DNS fallback | root daemon | encrypted split DNS survives agent, Mihomo and TUN failure |
 | Controller credentials | root runtime boundary | clients receive typed results, never the secret |
 | MetaCubeXD reference | pinned source and screenshots, not executable App content | reproducible visual provenance |
 
-The daemon does not bind DNS sockets, watch network state, or launch Mihomo.
+The daemon binds only the fixed LocalHttpDns TLS socket and observes physical
+DNS for its fallback path. It does not own TUN, port 53, port 1054, or launch
+Mihomo directly. No MihomoBox component replaces the macOS system DNS list.
 The agent does not accept connections from Desktop or CLI. It is launched only
 from the stable root-owned daemon and terminates through the daemon-controlled
 safe shutdown path.
@@ -82,13 +86,12 @@ validation before exchanging messages:
 Requests are typed and versioned. The broker allowlist covers status/snapshot,
 agent start-stop-restart, profile import/switch/reload, Enhanced TUN, outbound
 mode, proxy selection, latency tests, signed component synchronization, the
-fixed Local DoH status projection and root-side install/remove transactions, and the
-native dashboard's validated controller REST and live stream routes. Local DoH
-installation reads the authenticated controller state and exact managed
+fixed LocalHttpDns status projection and root-side prepare transaction, and the
+native dashboard's validated controller REST and live stream routes. LocalHttpDns
+preparation reads the authenticated controller state and exact managed
 root-owned `GeoSite.dat`, writes one fixed root-owned `.mobileconfig` containing
-the generated root-certificate and split-DNS payloads, stops only the supervised
-network agent, prepares the fixed loopback identity, rebuilds the active runtime,
-and returns aggregate counts only;
+the generated root-certificate and split-DNS payloads, prepares the fixed
+loopback identity without stopping the standby agent, and returns aggregate counts only;
 expanded domain names never cross XPC and the root daemon remains online.
 Component synchronization
 accepts exactly three named binary blobs with fixed size limits, validates each
@@ -109,7 +112,7 @@ after an uncached inspection proves the agent/controller/TUN are gone, system
 DNS is unmanaged, and the remaining network state is consistent.
 
 Protocol negotiation also fails closed. A native App that receives an
-authenticated version-1 response from a pre-native daemon marks that daemon as
+authenticated response from any older protocol marks that daemon as
 reachable but incompatible, disables every runtime/profile mutation, and
 offers an explicit verified `Install / Repair Daemon` action. It never retries
 the request as version 1 and never sends the older non-transactional component
@@ -121,24 +124,25 @@ not a background consequence of polling or update checks.
 ## Startup Sequence
 
 1. launchd starts `mihomo-daemon` and registers its Mach service before login.
-2. The daemon validates its root-owned configuration and agent executable,
-   then launches one `mihomo-agent`.
-3. The agent discovers DHCP/supplemental resolvers and their interfaces.
-4. The agent binds the original-DNS listener on `127.0.0.1:1054`.
-5. The agent adds `127.0.0.53` to `lo0`, binds UDP/TCP 53, and starts Mihomo.
-6. After controller, TUN, fake-IP route, and DNS validation, the agent backs up
-   and applies DNS to the active PrimaryService. Its observer publishes the
-   daemon-supplied runtime generation with the complete health result; only
-   that generation may commit the startup transaction.
+2. The daemon atomically migrates any legacy configuration to LocalHttpDns with
+   TUN off and restores stale `127.0.0.53` DNS ownership once.
+3. When a LocalHttpDns identity exists, it starts `127.0.0.1:9443`; a
+   five-second supervisor rebinds after a transient port conflict or listener
+   failure.
+4. The agent discovers DHCP/supplemental resolvers, binds the original-DNS
+   listener on `127.0.0.1:1054`, and starts Mihomo.
+5. Its generation-bound observer commits either controller/DNS standby (TUN
+   and Fake-IP route absent) or the persisted Enhanced state (controller, TUN,
+   Fake-IP route and Mihomo DNS healthy). Neither state writes system DNS.
 7. The Swift `NSApplication` starts with accessory activation policy, compares bundled and installed
    component digests through XPC, and synchronizes signed changes when the
-   daemon protocol is compatible. A legacy version-1 reply enters the explicit
+   daemon protocol is compatible. An older-protocol reply enters the explicit
    verified repair state described above before any component mutation.
 8. The AppKit tray polls runtime state through XPC. The first healthy Enhanced TUN state
    observed from an App in `/Applications` or `~/Applications` applies a
    one-time user-level default to start MihomoBox hidden at login. The root
    LaunchDaemon, rather than this login item, remains responsible for restoring
-   the managed service and `tun.enable: true` at system startup.
+   LocalHttpDns and the persisted standby/Enhanced state at system startup.
 9. Sparkle checks the signed App update feed. The main `NSWindow` is still absent;
    selecting `Show Main Window` creates one `NSHostingController`, starts the
    bounded SwiftUI controller streams, and reuses that window until App exit.
@@ -178,7 +182,8 @@ dialog; only the explicit repair boundaries described above do.
 | Endpoint | Direction | Purpose |
 |---|---|---|
 | XPC `dev.linsheng.mihomo.daemon.control` | Desktop/CLI → daemon | authenticated control plane |
-| `127.0.0.53:53` UDP/TCP | macOS → agent | system DNS through Mihomo, with original-DNS fallback |
+| `127.0.0.1:9443` HTTPS | macOS → daemon | always-on split DoH with managed-Mihomo then physical-DNS fallback |
+| `127.0.0.53:53` UDP/TCP | legacy only | restored during protocol-3 migration; not bound in normal operation |
 | `127.0.0.1:1153` UDP/TCP | agent → Mihomo | Mihomo DNS listener |
 | `127.0.0.1:1054` UDP/TCP | Mihomo → agent | nonrecursive path to current DHCP DNS |
 | `127.0.0.1:<profile port>` HTTP/WS | agent-local control path | Mihomo controller; never a Desktop/CLI control boundary |

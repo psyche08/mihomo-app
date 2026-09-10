@@ -4,11 +4,11 @@ import Security
 import XPC
 
 public let mihomoControlServiceName = "dev.linsheng.mihomo.daemon.control"
-/// The native 0.8 control plane intentionally does not downgrade requests to
-/// the pre-native protocol. A version-1 daemon is identified from its signed
-/// response and must be replaced through the verified installer rather than
-/// through its older, non-transactional self-update path.
-public let mihomoControlProtocolVersion = 2
+/// Protocol 3 makes LocalHttpDns a persistent root-daemon base service and
+/// changes runtime.set-tun into a durable standby/enhanced transition. Older
+/// daemons must be replaced through the verified installer; mixing either side
+/// with protocol 2 could bypass the certificate/profile prerequisite.
+public let mihomoControlProtocolVersion = 3
 public let mihomoControlMaximumPayloadBytes = 256 * 1_024 * 1_024
 
 public enum ControlOperation: String, Codable, Sendable {
@@ -21,9 +21,7 @@ public enum ControlOperation: String, Codable, Sendable {
     case restartAgent = "agent.restart"
     case componentStatus = "component.status"
     case localDoHStatus = "local-doh.status"
-    case prepareLocalDoHProfile = "local-doh.prepare-profile"
     case installLocalDoH = "local-doh.install"
-    case removeLocalDoH = "local-doh.remove"
     case upgradeComponents = "component.upgrade"
     case setTUN = "runtime.set-tun"
     case setOutboundMode = "runtime.set-outbound-mode"
@@ -192,13 +190,13 @@ public enum ControlError: Error, LocalizedError {
         }
     }
 
-    /// Identifies the one incompatible daemon generation that 0.8 must replace
-    /// through its verified installer instead of XPC component synchronization.
+    /// Older control planes must be replaced through the verified installer
+    /// instead of an in-place XPC component synchronization.
     public var isLegacyDaemonProtocol: Bool {
         guard case .protocolVersionMismatch(let expected, let received) = self else {
             return false
         }
-        return expected == mihomoControlProtocolVersion && received == 1
+        return expected == mihomoControlProtocolVersion && received < expected
     }
 
     public var errorDescription: String? {
@@ -216,7 +214,7 @@ public enum ControlError: Error, LocalizedError {
         case .invalidReply:
             return "the MihomoBox XPC service returned an invalid response"
         case .protocolVersionMismatch(let expected, let received):
-            if expected == mihomoControlProtocolVersion, received == 1 {
+            if expected == mihomoControlProtocolVersion, received < expected {
                 return "the installed MihomoBox daemon must be upgraded with Install / Repair Daemon"
             }
             if received > expected {

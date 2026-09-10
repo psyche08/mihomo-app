@@ -189,12 +189,15 @@ struct TraySnapshot: Equatable, Sendable {
       if !controllerReachable, healthTUNEnabled == false,
         systemDNSManaged == false, networkHealthy == true
       {
-        return "Network: Stopped — DNS restored"
+        return "Network: Mihomo stopped"
       }
-      return "Network: Stopped — restore unconfirmed"
+      return "Network: Mihomo stopped — state unconfirmed"
     }
     guard controllerReachable else {
       return "Network: Daemon unavailable"
+    }
+    if !enhancedTUN, networkHealthy == true {
+      return "Network: Standby — Enhanced TUN off"
     }
     if networkHealthy == true {
       return "Network: Healthy"
@@ -214,12 +217,14 @@ struct TraySnapshot: Equatable, Sendable {
       break
     }
     if daemonReachable, !agentRunning {
-      return networkStatusTitle.contains("DNS restored")
-        ? "MihomoBox · service stopped, DNS restored"
-        : "MihomoBox · service stopped, restore unconfirmed"
+      return networkHealthy == true
+        ? "MihomoBox · Mihomo stopped; LocalHttpDns is independent"
+        : "MihomoBox · Mihomo stopped, state unconfirmed"
     }
     if controllerReachable && networkHealthy == true {
-      return "MihomoBox · network healthy"
+      return enhancedTUN
+        ? "MihomoBox · network healthy"
+        : "MihomoBox · Mihomo standby, Enhanced TUN off"
     }
     if controllerReachable {
       return "MihomoBox · network inconsistent"

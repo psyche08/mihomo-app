@@ -186,9 +186,6 @@ public enum MihomoRuntimeInspector {
         let dnsBridgeReady = configuration.localDoH == nil && mihomoDNSReady
             ? dnsEndpointResponds(endpoint: configuration.systemDNSListen)
             : false
-        let localDoHReady = configuration.localDoH.map {
-            tcpEndpointResponds(endpoint: $0.endpoint)
-        } ?? true
         let preferences: GlobalDNSPreferences
         if let globalDNS {
             preferences = globalDNS
@@ -212,8 +209,14 @@ public enum MihomoRuntimeInspector {
             preexistingInterface: preexistingFakeIPRouteInterface
         )
         let routeReady = routeInterface != nil
-        let runtimeReady = controller.reachable && tunEnabled && routeReady && mihomoDNSReady
-            && (configuration.localDoH != nil || dnsBridgeReady) && localDoHReady
+        let baseRuntimeReady = controller.reachable && fakeIPMode && mihomoDNSReady
+        let enhancedRuntimeReady = baseRuntimeReady && tunEnabled && routeReady
+            && (configuration.localDoH != nil || dnsBridgeReady)
+        let standbyRuntimeReady = baseRuntimeReady && !tunEnabled
+            && visibleRouteInterface == nil && configuration.localDoH != nil
+        let runtimeReady = configuration.expectsEnhancedTUN
+            ? enhancedRuntimeReady
+            : standbyRuntimeReady
         let systemDNSRestored = !systemDNSManaged
             && ((try? preferences.containsManagedServerPersistently()) == false)
             && ((try? preferences.containsManagedServerEffectively()) == false)
@@ -815,8 +818,9 @@ public final class NetworkConsistencyController: @unchecked Sendable {
 
     /// Freezes observation while the owned Mihomo child is replaced and moves
     /// the published-health identity to the daemon-requested generation. The
-    /// DNS listeners and Global DNS ownership remain in place, but forwarding
-    /// falls back safely until the new child is observed ready.
+    /// The agent-owned DNS listeners stay up during the child replacement;
+    /// daemon-owned LocalHttpDns independently falls back to physical resolvers
+    /// until the new child is observed ready.
     public func beginRuntimeReload(generation: String) {
         queue.sync {
             runtimeReloadInProgress = true
@@ -952,11 +956,13 @@ public final class NetworkConsistencyController: @unchecked Sendable {
             preexistingFakeIPRouteInterface: preexistingFakeIPRouteInterface
         )
         let kernelReady = before.controllerReachable && before.tunEnabled && before.tunInterface != nil
-        let localDoHReady = configuration.localDoH.map {
-            MihomoRuntimeInspector.tcpEndpointResponds(endpoint: $0.endpoint)
-        } ?? true
-        let upstreamRuntimeReady = kernelReady && before.mihomoDNSReady && localDoHReady
+        let enhancedRuntimeReady = kernelReady && before.mihomoDNSReady
             && (configuration.localDoH != nil || before.dnsBridgeReady)
+        let standbyRuntimeReady = before.controllerReachable && !before.tunEnabled
+            && before.mihomoDNSReady && before.networkConsistent
+        let upstreamRuntimeReady = configuration.expectsEnhancedTUN
+            ? enhancedRuntimeReady
+            : standbyRuntimeReady
         let networkOwned = configuration.manageSystemDNS
             ? (((try? globalDNS.isApplied()) == true)
                 || globalDNS.isEffective()
@@ -1048,7 +1054,7 @@ public final class NetworkConsistencyController: @unchecked Sendable {
             )
         }
 
-        let recoveryDecision = chargeFailures
+        let recoveryDecision = chargeFailures && configuration.expectsEnhancedTUN
             ? recoveryPolicy.decide(
                 runtimeReady: upstreamRuntimeReady,
                 networkOwned: networkOwned,
@@ -1095,11 +1101,12 @@ public final class NetworkConsistencyController: @unchecked Sendable {
             }
         }
 
-        // Egress is only meaningful when the app believes the whole path is up:
-        // kernel + DNS bridge + system DNS ownership. If any of those is down,
-        // the dedicated policies above already own the response.
-        let fullyReady = upstreamRuntimeReady && before.networkConsistent
-        if upstreamRuntimeReady, !checkedProxyServerResolution {
+        // Egress is only meaningful when the complete Enhanced TUN path is up:
+        // kernel, Fake-IP route, Mihomo DNS, and controller. LocalHttpDns is a
+        // separate daemon service and is not part of this probe gate.
+        let fullyReady = configuration.expectsEnhancedTUN
+            && upstreamRuntimeReady && before.networkConsistent
+        if fullyReady, !checkedProxyServerResolution {
             checkedProxyServerResolution = true
             reportLoopingProxyServers(tunnelInterface: before.tunInterface)
         }

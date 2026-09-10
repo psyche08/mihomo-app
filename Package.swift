@@ -22,6 +22,10 @@ let package = Package(
   dependencies: [
     .package(url: "https://github.com/apple/swift-nio.git", from: "2.81.0"),
     .package(
+      url: "https://github.com/apple/swift-nio-ssl.git",
+      exact: "2.37.2"
+    ),
+    .package(
       url: "https://github.com/sparkle-project/Sparkle.git",
       exact: "2.9.4"
     ),
@@ -38,7 +42,9 @@ let package = Package(
         "CMihomoDNSSystem",
         .product(name: "NIOCore", package: "swift-nio"),
         .product(name: "NIOFoundationCompat", package: "swift-nio"),
+        .product(name: "NIOHTTP1", package: "swift-nio"),
         .product(name: "NIOPosix", package: "swift-nio"),
+        .product(name: "NIOSSL", package: "swift-nio-ssl"),
       ],
       linkerSettings: [
         .linkedFramework("IOKit"),
@@ -81,7 +87,11 @@ let package = Package(
     ),
     .testTarget(
       name: "MihomoDNSCoreTests",
-      dependencies: ["MihomoControl", "MihomoDNSCore"]
+      dependencies: [
+        "MihomoControl",
+        "MihomoDNSCore",
+        .product(name: "NIOHTTP1", package: "swift-nio"),
+      ]
     ),
     .testTarget(
       name: "MihomoBoxUITests",

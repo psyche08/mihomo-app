@@ -42,8 +42,20 @@ final class AgentSupervisor: @unchecked Sendable {
         (try? ProxyConfiguration.load(path: configPath).localDoH) != nil
     }
 
+    var localHttpDNSBaseConfigured: Bool {
+        guard let configuration = try? ProxyConfiguration.load(path: configPath) else {
+            return false
+        }
+        return configuration.localDoH == LocalDoHConfiguration()
+            && !configuration.manageSystemDNS
+            && configuration.enhancedTUNEnabled != nil
+    }
+
+    var expectsEnhancedTUN: Bool {
+        (try? ProxyConfiguration.load(path: configPath).expectsEnhancedTUN) ?? true
+    }
+
     var localDoHIdentityPrepared: Bool {
-        guard usesLocalDoH else { return false }
         let support = URL(fileURLWithPath: configPath).deletingLastPathComponent()
         let required: [(String, mode_t)] = [
             ("local-doh/ca.crt", 0o644),
@@ -51,7 +63,6 @@ final class AgentSupervisor: @unchecked Sendable {
             ("local-doh/server.crt", 0o644),
             ("local-doh/server.key", 0o600),
             ("local-doh/certificate.sha1", 0o600),
-            ("local-doh-enabled", 0o644),
         ]
         return required.allSatisfy { relative, expectedMode in
             var metadata = stat()
@@ -62,6 +73,22 @@ final class AgentSupervisor: @unchecked Sendable {
                 && metadata.st_gid == 0
                 && metadata.st_mode & 0o777 == expectedMode
         }
+    }
+
+    /// Passive availability used by the daemon-owned DoH server to decide
+    /// whether Mihomo DNS is a viable first upstream. Missing/stale health is
+    /// treated as unavailable so queries immediately use physical DNS.
+    var mihomoDNSAvailable: Bool {
+        guard isRunning,
+              let configuration = try? ProxyConfiguration.load(path: configPath),
+              let health = HealthSnapshotStore.read(from: configuration.healthSnapshotPath)
+        else { return false }
+        return health.controllerReachable
+            && health.tunEnabled
+            && health.fakeIPMode
+            && health.fakeIPRouteReady
+            && health.mihomoDNSReady
+            && health.networkConsistent
     }
 
     func start() throws {
@@ -119,8 +146,8 @@ final class AgentSupervisor: @unchecked Sendable {
     }
 
     /// Stops the supervised agent, removes an orphaned managed Mihomo process,
-    /// restores system DNS from the root-owned backup, and inspects live state
-    /// without consulting the agent's six-second health cache.
+    /// restores only a legacy root-owned system-DNS backup when one exists, and
+    /// inspects live state without consulting the six-second health cache.
     func stopAndRestoreVerified() -> Bool {
         let stopRequested = stop()
         guard let configuration = try? ProxyConfiguration.load(path: configPath) else {

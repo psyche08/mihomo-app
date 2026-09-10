@@ -8,7 +8,7 @@ enum EnhancedTUNAction: Equatable {
   case installDaemon
   case startDaemon
   case enableTUN
-  case stopAndRestore
+  case disableTUN
 }
 
 enum EnhancedTUNActionPolicy {
@@ -18,7 +18,7 @@ enum EnhancedTUNActionPolicy {
     daemonInstalled: Bool,
     controllerReachable: Bool
   ) -> EnhancedTUNAction {
-    if enhancedTUN { return .stopAndRestore }
+    if enhancedTUN { return .disableTUN }
     if !profileSelected { return .requireProfile }
     if !daemonInstalled { return .installDaemon }
     if !controllerReachable { return .startDaemon }
@@ -59,6 +59,7 @@ final class TrayStateCoordinator: TrayService {
   private let control: TrayControlClient
   private let profiles: ProfileCoordinator
   private let installer: InstallerCoordinator
+  private let localDoH: LocalDoHCoordinator
   private let login: LoginAutostartController
   private let updates: SparkleUpdateController
   private let mutationGate: AppMutationGate
@@ -86,6 +87,7 @@ final class TrayStateCoordinator: TrayService {
     self.control = control
     self.profiles = profiles
     self.installer = installer
+    self.localDoH = LocalDoHCoordinator(control: control)
     self.login = login
     self.updates = updates
     self.mutationGate = mutationGate
@@ -220,8 +222,7 @@ final class TrayStateCoordinator: TrayService {
     }
     do {
       if !enabled {
-        guard confirmNetworkRestore() else { return }
-        apply(try await control.stopAgentAndRestore(), retainDelays: false)
+        apply(try await control.disableEnhancedTUN(), retainDelays: false)
         clearError()
         return
       }
@@ -248,22 +249,14 @@ final class TrayStateCoordinator: TrayService {
           : selectedLocalProfile()
         try await installer.installOrRepair(initialProfile: initialProfile)
         let ready = try await waitForControllerReadiness()
-        if ready.enhancedTUN {
-          apply(ready, retainDelays: false)
-        } else {
-          apply(try await control.enableEnhancedTUN(), retainDelays: false)
-        }
+        apply(ready, retainDelays: false)
       } else if resolved == .startDaemon {
         _ = try await control.startAgent()
         let ready = try await waitForControllerReadiness()
-        if ready.enhancedTUN {
-          apply(ready, retainDelays: false)
-        } else {
-          apply(try await control.enableEnhancedTUN(), retainDelays: false)
-        }
-      } else {
-        apply(try await control.enableEnhancedTUN(), retainDelays: false)
+        apply(ready, retainDelays: false)
       }
+      guard try await ensureLocalHttpDNSPrerequisite() else { return }
+      apply(try await control.enableEnhancedTUN(), retainDelays: false)
       await applyLoginDefaultIfNeeded()
       clearError()
     } catch {
@@ -421,6 +414,27 @@ final class TrayStateCoordinator: TrayService {
       if attempt < 29 { try await Task.sleep(for: .milliseconds(500)) }
     }
     throw TrayControlError.readbackMismatch("controller readiness")
+  }
+
+  /// Enhanced TUN is never allowed to become the bootstrap mechanism for its
+  /// own DNS profile. The standby agent exposes the controller first, then the
+  /// user approves LocalHttpDns, and only a later click enables TUN.
+  private func ensureLocalHttpDNSPrerequisite() async throws -> Bool {
+    let status = await localDoH.status()
+    switch status.phase {
+    case .active:
+      return true
+    case .awaitingApproval:
+      try await localDoH.openDeviceManagement()
+    case .off, .degraded:
+      _ = try await localDoH.prepare()
+    case .unavailable, .statusUnavailable:
+      throw TrayControlError.readbackMismatch("LocalHttpDns prerequisite")
+    }
+    publishError(
+      "Install the MihomoBox LocalHttpDns profile in Device Management, then enable Enhanced TUN again."
+    )
+    return false
   }
 
   private func waitForDaemonProtocolReadiness() async throws -> TrayControlPoll {
@@ -601,7 +615,7 @@ final class TrayStateCoordinator: TrayService {
     expected: Int,
     received: Int
   ) -> DaemonProtocolCompatibility {
-    if expected == mihomoControlProtocolVersion, received == 1 {
+    if expected == mihomoControlProtocolVersion, received < expected {
       return .legacyRepairRequired(peerVersion: received)
     }
     if received > expected {
@@ -711,21 +725,11 @@ final class TrayStateCoordinator: TrayService {
     }
   }
 
-  private func confirmNetworkRestore() -> Bool {
-    let alert = NSAlert()
-    alert.messageText = "Stop Mihomo and restore real system DNS?"
-    alert.informativeText = "Profiles and installation files will be preserved."
-    alert.alertStyle = .warning
-    alert.addButton(withTitle: "Restore Network")
-    alert.addButton(withTitle: "Cancel")
-    return alert.runModal() == .alertFirstButtonReturn
-  }
-
   private func confirmDaemonUpgrade() -> Bool {
     let alert = NSAlert()
     alert.messageText = "Upgrade the MihomoBox daemon?"
     alert.informativeText =
-      "The signed installer will briefly restart Mihomo, Enhanced TUN, and managed DNS."
+      "The signed installer will briefly restart Mihomo and Enhanced TUN; LocalHttpDns stays independent."
     alert.alertStyle = .warning
     alert.addButton(withTitle: "Upgrade Daemon")
     alert.addButton(withTitle: "Cancel")

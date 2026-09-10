@@ -267,7 +267,6 @@ private final class FakeDashboardLocalDoHService: DashboardLocalDoHService {
   }
 
   func openDeviceManagement() async throws {}
-  func remove() async throws {}
 }
 
 private final class FakeDashboardGateway: DashboardControlGateway, @unchecked Sendable {

@@ -98,6 +98,41 @@ public struct LocalDoHProfileInspection: Equatable, Sendable {
         return Self(installed: found, domainCount: found ? domains.count : 0)
     }
 
+    /// Proves that the installed profile is the exact LocalHttpDns document
+    /// for the currently served root certificate, rather than trusting only a
+    /// reused profile identifier and a non-empty domain list.
+    public static func validatedInstalled(
+        propertyList data: Data,
+        expectedRootCertificate: Data
+    ) -> Self? {
+        guard !expectedRootCertificate.isEmpty,
+              let root = try? PropertyListSerialization.propertyList(
+                from: data,
+                options: [],
+                format: nil
+              ) else { return nil }
+        var count: Int?
+        walk(root) { dictionary in
+            guard count == nil,
+                  dictionary["PayloadIdentifier"] as? String
+                    == LocalDoHStatus.profileIdentifier,
+                  PropertyListSerialization.propertyList(
+                    dictionary,
+                    isValidFor: .xml
+                  ),
+                  let candidate = try? PropertyListSerialization.data(
+                    fromPropertyList: dictionary,
+                    format: .xml,
+                    options: 0
+                  ) else { return }
+            count = LocalDoHProfileDocument.validatedDomainCount(
+                in: candidate,
+                expectedRootCertificate: expectedRootCertificate
+            )
+        }
+        return count.map { Self(installed: true, domainCount: $0) }
+    }
+
     private static func walk(
         _ value: Any,
         visit: ([String: Any]) -> Void

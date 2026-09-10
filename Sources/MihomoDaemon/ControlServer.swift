@@ -12,6 +12,7 @@ final class ControlDispatcher: @unchecked Sendable {
     private let controller: ControllerBroker
     private let profiles: ProfileBroker
     private let localDoH: LocalDoHManager
+    private let localDoHServer: IndependentLocalDoHServer
     private let components: ComponentUpdater
     private let startupClock: MonotonicStartupClock
     private let mutationLock = NSLock()
@@ -27,7 +28,12 @@ final class ControlDispatcher: @unchecked Sendable {
         let validateStartedRuntime = {
             try Self.validateStartedRuntime(agent: agent, controller: controllerBroker)
         }
+        let localDoHServer = IndependentLocalDoHServer(
+            configurationPath: configPath,
+            primaryAvailable: { [weak agent] in agent?.mihomoDNSAvailable == true }
+        )
         controller = controllerBroker
+        self.localDoHServer = localDoHServer
         profiles = ProfileBroker(
             agent: agent,
             validateStartedRuntime: validateStartedRuntime
@@ -35,7 +41,7 @@ final class ControlDispatcher: @unchecked Sendable {
         localDoH = LocalDoHManager(
             agent: agent,
             controller: controllerBroker,
-            profiles: profiles
+            server: localDoHServer
         )
         components = try ComponentUpdater(
             agent: agent,
@@ -64,6 +70,46 @@ final class ControlDispatcher: @unchecked Sendable {
             ServiceLog.info("event=component_update result=restart_after_interrupted_recovery")
             logInitialRuntimeStartup(result: "daemon_restart_required")
             scheduleDaemonRestart()
+            return
+        }
+        let installedProfile = LocalDoHStatusProvider.inspectInstalledProfile()
+        let enhancedPrerequisitePrepared = installedProfile.succeeded
+            && installedProfile.inspection.installed
+            && installedProfile.inspection.domainCount > 0
+            && agent.localDoHIdentityPrepared
+        do {
+            try profiles.ensureLocalHttpDNSBaseConfiguration(
+                allowEnhancedTUN: enhancedPrerequisitePrepared
+            )
+        } catch {
+            let restored = agent.stopAndRestoreVerified()
+            ServiceLog.error(
+                "event=initial_runtime result=" +
+                (restored ? "local_http_dns_migration_failed" : "restore_unconfirmed")
+            )
+            logInitialRuntimeStartup(
+                result: restored ? "local_http_dns_migration_failed" : "restore_unconfirmed"
+            )
+            return
+        }
+        // A legacy installation may still have 127.0.0.53 persisted when its
+        // config is migrated. Restore that backup once before the new standby
+        // runtime starts; normal LocalHttpDns operation never writes DNS prefs.
+        guard agent.stopAndRestoreVerified() else {
+            ServiceLog.error("event=initial_runtime result=legacy_dns_restore_unconfirmed")
+            logInitialRuntimeStartup(result: "legacy_dns_restore_unconfirmed")
+            return
+        }
+        if localDoHServer.startSupervising() {
+            ServiceLog.info("event=initial_local_doh result=ready")
+        }
+        do {
+            try profiles.ensureLocalHttpDNSBaseConfiguration(
+                allowEnhancedTUN: enhancedPrerequisitePrepared && localDoHServer.isRunning
+            )
+        } catch {
+            ServiceLog.error("event=initial_runtime result=local_http_dns_start_failed")
+            logInitialRuntimeStartup(result: "local_http_dns_start_failed")
             return
         }
         if profiles.activationRequired {
@@ -212,6 +258,7 @@ final class ControlDispatcher: @unchecked Sendable {
                 guard !profiles.activationRequired else {
                     throw serverError("activate a profile before starting the managed runtime")
                 }
+                try ensureRuntimePrerequisiteLocked()
                 try agent.start()
                 try ensureStartedRuntimeLocked()
                 payload = nil
@@ -224,6 +271,7 @@ final class ControlDispatcher: @unchecked Sendable {
                 guard !profiles.activationRequired else {
                     throw serverError("activate a profile before starting the managed runtime")
                 }
+                try ensureRuntimePrerequisiteLocked()
                 try agent.restart()
                 try ensureStartedRuntimeLocked()
                 payload = nil
@@ -240,23 +288,14 @@ final class ControlDispatcher: @unchecked Sendable {
                     serverPrepared: prepared,
                     profileInstalled: profile.inspection.installed,
                     profileInspectionSucceeded: profile.succeeded,
-                    runtimeHealthy: prepared && agent.isRunning
-                        && health?.networkConsistent == true
-                        && health?.systemDNSManaged == false,
+                    runtimeHealthy: prepared && localDoHServer.isRunning,
                     systemDNSManaged: health?.systemDNSManaged,
                     installedDomainCount: profile.inspection.domainCount,
                     preparedDomainCount: preparedProfile.domainCount
                 )
                 payload = try JSONEncoder().encode(status)
-            case .prepareLocalDoHProfile:
-                throw serverError(
-                    "Local DoH profile preparation must use the atomic install operation"
-                )
             case .installLocalDoH:
                 payload = try JSONEncoder().encode(localDoH.install())
-            case .removeLocalDoH:
-                try localDoH.remove()
-                payload = nil
             case .upgradeComponents:
                 guard let package = request.payload else {
                     throw serverError("component update package is required")
@@ -286,8 +325,24 @@ final class ControlDispatcher: @unchecked Sendable {
                 guard agent.isRunning else {
                     throw serverError("Mihomo agent is not running")
                 }
-                payload = try controller.perform(request, owner: owner)
-                try ensureStartedRuntimeLocked()
+                guard let raw = request.arguments["enabled"],
+                      let enabled = ["true": true, "false": false][raw] else {
+                    throw serverError("Enhanced TUN enabled state is required")
+                }
+                if enabled {
+                    let profile = LocalDoHStatusProvider.inspectInstalledProfile()
+                    guard profile.succeeded,
+                          profile.inspection.installed,
+                          profile.inspection.domainCount > 0,
+                          agent.localDoHIdentityPrepared,
+                          localDoHServer.isRunning else {
+                        throw serverError(
+                            "install and approve the MihomoBox LocalHttpDns profile before enabling Enhanced TUN"
+                        )
+                    }
+                }
+                try profiles.setEnhancedTUN(enabled)
+                payload = nil
             case .snapshot, .setOutboundMode, .selectProxy,
                  .refreshProxyProvider, .testDelay,
                  .controllerVersion, .listRules, .listProxyProviders, .listRuleProviders,
@@ -336,13 +391,16 @@ final class ControlDispatcher: @unchecked Sendable {
         }
     }
 
+    func stopIndependentServices() {
+        localDoHServer.shutdown()
+    }
+
     private static func isMutating(_ operation: ControlOperation) -> Bool {
         switch operation {
         case .startAgent, .stopAgent, .restartAgent, .upgradeComponents,
              .importProfile, .switchProfile, .reloadProfile, .setTUN,
              .setOutboundMode, .selectProxy, .refreshProxyProvider,
-             .closeAllConnections, .prepareLocalDoHProfile,
-             .installLocalDoH, .removeLocalDoH:
+             .closeAllConnections, .installLocalDoH:
             return true
         case .controllerRequest:
             // ControllerRequestPolicy is still the authority for the exact
@@ -367,9 +425,26 @@ final class ControlDispatcher: @unchecked Sendable {
         }
     }
 
-    /// Activation is committed only after the complete managed-network truth
-    /// is live. A controller socket alone is not enough: TUN, Fake-IP routing,
-    /// both DNS bridges and system DNS ownership must all agree.
+    private func ensureRuntimePrerequisiteLocked() throws {
+        guard agent.localHttpDNSBaseConfigured else {
+            throw serverError("repair the LocalHttpDns base service before starting Mihomo")
+        }
+        guard agent.expectsEnhancedTUN else { return }
+        let profile = LocalDoHStatusProvider.inspectInstalledProfile()
+        guard profile.succeeded,
+              profile.inspection.installed,
+              profile.inspection.domainCount > 0,
+              agent.localDoHIdentityPrepared,
+              localDoHServer.isRunning else {
+            throw serverError(
+                "LocalHttpDns must be installed and healthy before starting Enhanced TUN"
+            )
+        }
+    }
+
+    /// The agent has two valid states: controller/DNS standby with TUN off, or
+    /// the complete Enhanced TUN path. Neither state owns macOS DNS settings;
+    /// LocalHttpDns remains a daemon service outside this validation.
     private static func validateStartedRuntime(
         agent: AgentSupervisor,
         controller: ControllerBroker,
@@ -385,21 +460,32 @@ final class ControlDispatcher: @unchecked Sendable {
                 guard let health = try agent.expectedHealthSnapshot()?.health else {
                     throw serverErrorStatic("awaiting current agent health generation")
                 }
-                guard health.controllerReachable,
-                      health.tunEnabled,
-                      health.tunInterface?.isEmpty == false,
+                guard agent.usesLocalDoH,
+                      !agent.managesSystemDNS,
+                      health.controllerReachable,
                       health.fakeIPMode,
-                      health.fakeIPRouteReady,
-                      (agent.usesLocalDoH || health.dnsBridgeReady),
                       health.mihomoDNSReady,
-                      (!agent.managesSystemDNS || health.systemDNSManaged),
+                      !health.systemDNSManaged,
                       health.networkConsistent else {
                     throw serverErrorStatic("the managed network is not ready")
                 }
-                // Controller verification is deliberately after the matching
-                // agent snapshot. Polling while the generation is pending must
-                // not create another active DNS-probe loop in the daemon.
-                try controller.ensureSafeGlobalRoute()
+                if agent.expectsEnhancedTUN {
+                    guard health.tunEnabled,
+                          health.tunInterface?.isEmpty == false,
+                          health.fakeIPRouteReady else {
+                        throw serverErrorStatic("the Enhanced TUN network is not ready")
+                    }
+                    // Controller verification is deliberately after the
+                    // matching agent snapshot. Polling while the generation is
+                    // pending must not create another active probe loop.
+                    try controller.ensureSafeGlobalRoute()
+                } else {
+                    guard !health.tunEnabled,
+                          health.tunInterface == nil,
+                          !health.fakeIPRouteReady else {
+                        throw serverErrorStatic("the standby runtime still owns a TUN route")
+                    }
+                }
                 return
             } catch ControllerBrokerCriticalError.unsafeGlobalRuntime {
                 throw ControllerBrokerCriticalError.unsafeGlobalRuntime

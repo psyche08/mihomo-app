@@ -39,6 +39,31 @@ final class TrayControlClientTests: XCTestCase {
     }
   }
 
+  func testDisableTUNKeepsAgentInHealthyStandby() async throws {
+    let poll = Data(
+      #"""
+      {
+        "agent_running":true,
+        "snapshot":{"configs":{"mode":"Rule","tun":{"enable":false}},"proxies":{"proxies":{}}},
+        "profiles":{"profiles":["a.yaml"],"active_profile":"a.yaml"},
+        "health":{"network_consistent":true,"tun_enabled":false,"system_dns_managed":false}
+      }
+      """#.utf8)
+    let session = QueueSession(responses: [
+      ControlResponse(success: true),
+      ControlResponse(success: true, payload: poll),
+    ])
+    let client = TrayControlClient(makeSession: { session })
+
+    let observed = try await client.disableEnhancedTUN()
+
+    XCTAssertTrue(observed.agentRunning)
+    XCTAssertTrue(observed.controllerReachable)
+    XCTAssertFalse(observed.enhancedTUN)
+    XCTAssertEqual(session.operations, [.setTUN, .trayState])
+    XCTAssertEqual(session.arguments.first?["enabled"], "false")
+  }
+
   func testPassivePollRetainsLastGoodDelayByNodeAcrossDisplayGroupChanges() {
     let previous = [
       TrayProxyNode(group: "Fallback", name: "Tokyo", delayMilliseconds: 86),
@@ -154,20 +179,13 @@ final class TrayControlClientTests: XCTestCase {
     XCTAssertEqual(session.operations, [.installLocalDoH])
   }
 
-  func testLocalDoHRemovalUsesAuthenticatedTypedMutation() async throws {
-    let session = QueueSession(responses: [ControlResponse(success: true)])
-    let client = TrayControlClient(makeSession: { session })
-
-    try await client.removeLocalDoH()
-
-    XCTAssertEqual(session.operations, [.removeLocalDoH])
-  }
 }
 
 private final class QueueSession: AppControlSession, @unchecked Sendable {
   private let lock = NSLock()
   private var responses: [ControlResponse]
   private(set) var operations: [ControlOperation] = []
+  private(set) var arguments: [[String: String]] = []
 
   init(responses: [ControlResponse]) { self.responses = responses }
 
@@ -175,6 +193,7 @@ private final class QueueSession: AppControlSession, @unchecked Sendable {
     lock.lock()
     defer { lock.unlock() }
     operations.append(request.operation)
+    arguments.append(request.arguments)
     guard !responses.isEmpty else { throw ControlError.connectionFailed }
     let response = responses.removeFirst()
     if !response.success { throw ControlError.rejected(response.error ?? "rejected") }

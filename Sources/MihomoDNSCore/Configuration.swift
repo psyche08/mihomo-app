@@ -34,6 +34,9 @@ public struct ProxyConfiguration: Codable, Equatable {
     public var mihomoDNS: Endpoint
     public var upstreamListen: Endpoint
     public var manageSystemDNS: Bool
+    /// Persisted desired TUN state. `nil` is accepted only for upgrades from
+    /// older installations and means the previously always-on TUN behavior.
+    public var enhancedTUNEnabled: Bool?
     public var loopbackInterface: String
     public var loopbackAlias: String
     public var loopbackNetmask: String
@@ -51,6 +54,7 @@ public struct ProxyConfiguration: Codable, Equatable {
         mihomoDNS: Endpoint = Endpoint(host: "127.0.0.1", port: 1153),
         upstreamListen: Endpoint = Endpoint(host: "127.0.0.1", port: 1054),
         manageSystemDNS: Bool = true,
+        enhancedTUNEnabled: Bool? = nil,
         loopbackInterface: String = "lo0",
         loopbackAlias: String = "127.0.0.53",
         loopbackNetmask: String = "255.0.0.0",
@@ -67,6 +71,7 @@ public struct ProxyConfiguration: Codable, Equatable {
         self.mihomoDNS = mihomoDNS
         self.upstreamListen = upstreamListen
         self.manageSystemDNS = manageSystemDNS
+        self.enhancedTUNEnabled = enhancedTUNEnabled
         self.loopbackInterface = loopbackInterface
         self.loopbackAlias = loopbackAlias
         self.loopbackNetmask = loopbackNetmask
@@ -111,6 +116,13 @@ public struct ProxyConfiguration: Codable, Equatable {
             .path
     }
 
+    public var expectsEnhancedTUN: Bool {
+        // Before this field existed every activated profile was started with
+        // TUN enabled. Preserve that state for an in-place component upgrade;
+        // newly installed configuration writes an explicit false.
+        enhancedTUNEnabled ?? true
+    }
+
     public func validate() throws {
         guard systemDNSListen.port > 0, systemDNSListen.port <= 65_535,
               mihomoDNS.port > 0, mihomoDNS.port <= 65_535,
@@ -145,7 +157,7 @@ public struct ProxyConfiguration: Codable, Equatable {
             }
         }
         if let localDoH {
-            // These values cross into a root-owned Mihomo configuration. Keep
+            // These values select the root daemon's local TLS endpoint. Keep
             // the surface fixed instead of accepting caller-selected ports or
             // file paths (including path traversal below local-doh/).
             guard localDoH == LocalDoHConfiguration(),
@@ -156,14 +168,35 @@ public struct ProxyConfiguration: Codable, Equatable {
                 throw ConfigurationError.incompatibleDNSOwnership
             }
         }
+        if enhancedTUNEnabled != nil {
+            guard localDoH == LocalDoHConfiguration(), !manageSystemDNS else {
+                throw ConfigurationError.incompatibleDNSOwnership
+            }
+        }
     }
 }
 
 public enum LocalDoHConfigurationStore {
-    public static func setEnabled(_ enabled: Bool, configurationPath: String) throws {
+    public static func ensureBaseService(configurationPath: String) throws {
         var configuration = try ProxyConfiguration.load(path: configurationPath)
-        configuration.manageSystemDNS = !enabled
-        configuration.localDoH = enabled ? LocalDoHConfiguration() : nil
+        configuration.manageSystemDNS = false
+        configuration.localDoH = LocalDoHConfiguration()
+        // Installing or migrating the base service must never preserve an
+        // already-enabled tunnel. Certificate/profile approval is the explicit
+        // prerequisite that later permits setEnhancedTUN(true).
+        configuration.enhancedTUNEnabled = false
+        try write(configuration, to: configurationPath)
+    }
+
+    public static func setEnhancedTUN(_ enabled: Bool, configurationPath: String) throws {
+        var configuration = try ProxyConfiguration.load(path: configurationPath)
+        configuration.manageSystemDNS = false
+        configuration.localDoH = LocalDoHConfiguration()
+        configuration.enhancedTUNEnabled = enabled
+        try write(configuration, to: configurationPath)
+    }
+
+    private static func write(_ configuration: ProxyConfiguration, to configurationPath: String) throws {
         try configuration.validate()
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
