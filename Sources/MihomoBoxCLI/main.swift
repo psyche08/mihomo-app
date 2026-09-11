@@ -705,6 +705,7 @@ private enum InstallerProtocolProbeExit: Int32 {
     case legacy = 10
     case future = 11
     case incompatible = 12
+    case versionedPredecessor = 14
 }
 
 /// Reports daemon compatibility only through its exit status for the verified
@@ -721,6 +722,9 @@ private func probeDaemonProtocolForInstaller() throws -> Int32 {
         }
         if received == 1 {
             return InstallerProtocolProbeExit.legacy.rawValue
+        }
+        if received == 2 && expected == 3 {
+            return InstallerProtocolProbeExit.versionedPredecessor.rawValue
         }
         if received > expected {
             return InstallerProtocolProbeExit.future.rawValue

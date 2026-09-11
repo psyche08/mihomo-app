@@ -44,6 +44,11 @@ TUN handoff interrupts SSH. A checkout, an App from an unauthenticated transfer,
 or a standalone copy of the wrapper is not a trusted remote installation source.
 Launchd never executes from the movable App bundle.
 
+The protocol-v2 to v3 upgrade requires this verified installer and a valid
+root-owned component version floor. It does not send v2 runtime mutations or
+relax the certificate/profile prerequisite; missing or unsafe version state
+and newer daemon protocols remain rejected.
+
 The visible bundle is `MihomoBox.app`. Existing
 `/Library/Application Support/Mihomo App` and `/Library/Logs/Mihomo App` paths
 remain stable so upgrades preserve configuration, DNS backups, and structured

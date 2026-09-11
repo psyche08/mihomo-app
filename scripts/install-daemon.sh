@@ -319,6 +319,12 @@ enforce_component_version_floor() {
     echo "installed daemon protocol is incompatible with this App" >&2
     return 1
   fi
+  # Protocol 2 -> 3 is a signed installer migration, never a downgraded XPC
+  # mutation. Unlike the pre-native v1 exception, it requires a valid floor.
+  if [[ "$probe_status" -eq 14 && "$marker_present" -ne 1 ]]; then
+    echo "protocol migration requires a valid installed component version floor" >&2
+    return 1
+  fi
   if [[ "$marker_present" -eq 1 ]]; then
     return 0
   fi
