@@ -16,6 +16,8 @@ final class ControlDispatcher: @unchecked Sendable {
     private let components: ComponentUpdater
     private let startupClock: MonotonicStartupClock
     private let mutationLock = NSLock()
+    private var localDoHReadinessTimer: DispatchSourceTimer?
+    private var localDoHReadinessRecovery = LocalDoHReadinessRecovery()
 
     init(
         agent: AgentSupervisor,
@@ -54,7 +56,16 @@ final class ControlDispatcher: @unchecked Sendable {
                 self?.handleLocalDoHFailure()
             }
         }
+        let timer = DispatchSource.makeTimerSource(
+            queue: DispatchQueue(label: "dev.linsheng.mihomo.local-doh-readiness")
+        )
+        timer.schedule(deadline: .now() + 15, repeating: 15, leeway: .seconds(1))
+        timer.setEventHandler { [weak self] in self?.checkLocalDoHReadiness() }
+        localDoHReadinessTimer = timer
+        timer.resume()
     }
+
+    deinit { localDoHReadinessTimer?.cancel() }
 
     /// Boot keeps the Mach service available even when the managed runtime
     /// cannot prove a safe route. This lets the signed App repair a profile or
@@ -92,6 +103,7 @@ final class ControlDispatcher: @unchecked Sendable {
             && installedProfile.inspection.installed
             && installedProfile.inspection.domainCount > 0
             && agent.localDoHIdentityPrepared
+            && LocalDoHStatusProvider.certificateTrusted()
         do {
             if !preserveFallback {
                 try profiles.ensureLocalHttpDNSBaseConfiguration(
@@ -303,17 +315,19 @@ final class ControlDispatcher: @unchecked Sendable {
                 let profile = LocalDoHStatusProvider.inspectInstalledProfile()
                 let preparedProfile = LocalDoHStatusProvider.inspectPreparedProfile()
                 let prepared = agent.localDoHIdentityPrepared
+                let trusted = prepared && LocalDoHStatusProvider.certificateTrusted()
                 let status = LocalDoHStatus(
                     serverPrepared: prepared,
                     profileInstalled: profile.inspection.installed,
                     profileInspectionSucceeded: profile.succeeded,
-                    runtimeHealthy: prepared && localDoHServer.isRunning,
+                    runtimeHealthy: prepared && localDoHServer.isRunning && trusted,
                     systemDNSManaged: health?.systemDNSManaged,
                     installedDomainCount: profile.inspection.domainCount,
                     preparedDomainCount: preparedProfile.domainCount,
                     globalDNSFallback: agent.globalDNSFallbackConfigured,
                     fallbackProfileRemovalRequired: agent.globalDNSFallbackConfigured
-                        && profile.present != false
+                        && profile.present != false,
+                    certificateTrusted: trusted
                 )
                 payload = try JSONEncoder().encode(status)
             case .installLocalDoH:
@@ -321,6 +335,7 @@ final class ControlDispatcher: @unchecked Sendable {
                     throw serverError("activate a profile before preparing LocalHttpDns")
                 }
                 do {
+                    localDoHReadinessRecovery = LocalDoHReadinessRecovery()
                     if agent.globalDNSFallbackConfigured {
                         if !agent.isRunning {
                             try agent.start()
@@ -391,9 +406,10 @@ final class ControlDispatcher: @unchecked Sendable {
                           profile.inspection.installed,
                           profile.inspection.domainCount > 0,
                           agent.localDoHIdentityPrepared,
+                          LocalDoHStatusProvider.certificateTrusted(),
                           localDoHServer.isRunning else {
                         throw serverError(
-                            "install and approve the MihomoBox LocalHttpDns profile before enabling Enhanced TUN"
+                            "install the LocalHttpDns profile and approve its SSL certificate trust before enabling Enhanced TUN"
                         )
                     }
                 }
@@ -497,10 +513,40 @@ final class ControlDispatcher: @unchecked Sendable {
               profile.inspection.installed,
               profile.inspection.domainCount > 0,
               agent.localDoHIdentityPrepared,
+              LocalDoHStatusProvider.certificateTrusted(),
               localDoHServer.isRunning else {
             throw serverError(
                 "LocalHttpDns must be installed and healthy before starting Enhanced TUN"
             )
+        }
+    }
+
+    private func checkLocalDoHReadiness() {
+        mutationLock.lock()
+        defer { mutationLock.unlock() }
+        guard agent.isRunning, agent.localHttpDNSBaseConfigured,
+              !agent.globalDNSFallbackConfigured, !profiles.activationRequired,
+              !components.recoveryRequired, !components.requiresDaemonRestart,
+              !components.ownsPendingMutationFileLock else {
+            localDoHReadinessRecovery = LocalDoHReadinessRecovery()
+            return
+        }
+        let profile = LocalDoHStatusProvider.inspectInstalledProfile()
+        let trusted = LocalDoHStatusProvider.certificateTrusted()
+        let ready = profile.inspection.installed && trusted && localDoHServer.isRunning
+        guard localDoHReadinessRecovery.needsFallback(
+            profilePresent: profile.present, ready: ready,
+            now: ProcessInfo.processInfo.systemUptime
+        ) else { return }
+        do {
+            let externalLock = try ComponentMutationFileLock()
+            defer { withExtendedLifetime(externalLock) {} }
+            ServiceLog.error("event=local_doh_readiness result=" +
+                (trusted ? "profile_or_listener_invalid" : "ssl_trust_failed"))
+            try activateGlobalDNSFallbackLocked()
+            localDoHReadinessRecovery = LocalDoHReadinessRecovery()
+        } catch {
+            ServiceLog.error("event=local_doh_readiness result=fallback_failed")
         }
     }
 

@@ -7,6 +7,7 @@ public struct LocalDoHStatus: Codable, Equatable, Sendable {
     public var profileInstalled: Bool
     public var profileInspectionSucceeded: Bool
     public var runtimeHealthy: Bool
+    public var certificateTrusted: Bool?
     public var systemDNSManaged: Bool?
     public var installedDomainCount: Int
     public var preparedDomainCount: Int
@@ -22,12 +23,14 @@ public struct LocalDoHStatus: Codable, Equatable, Sendable {
         installedDomainCount: Int = 0,
         preparedDomainCount: Int = 0,
         globalDNSFallback: Bool = false,
-        fallbackProfileRemovalRequired: Bool = false
+        fallbackProfileRemovalRequired: Bool = false,
+        certificateTrusted: Bool? = nil
     ) {
         self.serverPrepared = serverPrepared
         self.profileInstalled = profileInstalled
         self.profileInspectionSucceeded = profileInspectionSucceeded
         self.runtimeHealthy = runtimeHealthy
+        self.certificateTrusted = certificateTrusted
         self.systemDNSManaged = systemDNSManaged
         self.installedDomainCount = installedDomainCount
         self.preparedDomainCount = preparedDomainCount
@@ -40,6 +43,7 @@ public struct LocalDoHStatus: Codable, Equatable, Sendable {
         case profileInstalled = "profile_installed"
         case profileInspectionSucceeded = "profile_inspection_succeeded"
         case runtimeHealthy = "runtime_healthy"
+        case certificateTrusted = "certificate_trusted"
         case systemDNSManaged = "system_dns_managed"
         case installedDomainCount = "installed_domain_count"
         case preparedDomainCount = "prepared_domain_count"
@@ -56,6 +60,7 @@ public struct LocalDoHStatus: Codable, Equatable, Sendable {
             forKey: .profileInspectionSucceeded
         )
         runtimeHealthy = try container.decode(Bool.self, forKey: .runtimeHealthy)
+        certificateTrusted = try container.decodeIfPresent(Bool.self, forKey: .certificateTrusted)
         systemDNSManaged = try container.decodeIfPresent(Bool.self, forKey: .systemDNSManaged)
         installedDomainCount = try container.decodeIfPresent(
             Int.self,
@@ -123,12 +128,13 @@ public struct LocalDoHProfileInspection: Equatable, Sendable {
         return Self(installed: found, domainCount: found ? domains.count : 0)
     }
 
-    /// Proves that the installed profile is the exact LocalHttpDns document
-    /// for the currently served root certificate, rather than trusting only a
-    /// reused profile identifier and a non-empty domain list.
+    /// Validates configuration, not TLS trust. `profiles show` redacts the CA
+    /// bytes, so that form requires the independently validated prepared
+    /// document. The caller must separately evaluate system SSL trust.
     public static func validatedInstalled(
         propertyList data: Data,
-        expectedRootCertificate: Data
+        expectedRootCertificate: Data,
+        expectedPreparedProfile: Data? = nil
     ) -> Self? {
         guard !expectedRootCertificate.isEmpty,
               let root = try? PropertyListSerialization.propertyList(
@@ -136,6 +142,23 @@ public struct LocalDoHProfileInspection: Equatable, Sendable {
                 options: [],
                 format: nil
               ) else { return nil }
+        if let profiles = (root as? [String: Any])?["_computerlevel"] as? [[String: Any]] {
+            let matches = profiles.filter {
+                $0["ProfileIdentifier"] as? String == LocalDoHStatus.profileIdentifier
+            }
+            if !matches.isEmpty {
+                guard matches.count == 1, let prepared = expectedPreparedProfile,
+                      let count = LocalDoHProfileDocument.validatedDomainCount(
+                        in: prepared, expectedRootCertificate: expectedRootCertificate
+                      ),
+                      let expected = try? PropertyListSerialization.propertyList(
+                        from: prepared, options: [], format: nil
+                      ) as? [String: Any],
+                      installedReport(matches[0], matches: expected,
+                                      certificate: expectedRootCertificate) else { return nil }
+                return Self(installed: true, domainCount: count)
+            }
+        }
         var count: Int?
         walk(root) { dictionary in
             guard count == nil,
@@ -156,6 +179,41 @@ public struct LocalDoHProfileInspection: Equatable, Sendable {
             )
         }
         return count.map { Self(installed: true, domainCount: $0) }
+    }
+
+    private static func installedReport(
+        _ report: [String: Any], matches expected: [String: Any], certificate: Data
+    ) -> Bool {
+        guard report["ProfileType"] as? String == expected["PayloadType"] as? String,
+              report["ProfileUUID"] as? String == expected["PayloadUUID"] as? String,
+              report["ProfileVersion"] as? Int == 1,
+              let items = report["ProfileItems"] as? [[String: Any]], items.count == 2,
+              let expectedItems = expected["PayloadContent"] as? [[String: Any]] else { return false }
+        for item in expectedItems {
+            let candidates = items.filter {
+                $0["PayloadIdentifier"] as? String == item["PayloadIdentifier"] as? String
+            }
+            guard candidates.count == 1, let actual = candidates.first,
+                  actual["PayloadType"] as? String == item["PayloadType"] as? String,
+                  actual["PayloadUUID"] as? String == item["PayloadUUID"] as? String,
+                  actual["PayloadVersion"] as? Int == 1 else { return false }
+            if item["PayloadType"] as? String == "com.apple.security.root" {
+                // macOS reports {} instead of disclosing the certificate.
+                if let data = actual["PayloadContent"] as? Data {
+                    guard data == certificate else { return false }
+                } else {
+                    guard let redacted = actual["PayloadContent"] as? [String: Any],
+                          redacted.isEmpty else { return false }
+                }
+            } else {
+                guard let content = actual["PayloadContent"] as? [String: Any],
+                      Set(content.keys) == ["DNSSettings"],
+                      let settings = content["DNSSettings"] as? NSDictionary,
+                      let expectedSettings = item["DNSSettings"] as? NSDictionary,
+                      settings.isEqual(expectedSettings) else { return false }
+            }
+        }
+        return true
     }
 
     private static func walk(

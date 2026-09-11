@@ -374,7 +374,7 @@ public struct ConfigView: View {
         }
 
         Text(
-          "Prepare and approve this certificate/profile once. LocalHttpDns stays active on port 443 with TUN on or off. If it cannot start, MihomoBox falls back to Global DNS through Enhanced TUN and removes its DoH profile. Re-run Prepare to retry LocalHttpDns or update proxy-domain rules."
+          "Prepare and approve the profile, then verify SSL trust. LocalHttpDns stays active on port 443 with TUN on or off. A persistent profile or SSL trust failure falls back to Global DNS through Enhanced TUN and removes only its DoH profile. Re-run Prepare to retry LocalHttpDns or update proxy-domain rules."
         )
         .font(.system(size: 10))
         .foregroundStyle(DashboardTheme.muted.opacity(0.72))
@@ -430,6 +430,7 @@ public struct ConfigView: View {
     case .off:
       "Setup Required"
     case .awaitingApproval: "Awaiting macOS Approval"
+    case .certificateUntrusted: "SSL Trust Required"
     case .active: "Active"
     case .degraded: "Needs Attention"
     case .globalDNSFallback: "Global DNS Fallback"
@@ -442,7 +443,7 @@ public struct ConfigView: View {
     switch store.localDoHPhase {
     case .active: DashboardTheme.success
     case .awaitingApproval: DashboardTheme.info
-    case .degraded, .globalDNSFallback, .fallbackNeedsProfileRemoval,
+    case .degraded, .certificateUntrusted, .globalDNSFallback, .fallbackNeedsProfileRemoval,
          .fallbackUnavailable: DashboardTheme.warning
     case .unavailable, .statusUnavailable, .off: DashboardTheme.muted
     }
@@ -457,9 +458,11 @@ public struct ConfigView: View {
     case .off:
       "Install the root helper, then prepare and approve the LocalHttpDns profile before enabling Enhanced TUN."
     case .awaitingApproval:
-      "The local HTTPS server is healthy, but the DNS Settings profile is not installed. Finish the required confirmation in General › Device Management."
+      "The identity is prepared, but the installed DNS Settings profile does not yet match. Finish confirmation in General › Device Management. Profile installation alone does not guarantee SSL trust."
+    case .certificateUntrusted:
+      "The profile is installed, but macOS rejects the Local DoH certificate for SSL. Review the current MihomoBox Local DoH Root CA in Keychain Access and approve SSL trust. MihomoBox never changes this permission silently; a persistent failure switches to Global DNS after one minute."
     case .active:
-      "The independent HTTPS server and macOS split-DNS profile are active. DNS on port 443 remains available when Enhanced TUN stops."
+      "The independent HTTPS listener is running, its current certificate passes system SSL trust, and the installed split-DNS settings match. Local DNS remains available when Enhanced TUN stops; proxy access still requires Enhanced TUN or an explicit proxy."
     case .degraded:
       "The server and installed profile do not agree. Regenerate and approve the LocalHttpDns profile; Enhanced TUN remains unavailable until it is healthy."
     case .globalDNSFallback:

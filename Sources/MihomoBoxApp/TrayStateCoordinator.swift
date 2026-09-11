@@ -422,6 +422,11 @@ final class TrayStateCoordinator: TrayService {
   private func ensureLocalHttpDNSPrerequisite() async throws -> Bool {
     let status = await localDoH.status()
     switch status.phase {
+    case .certificateUntrusted:
+      throw NSError(domain: "MihomoBoxLocalDoH", code: 5, userInfo: [
+        NSLocalizedDescriptionKey:
+          "The LocalHttpDns profile is installed, but macOS has not approved its SSL certificate trust. Review the current Local DoH CA in Keychain Access; persistent failure will use Global DNS fallback."
+      ])
     case .active, .globalDNSFallback, .fallbackUnavailable:
       return true
     case .fallbackNeedsProfileRemoval:

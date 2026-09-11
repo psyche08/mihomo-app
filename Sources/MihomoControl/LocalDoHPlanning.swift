@@ -332,6 +332,8 @@ public enum LocalDoHProfileDocument {
       "PayloadRemovalDisallowed": false,
       // The manually installed profile is the macOS authorization boundary:
       // it installs both the root CA and the split-DNS settings together.
+      // Manual installation may leave SSL trust unspecified; the daemon must
+      // evaluate native system SSL trust separately before enabling TUN.
       // The root LaunchDaemon never edits Admin Trust Settings directly.
       "PayloadContent": [certificatePayload, dnsPayload],
     ]

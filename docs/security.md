@@ -86,7 +86,13 @@
   path and deletes the CA private key after issuing the loopback server
   certificate. The root CA is embedded as a `com.apple.security.root` payload
   in the same manually approved profile as split DNS; the daemon never edits
-  Admin Trust Settings and never unlocks a keychain. It derives the profile only
+  Admin Trust Settings and never unlocks a keychain. Manual profile approval may
+  import a CA without granting SSL trust. Native system SSL evaluation, without
+  custom anchors or exceptions, gates Enhanced TUN and LocalHttpDns health;
+  persistent trust failure uses Global DNS fallback instead of granting trust.
+  The installed `profiles show` report redacts CA bytes, so profile matching
+  checks fixed UUIDs, payload types and the complete prepared DNS settings;
+  this is explicitly separate from certificate trust. It derives domain rules only
   from authenticated controller rule snapshots and the exact root-owned,
   non-writable managed `GeoSite.dat`; the unprivileged App never receives the
   expanded domain list. Domain planning follows current selector chains and

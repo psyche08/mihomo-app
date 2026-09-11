@@ -377,6 +377,20 @@ minimal direct profile active.
 
 ## Diagnosis
 
+Local DoH status is available through `mihomoboxctl local-doh status`. A matched
+installed profile and a listening 443 port do not prove macOS trusts HTTPS.
+`certificate_trusted: false` means the current loopback certificate fails
+native system SSL evaluation. Manual profile installation can import the CA
+while leaving SSL trust unspecified. Review the exact current certificate in
+Keychain Access; do not trust or delete every certificate sharing its name.
+MihomoBox never silently grants trust. After one minute of continuously observed
+installed-profile/trust failure it releases 443 and enters Global DNS fallback.
+The identity and prepared profile remain for retry; only the fixed installed
+DoH profile is removed after the fallback DNS runtime passes its health gate.
+Acceptance must include normal system DNS and an HTTPS request without a
+custom CA, `--insecure`, or an explicit HTTP proxy; a proxy-only success is not
+proof that the system resolver works.
+
 ```bash
 sudo launchctl print system/dev.linsheng.mihomo.daemon
 sudo '/Library/Application Support/Mihomo App/mihomo-agent' \

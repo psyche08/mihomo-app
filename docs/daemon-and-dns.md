@@ -133,6 +133,21 @@ mismatch, and refreshes while Config is visible. The profile carries both the
 root certificate and split-DNS payload so macOS applies their trust and DNS
 authorization together only after the user approves installation.
 
+Profile installation is not proof of SSL trust: macOS may import the CA with
+an SSL-specific `Unspecified` trust setting. The daemon evaluates its current
+loopback leaf and CA using native system SSL policy, with network fetching
+disabled and without overriding anchors. `certificate_trusted` is separate
+from profile matching; an open listener alone no longer means healthy.
+The `profiles show` report uses `ProfileIdentifier`/`ProfileItems` and redacts
+certificate bytes. Its fixed payload identities and complete DNS settings
+must match the validated root-prepared document; raw mobileconfig validation
+still requires the exact CA bytes. Every 15 seconds a serialized daemon check
+observes installed-profile and trust readiness. A continuous one-minute failure
+switches to the existing Global DNS fallback, releases 443, and removes only
+the fixed DoH profile after TUN DNS is healthy. No profile/unknown inspection
+does not trigger this transition. Config reports SSL trust failure explicitly;
+the operator, not the daemon, approves SSL trust in Keychain Access.
+
 `runtime.set-tun` is a persistent transition between two valid agent states.
 Standby retains the controller and Mihomo DNS with TUN and the Fake-IP route
 absent; Enhanced mode adds TUN only after the installed profile, identity and

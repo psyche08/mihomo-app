@@ -5,6 +5,16 @@ import XCTest
 @testable import MihomoBoxUI
 
 final class LocalDoHProfileTests: XCTestCase {
+  func testInstalledProfileWithRejectedSSLTrustIsNeverActive() {
+    XCTAssertEqual(DashboardLocalDoHStatus(
+      available: true, serverPrepared: true, profileInstalled: true,
+      runtimeHealthy: false, certificateTrusted: false
+    ).phase, .certificateUntrusted)
+    XCTAssertEqual(DashboardLocalDoHStatus(
+      available: true, serverPrepared: true, runtimeHealthy: false,
+      certificateTrusted: false
+    ).phase, .awaitingApproval)
+  }
   func testFallbackDistinguishesActiveStoppedAndPendingProfileRemoval() {
     XCTAssertEqual(DashboardLocalDoHStatus(
       available: true, systemDNSManaged: true, globalDNSFallback: true
