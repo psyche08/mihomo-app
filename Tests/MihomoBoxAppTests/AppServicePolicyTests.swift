@@ -720,6 +720,8 @@ final class AppServicePolicyTests: XCTestCase {
     XCTAssertTrue(cli.contains("InstallerProtocolProbeExit.legacy.rawValue"))
     XCTAssertTrue(cli.contains("received == 2 && expected == 3"))
     XCTAssertTrue(cli.contains("InstallerProtocolProbeExit.versionedPredecessor.rawValue"))
+    XCTAssertTrue(cli.contains("try writePayload(try sendControl(.localDoHStatus))"))
+    XCTAssertTrue(cli.contains("try writePayload(try sendControl(.installLocalDoH))"))
     XCTAssertTrue(installer.contains("probe_status\" -eq 14 && \"$marker_present\" -ne 1"))
     XCTAssertFalse(cli.contains("ControlRequest(version: 1"))
     XCTAssertFalse(installer.contains("--client-app-bundle"))

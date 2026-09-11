@@ -926,6 +926,9 @@ private func usage() {
     usage: mihomoboxctl COMMAND
 
       status [--json]                 Show service and network consistency
+      local-doh status               Show authenticated LocalHttpDns status
+      local-doh prepare              Prepare certificate/profile through XPC;
+                                      finish profile approval in System Settings
       profile list [--json]           List imported local YAML profiles
       profile import PATH [--activate]
                                       Validate and import a local YAML profile
@@ -1041,6 +1044,19 @@ private func main() throws -> Int32 {
         let json = arguments == ["--json"]
         guard arguments.isEmpty || json else { throw CLIError(message: "usage: mihomoboxctl status [--json]") }
         return try printStatus(json: json)
+    case "local-doh":
+        guard arguments.count == 1 else {
+            throw CLIError(message: "usage: mihomoboxctl local-doh status|prepare")
+        }
+        switch arguments[0] {
+        case "status":
+            try writePayload(try sendControl(.localDoHStatus))
+        case "prepare":
+            try writePayload(try sendControl(.installLocalDoH))
+        default:
+            throw CLIError(message: "usage: mihomoboxctl local-doh status|prepare")
+        }
+        return 0
     case "profiles":
         let json = arguments == ["--json"]
         guard arguments.isEmpty || json else { throw CLIError(message: "usage: mihomoboxctl profiles [--json]") }

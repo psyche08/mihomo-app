@@ -42,6 +42,10 @@ IMPORT_PROFILE=""
 SWITCH_PROFILE=""
 ACTIVATE_PROFILE=0
 ROLLBACK_DIR=""
+SNAPSHOT_COMPLETE=0
+PREVIOUS_APP_SUPPORT_PRESENT=0
+PREVIOUS_DAEMON_PLIST_PRESENT=0
+PREVIOUS_RENAMED_PLIST_PRESENT=0
 PROFILE_ROLLBACK_DIR=""
 PROFILE_DAEMON_WAS_RUNNING=0
 PREVIOUS_DAEMON_RUNNING=0
@@ -546,10 +550,12 @@ snapshot_previous_launchd_definitions() {
   # rollback must bootstrap again.
   if [[ -e "$PLIST" || -L "$PLIST" ]]; then
     save_trusted_launchd_plist "$PLIST" "$ROLLBACK_DIR/daemon.plist" "$LABEL" || return 1
+    PREVIOUS_DAEMON_PLIST_PRESENT=1
   fi
   if [[ -e "$RENAMED_PLIST" || -L "$RENAMED_PLIST" ]]; then
     save_trusted_launchd_plist \
       "$RENAMED_PLIST" "$ROLLBACK_DIR/renamed-daemon.plist" "$RENAMED_LABEL" || return 1
+    PREVIOUS_RENAMED_PLIST_PRESENT=1
   fi
   if [[ "$PREVIOUS_LEGACY_RUNNING" -eq 1 ]]; then
     save_trusted_launchd_plist \
@@ -610,7 +616,7 @@ wait_for_runtime_dns_mode() {
     wait_for "macOS PrimaryService DNS preferences" \
       "$APP_SUPPORT/mihomo-agent" --config "$APP_SUPPORT/daemon.json" --check-system-dns
     local managed_dns_pattern='127\.0\.0\.53'
-    if [[ "$(/usr/bin/plutil -extract globalDNSFallbackEnabled raw -o - "$APP_SUPPORT/daemon.json" 2>/dev/null)" == "true" ]]; then
+    if [[ "$(/usr/bin/plutil -extract globalDNSFallbackEnabled raw -o - "$APP_SUPPORT/daemon.json" 2>/dev/null || true)" == "true" ]]; then
       managed_dns_pattern='198\.18\.0\.1'
     fi
     wait_for "effective macOS DNS" \
@@ -638,9 +644,9 @@ managed_agent_standby_ready() {
 }
 
 managed_runtime_dns_ready() {
-  if [[ "$(/usr/bin/plutil -extract globalDNSFallbackEnabled raw -o - "$APP_SUPPORT/daemon.json" 2>/dev/null)" == "true" ]]; then
+  if [[ "$(/usr/bin/plutil -extract globalDNSFallbackEnabled raw -o - "$APP_SUPPORT/daemon.json" 2>/dev/null || true)" == "true" ]]; then
     managed_network_ready
-  elif [[ "$(/usr/bin/plutil -extract enhancedTUNEnabled raw -o - "$APP_SUPPORT/daemon.json" 2>/dev/null)" == "true" ]]; then
+  elif [[ "$(/usr/bin/plutil -extract enhancedTUNEnabled raw -o - "$APP_SUPPORT/daemon.json" 2>/dev/null || true)" == "true" ]]; then
     managed_network_ready || return 1
     /usr/bin/nc -z 127.0.0.1 443
   else
@@ -825,6 +831,9 @@ install_profile_for_first_start() {
 rollback_profile_switch() {
   local status=$?
   trap - ERR
+  # ERR is inherited by command substitutions under set -E. A probe must
+  # never roll back privileged state while its parent keeps installing.
+  [[ "$BASH_SUBSHELL" -eq 0 ]] || exit "$status"
   echo "profile switch failed; restoring the previous active profile" >&2
   /bin/launchctl bootout "system/$LABEL" >/dev/null 2>&1 || true
   wait_for_job_absent "$LABEL" || true
@@ -966,6 +975,25 @@ snapshot_installation() {
   ensure_rollback_directory || return 1
   if [[ -d "$APP_SUPPORT" ]]; then
     /usr/bin/ditto "$APP_SUPPORT" "$ROLLBACK_DIR/app-support" || return 1
+    PREVIOUS_APP_SUPPORT_PRESENT=1
+  fi
+  SNAPSHOT_COMPLETE=1
+}
+
+validate_rollback_snapshot() {
+  [[ "$SNAPSHOT_COMPLETE" -eq 1 &&
+    "$ROLLBACK_DIR" == /private/tmp/mihomo-app-install.* &&
+    -d "$ROLLBACK_DIR" && ! -L "$ROLLBACK_DIR" &&
+    "$(/usr/bin/stat -f '%u:%Lp' "$ROLLBACK_DIR" 2>/dev/null || true)" == "0:700" ]] || return 1
+  if [[ "$PREVIOUS_APP_SUPPORT_PRESENT" -eq 1 ]]; then
+    [[ -d "$ROLLBACK_DIR/app-support" && ! -L "$ROLLBACK_DIR/app-support" &&
+      "$(/usr/bin/stat -f '%u' "$ROLLBACK_DIR/app-support" 2>/dev/null || true)" == "0" ]] || return 1
+  fi
+  if [[ "$PREVIOUS_DAEMON_PLIST_PRESENT" -eq 1 ]]; then
+    validate_trusted_launchd_plist "$ROLLBACK_DIR/daemon.plist" "$LABEL" || return 1
+  fi
+  if [[ "$PREVIOUS_RENAMED_PLIST_PRESENT" -eq 1 ]]; then
+    validate_trusted_launchd_plist "$ROLLBACK_DIR/renamed-daemon.plist" "$RENAMED_LABEL" || return 1
   fi
 }
 
@@ -1051,6 +1079,7 @@ report_recovery_required() {
 resume_previous_installation_after_preflight_failure() {
   local status=$?
   trap - ERR
+  [[ "$BASH_SUBSHELL" -eq 0 ]] || exit "$status"
   if ! restart_previous_installation; then
     report_recovery_required "preflight failed and the previous services could not be verified"
     exit "$status"
@@ -1097,9 +1126,20 @@ restore_previous_cli_link() {
 }
 
 restore_previous_installation_snapshot() {
+  # Prove a usable rollback source BEFORE stopping or moving the replacement.
+  # Missing snapshots must leave the current installation intact for recovery.
+  validate_rollback_snapshot || return 1
   stop_replacement_installation || return 1
-  /bin/rm -rf "$APP_SUPPORT" || return 1
-  /bin/rm -f "$PLIST" "$RENAMED_PLIST" || return 1
+  if [[ -e "$APP_SUPPORT" || -L "$APP_SUPPORT" ]]; then
+    [[ ! -e "$ROLLBACK_DIR/replacement-app-support" && ! -L "$ROLLBACK_DIR/replacement-app-support" ]] || return 1
+    /bin/mv "$APP_SUPPORT" "$ROLLBACK_DIR/replacement-app-support" || return 1
+  fi
+  if [[ -e "$PLIST" || -L "$PLIST" ]]; then
+    /bin/mv "$PLIST" "$ROLLBACK_DIR/replacement-daemon.plist" || return 1
+  fi
+  if [[ -e "$RENAMED_PLIST" || -L "$RENAMED_PLIST" ]]; then
+    /bin/mv "$RENAMED_PLIST" "$ROLLBACK_DIR/replacement-renamed-daemon.plist" || return 1
+  fi
   if [[ -d "$ROLLBACK_DIR/app-support" ]]; then
     /usr/bin/ditto "$ROLLBACK_DIR/app-support" "$APP_SUPPORT" || return 1
   fi
@@ -1116,6 +1156,7 @@ restore_previous_installation_snapshot() {
 rollback_installation() {
   local status=$?
   trap - ERR
+  [[ "$BASH_SUBSHELL" -eq 0 ]] || exit "$status"
   echo "installation failed; restoring and verifying the previous DNS runtime" >&2
   if ! restore_previous_installation_snapshot; then
     report_recovery_required "automatic installation rollback could not be verified"

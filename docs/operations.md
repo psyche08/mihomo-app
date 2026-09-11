@@ -142,6 +142,12 @@ the root-private rollback directory is printed and retained for manual
 recovery. The installer deletes that snapshot only after restoration has been
 verified; it never reports a failed or unverified restart as restored.
 
+Rollback handlers run only in the main installer process, never in inherited
+Bash command-substitution error traps. Optional DNS flags may be absent. Before
+stopping or moving a replacement, recovery requires a complete root-owned
+snapshot; replacement files are moved into that snapshot rather than deleted
+before restoration. A missing snapshot leaves the current files intact.
+
 After this bootstrap has installed a protocol-compatible update-capable daemon,
 normal App updates do not require another administrator dialog. On launch, the
 App first compares the daemon's authenticated component status with the signed
