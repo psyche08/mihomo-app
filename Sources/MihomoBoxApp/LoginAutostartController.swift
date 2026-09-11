@@ -30,7 +30,7 @@ enum LoginAutostartWriteTarget: Sendable {
   case state
 }
 
-/// Applies the healthy-TUN login-start default once, in the current-user
+/// Applies the installed-App login-start default once, in the current-user
 /// boundary. A later user removal is remembered and never undone.
 actor LoginAutostartController {
   private static let label = "dev.linsheng.mihomo-app"
@@ -60,6 +60,13 @@ actor LoginAutostartController {
 
   func applyIfHealthy(enhancedTUN: Bool, networkHealthy: Bool?) throws -> LoginAutostartOutcome {
     guard enhancedTUN, networkHealthy == true else { return .notHealthy }
+    guard let executable = installedExecutable() else { return .notInstalled }
+    return try reconcile(executable: executable)
+  }
+
+  /// Login starts the App, not a privileged tunnel. Respect a previously
+  /// removed/disabled login entry even when the default changes.
+  func applyDefault() throws -> LoginAutostartOutcome {
     guard let executable = installedExecutable() else { return .notInstalled }
     return try reconcile(executable: executable)
   }

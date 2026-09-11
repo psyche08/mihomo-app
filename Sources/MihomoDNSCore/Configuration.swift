@@ -41,6 +41,8 @@ public struct ProxyConfiguration: Codable, Equatable {
     /// Persisted desired TUN state. `nil` is accepted only for upgrades from
     /// older installations and means the previously always-on TUN behavior.
     public var enhancedTUNEnabled: Bool?
+    /// Sticky preference: turning TUN off affects this session, not next boot.
+    public var enhancedTUNPreviouslyEnabled: Bool?
     public var loopbackInterface: String
     public var loopbackAlias: String
     public var loopbackNetmask: String
@@ -60,6 +62,7 @@ public struct ProxyConfiguration: Codable, Equatable {
         manageSystemDNS: Bool = true,
         globalDNSFallbackEnabled: Bool? = nil,
         enhancedTUNEnabled: Bool? = nil,
+        enhancedTUNPreviouslyEnabled: Bool? = nil,
         loopbackInterface: String = "lo0",
         loopbackAlias: String = "127.0.0.53",
         loopbackNetmask: String = "255.0.0.0",
@@ -78,6 +81,7 @@ public struct ProxyConfiguration: Codable, Equatable {
         self.manageSystemDNS = manageSystemDNS
         self.globalDNSFallbackEnabled = globalDNSFallbackEnabled
         self.enhancedTUNEnabled = enhancedTUNEnabled
+        self.enhancedTUNPreviouslyEnabled = enhancedTUNPreviouslyEnabled
         self.loopbackInterface = loopbackInterface
         self.loopbackAlias = loopbackAlias
         self.loopbackNetmask = loopbackNetmask
@@ -137,6 +141,10 @@ public struct ProxyConfiguration: Codable, Equatable {
         // TUN enabled. Preserve that state for an in-place component upgrade;
         // newly installed configuration writes an explicit false.
         enhancedTUNEnabled ?? true
+    }
+
+    public var resumesEnhancedTUN: Bool {
+        enhancedTUNPreviouslyEnabled ?? expectsEnhancedTUN
     }
 
     public var usesGlobalDNSFallback: Bool {
@@ -213,6 +221,7 @@ public struct ProxyConfiguration: Codable, Equatable {
 public enum LocalDoHConfigurationStore {
     public static func ensureBaseService(configurationPath: String) throws {
         var configuration = try ProxyConfiguration.load(path: configurationPath)
+        configuration.enhancedTUNPreviouslyEnabled = configuration.resumesEnhancedTUN
         configuration.manageSystemDNS = false
         configuration.globalDNSFallbackEnabled = false
         configuration.localDoH = LocalDoHConfiguration()
@@ -225,6 +234,7 @@ public enum LocalDoHConfigurationStore {
 
     public static func setEnhancedTUN(_ enabled: Bool, configurationPath: String) throws {
         var configuration = try ProxyConfiguration.load(path: configurationPath)
+        configuration.enhancedTUNPreviouslyEnabled = enabled || configuration.resumesEnhancedTUN
         configuration.manageSystemDNS = false
         configuration.globalDNSFallbackEnabled = false
         configuration.localDoH = LocalDoHConfiguration()
@@ -240,6 +250,7 @@ public enum LocalDoHConfigurationStore {
         configuration.localDoH = nil
         configuration.globalDNSFallbackEnabled = true
         configuration.enhancedTUNEnabled = true
+        configuration.enhancedTUNPreviouslyEnabled = true
         try write(configuration, to: configurationPath)
     }
 

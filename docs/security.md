@@ -20,7 +20,7 @@
   controller endpoint, or direct privileged capability. Its public gateway is
   typed, and every control mutation crosses the authenticated XPC boundary.
 - The native AppKit shell may create the current user's MihomoBox LaunchAgent
-  after a healthy Enhanced TUN activation. SwiftUI cannot write login items,
+  on first installed App launch, without requiring TUN readiness. SwiftUI cannot write login items,
   and that LaunchAgent starts only the unprivileged Swift App.
 - Bootstrap/repair installation is explicit and uses the macOS administrator
   dialog. Before elevation, the currently executing signed App or CLI derives
@@ -85,21 +85,17 @@
   output path, or arbitrary domain argument. The daemon generates the identity at a fixed root-owned
   path and deletes the CA private key after issuing the loopback server
   certificate. The root CA is embedded as a `com.apple.security.root` payload
-  in the same manually approved profile as split DNS; the daemon never edits
+  in the same manually approved profile as global/default DNS; the daemon never edits
   Admin Trust Settings and never unlocks a keychain. Manual profile approval may
   import a CA without granting SSL trust. Native system SSL evaluation, without
   custom anchors or exceptions, gates Enhanced TUN and LocalHttpDns health;
   persistent trust failure uses Global DNS fallback instead of granting trust.
   The installed `profiles show` report redacts CA bytes, so profile matching
   checks fixed UUIDs, payload types and the complete prepared DNS settings;
-  this is explicitly separate from certificate trust. It derives domain rules only
-  from authenticated controller rule snapshots and the exact root-owned,
-  non-writable managed `GeoSite.dat`; the unprivileged App never receives the
-  expanded domain list. Domain planning follows current selector chains and
-  accepts only concrete reviewed remote-proxy types. GeoSite attributes are
-  intersected, unsupported protobuf entry kinds are counted, whole-set
-  inversions are omitted without widening scope, an empty list is rejected,
-  and there is no silent domain-count truncation. The daemon atomically writes
+  this is explicitly separate from certificate trust. New profiles deliberately
+  omit `SupplementalMatchDomains` for global coverage and do not derive scope
+  from proxy rules. Existing split profiles require user-approved replacement.
+  The daemon atomically writes
   one fixed root-owned profile artifact and validates its ownership, mode and
   fixed payload fields before publication. The root XPC service, standby agent
   and existing LocalHttpDns listener remain available; identity and prepared
@@ -107,6 +103,18 @@
   booleans and aggregate counts. Full helper uninstall verifies the fixed
   installed profile is absent before deleting legacy trust residue, server
   identity, or the prepared artifact.
+- LocalHttpDns forwards only raw DNS POSTs to the fixed `/dns-query` endpoint on
+  Mihomo's Unix socket. It does not expose arbitrary controller paths. Mihomo's
+  Unix listener has no HTTP authentication and creates a mode-`0666` socket;
+  its root-owned mode-`0700` parent is therefore a mandatory privilege boundary.
+  Creation rejects symlinks, wrong ownership, and traversable permissions;
+  each connection rechecks directory and socket metadata. No controller secret
+  crosses this IPC channel. Deadlines, response-size bounds and an in-flight
+  cap limit resource use. Per the always-on DNS policy, absent/unresponsive IPC
+  falls back to current physical/scoped DNS via a daemon-owned observer, without
+  using system resolver APIs or the agent's 1054 listener. Valid Mihomo DNS error
+  responses are preserved; unsafe socket permissions, malformed responses,
+  HTTP errors and overload never trigger fallback. No public resolver is added.
 - A signed legacy protocol response is not permission to downgrade the App's
   XPC requests. An older version is classified only from the authenticated response
   envelope, never from a marker file or error string. The tray disables all

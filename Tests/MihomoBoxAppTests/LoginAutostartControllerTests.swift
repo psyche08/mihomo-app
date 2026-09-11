@@ -4,6 +4,16 @@ import XCTest
 @testable import MihomoBoxApp
 
 final class LoginAutostartControllerTests: XCTestCase {
+  func testLoginDefaultDoesNotRequireTunnelAndRespectsRemoval() async throws {
+    let fixture = try Fixture(name: "startup")
+    defer { fixture.remove() }
+    let controller = LoginAutostartController(home: fixture.home, executable: fixture.installedExecutable)
+    let applied = try await controller.applyDefault()
+    XCTAssertEqual(applied, .applied)
+    try FileManager.default.removeItem(at: fixture.agent)
+    let removed = try await controller.applyDefault()
+    XCTAssertEqual(removed, .userDisabled)
+  }
   func testDefaultWaitsForHealthyTunnelAndInstalledApp() async throws {
     let fixture = try Fixture(name: "health")
     defer { fixture.remove() }

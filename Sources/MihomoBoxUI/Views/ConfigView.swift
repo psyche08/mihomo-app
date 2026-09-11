@@ -314,7 +314,7 @@ public struct ConfigView: View {
             color: localDoHStatusColor
           )
           if store.localDoHDomainCount > 0 {
-            Text("\(store.localDoHDomainCount) proxy domains")
+            Text("All domains by default")
               .font(.system(size: 10, weight: .medium))
               .foregroundStyle(DashboardTheme.muted)
           }
@@ -331,7 +331,7 @@ public struct ConfigView: View {
         .fixedSize(horizontal: false, vertical: true)
 
         Text(
-          "Setup generates a loopback-only certificate and embeds its root CA in the same profile as split DNS. In Rule mode, enabled DOMAIN, DOMAIN-SUFFIX, and GEOSITE rules are included only when their current selector chain reaches a remote proxy; all other domains keep the current macOS DNS."
+          "Local HTTPS on port 443 stays on after setup. All domains go to Mihomo over a root-private Unix socket; when Mihomo is stopped or IPC is unresponsive, queries use the current network's DNS directly. Enhanced TUN off uses real addresses. Reinstall an older split-DNS profile to adopt global coverage."
         )
         .font(.system(size: 10))
         .foregroundStyle(DashboardTheme.muted.opacity(0.78))
@@ -374,7 +374,7 @@ public struct ConfigView: View {
         }
 
         Text(
-          "Prepare and approve the profile, then verify SSL trust. LocalHttpDns stays active on port 443 with TUN on or off. A persistent profile or SSL trust failure falls back to Global DNS through Enhanced TUN and removes only its DoH profile. Re-run Prepare to retry LocalHttpDns or update proxy-domain rules."
+          "Prepare and approve the profile, then verify SSL trust. LocalHttpDns stays active on port 443 with TUN on or off. A persistent profile or SSL trust failure falls back to Global DNS through Enhanced TUN and removes only its DoH profile. Re-run Prepare to retry LocalHttpDns."
         )
         .font(.system(size: 10))
         .foregroundStyle(DashboardTheme.muted.opacity(0.72))
@@ -462,7 +462,7 @@ public struct ConfigView: View {
     case .certificateUntrusted:
       "The profile is installed, but macOS rejects the Local DoH certificate for SSL. Review the current MihomoBox Local DoH Root CA in Keychain Access and approve SSL trust. MihomoBox never changes this permission silently; a persistent failure switches to Global DNS after one minute."
     case .active:
-      "The independent HTTPS listener is running, its current certificate passes system SSL trust, and the installed split-DNS settings match. Local DNS remains available when Enhanced TUN stops; proxy access still requires Enhanced TUN or an explicit proxy."
+      "The HTTPS listener has a DNS backend, the certificate passes system SSL trust, and the installed DNS settings match. It prefers Mihomo IPC and falls back to current network DNS when Mihomo is unavailable. Proxy access still requires Enhanced TUN or an explicit proxy."
     case .degraded:
       "The server and installed profile do not agree. Regenerate and approve the LocalHttpDns profile; Enhanced TUN remains unavailable until it is healthy."
     case .globalDNSFallback:

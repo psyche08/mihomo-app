@@ -362,7 +362,10 @@ extension ConfiguratorTests {
         ), resolver: StubResolver(answers: [:]))
         let result = try String(contentsOf: config, encoding: .utf8)
         XCTAssertFalse(result.contains("external-controller-tls:"))
-        XCTAssertFalse(result.contains("external-doh-server:"))
+        XCTAssertTrue(MihomoConfigurator.hasLocalDoHIPC(configPath: config.path))
+        XCTAssertFalse(result.contains("/user-path"))
+        XCTAssertTrue(result.contains("fake-ip-filter-mode: rule"))
+        XCTAssertTrue(result.contains("MATCH,real-ip"))
         XCTAssertFalse(result.contains("\ntls:"))
         XCTAssertFalse(result.contains("/tmp/user.crt"))
         XCTAssertTrue(result.contains("tun:\n  enable: false"))
@@ -384,6 +387,7 @@ extension ConfiguratorTests {
         XCTAssertFalse(configured.manageSystemDNS)
         XCTAssertEqual(configured.localDoH?.endpoint, Endpoint(host: "127.0.0.1", port: 443))
         XCTAssertFalse(configured.expectsEnhancedTUN)
+        XCTAssertTrue(configured.resumesEnhancedTUN)
 
         try LocalDoHConfigurationStore.setEnhancedTUN(true, configurationPath: runtime.path)
         configured = try ProxyConfiguration.load(path: runtime.path)
@@ -396,6 +400,24 @@ extension ConfiguratorTests {
         XCTAssertFalse(configured.expectsEnhancedTUN)
         XCTAssertFalse(configured.manageSystemDNS)
         XCTAssertNotNil(configured.localDoH)
+    }
+
+    func testNeverEnabledTUNDoesNotAutostartAndHistorySurvivesSessionOff() throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("daemon.json")
+        try JSONEncoder().encode(ProxyConfiguration(
+            manageSystemDNS: false, enhancedTUNEnabled: false,
+            localDoH: LocalDoHConfiguration()
+        )).write(to: path)
+        XCTAssertFalse(try ProxyConfiguration.load(path: path.path).resumesEnhancedTUN)
+        try LocalDoHConfigurationStore.setEnhancedTUN(true, configurationPath: path.path)
+        try LocalDoHConfigurationStore.setEnhancedTUN(false, configurationPath: path.path)
+        let stored = try ProxyConfiguration.load(path: path.path)
+        XCTAssertTrue(stored.resumesEnhancedTUN)
+        XCTAssertFalse(stored.expectsEnhancedTUN)
+        try LocalDoHConfigurationStore.ensureBaseService(configurationPath: path.path)
+        XCTAssertTrue(try ProxyConfiguration.load(path: path.path).resumesEnhancedTUN)
     }
 
     func testGlobalDNSFallbackAndReturnToLocalStandby() throws {

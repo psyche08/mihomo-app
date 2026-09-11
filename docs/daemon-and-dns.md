@@ -21,10 +21,9 @@ prepares and approves one macOS DNS Settings profile before Enhanced TUN can be
 enabled:
 
 ```text
-matching macOS queries -> https://127.0.0.1/dns-query (root daemon, port 443)
-                              |-- healthy controller + TUN + route -> Mihomo DNS
-                              +-- otherwise/failure -> current physical/scoped DNS
-all other queries      -> current macOS default/scoped resolver
+macOS default DNS -> https://127.0.0.1/dns-query (root daemon, port 443)
+                 |-> root-private AF_UNIX /dns-query -> Mihomo DNS packet resolver
+                 +-> Mihomo absent/unresponsive -> current physical/scoped DNS
 
 Mihomo -> 127.0.0.1:1054 -> scoped or PrimaryService DHCP DNS
 ```
@@ -42,29 +41,28 @@ trust residue and server identity. Mihomo neither binds 443 nor reads that
 identity, and its child never inherits
 `SAFE_PATHS`.
 
-The root daemon builds `SupplementalMatchDomains` from enabled `DOMAIN`,
-`DOMAIN-SUFFIX`, and `GEOSITE` rules whose current selector chain resolves to a
-concrete remote proxy. It accepts both YAML's `DOMAIN-SUFFIX` and the controller
-API's `DomainSuffix` spelling. `GEOSITE` selectors are resolved against the
-validated root-owned `GeoSite.dat` from the managed Mihomo configuration
-directory. Tag lookup is case-insensitive, `@attribute` filters are intersected,
-and a tag containing `!` (for example `category-ai-!cn`) remains a literal tag.
-Only GeoSite root-domain and full-domain entries can become Apple suffix
-matches. Plain keywords, regular expressions, unknown entry kinds, invalid
-names, and unsupported controller rules are omitted and counted. Full-domain
-and controller `DOMAIN` matches are explicitly widened to suffix semantics and
-counted as approximations.
+New profiles omit `SupplementalMatchDomains`, Apple's global/default DNS scope,
+and do not depend on controller mode, selector chains, or expanded GeoSite lists.
+All domains selected by macOS for this default resolver reach Mihomo. Other VPNs
+and explicitly scoped system resolvers still follow macOS resolver precedence.
+Existing split-DNS profiles remain valid until the user regenerates and installs
+the replacement in **General > Device Management**. Changing proxy rules no
+longer requires profile regeneration. Legacy rule/GeoSite planners remain for
+compatibility, not as the default profile-generation path.
 
-The complete deduplicated result is emitted without a silent domain-count cap.
-A whole-selector inversion such as `!cn` cannot be represented by a finite
-Apple suffix list, so it is omitted and counted rather than widened to global
-DNS. A selector ending in DIRECT, an unknown target, or a selector cycle is
-also omitted. An empty result fails closed instead of generating a global
-encrypted-DNS profile. Global and Direct outbound modes are rejected because
-their effective domain scope cannot be represented as bounded split DNS.
-Regenerate the profile after changing rules, GeoSite data, or proxy selections.
-macOS requires the user to review and install the generated profile in
-**General > Device Management**.
+The IPC endpoint is fixed at
+`/Library/Application Support/Mihomo App/mihomo-data/.dns-ipc/mihomo.sock`.
+Mihomo v1.19.30 already supports raw DoH on its Unix controller. The parent must
+be root-owned mode `0700`: upstream makes the socket `0666` and disables HTTP
+authentication on Unix sockets. The daemon checks directory and socket ownership
+before each connection. It sends RFC 8484 bytes, not the diagnostic `/dns/query`
+JSON endpoint, and returns the response unchanged (including RCODE and Fake-IP).
+Requests have a bounded deadline, a 65,535-byte response limit, and at most 128
+concurrent IPC connections. No query payload or domain is logged.
+
+Sources: [Apple DNS Settings schema](https://raw.githubusercontent.com/apple/device-management/release/mdm/profiles/com.apple.dnsSettings.managed.yaml),
+[Mihomo Unix controller](https://github.com/MetaCubeX/mihomo/blob/v1.19.30/hub/route/server.go),
+[Mihomo raw DoH resolver](https://github.com/MetaCubeX/mihomo/blob/v1.19.30/hub/route/doh.go).
 
 The separate `1054` listener is mandatory. Pointing Mihomo at macOS `system`
 DNS could recurse back through the installed LocalHttpDns resolver. The configurator forces
@@ -73,18 +71,28 @@ through a proxy rule and accidentally breaks this recursion boundary. Mihomo
 uses the agent's TCP `1054` listener for its upstream requests so Enhanced TUN
 cannot recapture a UDP loopback flow emitted by Mihomo itself.
 
-Both bridge hops use non-blocking SwiftNIO UDP/TCP clients. Every query keeps
-its own timeout and remains eligible for the Mihomo response regardless of how
-many other queries are in flight. The original-DNS path is used only after that
-query's primary attempt actually fails or times out; queue pressure never
-changes DNS routing semantics. Truncated UDP replies continue asynchronously
-over TCP on the same selected endpoint and interface.
+The DoH IPC hop and original-DNS escape use non-blocking SwiftNIO clients.
+Truncated UDP replies on the original-DNS escape continue asynchronously over
+TCP on the same selected endpoint and interface.
 
 The legacy port-53 bridge still retains its Fake-IP fail-closed policy for
 one-time migration and rollback compatibility, but it is not bound in normal
-LocalHttpDns operation. LocalHttpDns deliberately prioritizes availability: a
-proxy-matched domain uses Mihomo DNS only while the Enhanced path is healthy,
-then falls back to physical/scoped DNS if that attempt is unavailable.
+LocalHttpDns operation. LocalHttpDns prefers Mihomo IPC. Missing/refused Unix
+connections, channel closure, and an IPC response deadline (at most one second)
+fall back directly to the current network's DNS. The daemon owns a separate
+`NetworkDNSState` observer, so this branch survives an agent stop and follows
+DHCP/service DNS changes. It never uses the stopped agent's `1054`, the macOS
+default resolver API, or invented public DNS servers. Loopback and Fake-IP
+resolver addresses are excluded; outgoing requests bind to the selected network
+interface. Every new request tries IPC again, automatically recovering when
+Mihomo returns. Valid DNS responses, including NXDOMAIN and SERVFAIL, are never
+replaced by fallback. Unsafe socket metadata, malformed IPC responses, HTTP
+errors and overload still fail closed. If neither backend answers, HTTP 502 is
+returned; keeping the listener alive cannot guarantee an offline upstream. In TUN-off
+standby, the managed configuration uses `fake-ip-filter-mode: rule` with
+`MATCH,real-ip` (not the single-label `*` wildcard) so Mihomo
+returns real addresses. Enabling TUN rebuilds the runtime from the protected
+source profile, restoring its Fake-IP policy.
 
 The internal health probe is an exact wire message sent directly to Mihomo DNS;
 it never uses original DNS. This lets startup distinguish controller/DNS
@@ -110,9 +118,11 @@ ambiguous. Domain-scoped VPN and enterprise resolvers remain deterministic.
 ## LocalHttpDns ownership
 
 In LocalHttpDns mode MihomoBox does not replace the system DNS server list. The independent daemon
-endpoint remains live before, during and after agent/TUN transitions. It uses
-Mihomo DNS only while the complete controller/TUN/Fake-IP route is healthy and
-otherwise immediately uses the current physical/scoped resolver. The
+endpoint remains bound before, during and after agent/TUN transitions. It uses
+Mihomo IPC in both standby and Enhanced mode. During a backend stop/restart,
+the daemon forwards to current network DNS without fabricating answers. It
+starts supervising the prepared listener before agent restoration/boot health
+checks, so a failed agent start does not prevent the base DNS service. The
 original-DNS `1054` listener, physical-interface binding, route observer, wake
 recovery, egress probes, and generation-bound health snapshots remain active.
 A five-second daemon supervisor retries `443` after a listener failure. Three
@@ -130,7 +140,7 @@ booleans plus numeric counts. Profile contents, expanded domain names, and
 GeoSite entries never cross XPC or enter logs. The UI distinguishes setup,
 waiting for macOS profile approval, active LocalHttpDns, and a profile/server
 mismatch, and refreshes while Config is visible. The profile carries both the
-root certificate and split-DNS payload so macOS applies their trust and DNS
+root certificate and global-DNS payload so macOS applies their trust and DNS
 authorization together only after the user approves installation.
 
 Profile installation is not proof of SSL trust: macOS may import the CA with
@@ -153,6 +163,13 @@ Standby retains the controller and Mihomo DNS with TUN and the Fake-IP route
 absent; Enhanced mode adds TUN only after the installed profile, identity and
 443 listener are verified. Disabling Enhanced TUN returns to standby and
 never stops LocalHttpDns.
+
+`enhancedTUNPreviouslyEnabled` separately remembers a successful enable. Turning
+TUN off changes the current session but preserves that preference. A subsequent
+daemon boot or App launch resumes Enhanced mode through the same validated
+transaction; missing profile/trust uses the existing verified Global DNS fallback.
+Never-enabled installations stay in standby. Migration remembers the old current
+TUN value; versions that already recorded it as off have no recoverable history.
 
 ### Global DNS fallback
 
@@ -277,8 +294,8 @@ answers and requests recovery only after three consecutive failed observations,
 filtering short startup and interface-transition gaps. The sole owned Mihomo
 supervisor then allows eight seconds for Mihomo to rebuild the complete
 auto-route state. In standby mode, the absence of TUN/route is intentional and
-does not vote for recovery. LocalHttpDns continues on the daemon and falls back
-to physical DNS throughout either recovery path.
+does not vote for recovery. LocalHttpDns remains bound on the daemon; Mihomo IPC
+temporarily falls back to current network DNS while the child restarts.
 
 The Fake-IP route is machine-wide evidence, not ownership proof. The agent
 records any tunnel already routing the probe range before it starts Mihomo and
@@ -294,8 +311,9 @@ stale `127.0.0.53` values from inactive Wi-Fi, Ethernet or VPN services.
 
 The root daemon owns the LocalHttpDns data plane. It authenticates
 XPC clients, serializes lifecycle/profile transactions, prepares the fixed
-split-DNS profile from managed controller/GeoSite state, keeps the TLS endpoint
-alive with a physical-DNS fallback, and supervises the agent. TUN and the 1054
+global DNS profile, keeps the TLS endpoint alive with Mihomo IPC plus a
+daemon-owned original-network DNS fallback,
+and supervises the agent. TUN and the 1054
 original-DNS escape remain agent-owned. Only explicit fallback owns the system
 DNS list.
 
@@ -310,10 +328,10 @@ The daemon writes a one-shot mode-`0600` request containing a new generation
 and wakes the existing agent with `SIGUSR1`. The agent keeps its own 1054
 original-DNS escape alive, temporarily closes its Fake-IP safety gate, and
 restarts only its owned Mihomo child. The independently daemon-owned
-LocalHttpDns endpoint remains bound and falls back to physical DNS. The
+LocalHttpDns endpoint remains bound and falls back to current network DNS. The
 transaction commits after the new generation reports complete health. A
 rejected request, child failure, or validation timeout stops the agent but
-still leaves LocalHttpDns serving through physical DNS.
+still leaves LocalHttpDns resolving through its independent network-DNS branch.
 
 No query name, matched domain, resolver address, service identifier, or wire
 message is logged. Only interface names and aggregate resolver/route counts are

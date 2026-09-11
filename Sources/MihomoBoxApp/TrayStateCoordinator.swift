@@ -72,6 +72,7 @@ final class TrayStateCoordinator: TrayService {
   private var started = false
   private var installationAvailable = false
   private var loginDefaultDoneOrInFlight = false
+  private var didAttemptEnhancedStartup = false
   private var loginDefaultFailures = 0
   private var didRecordFirstSuccessfulPoll = false
 
@@ -119,6 +120,7 @@ final class TrayStateCoordinator: TrayService {
   func start() {
     guard !started else { return }
     started = true
+    Task { [weak self] in await self?.applyLoginDefaultIfNeeded() }
     refresh(authoritative: false)
     pollTask = Task { [weak self] in
       var warmup = 0
@@ -165,6 +167,31 @@ final class TrayStateCoordinator: TrayService {
           AppStartupTimeline.mark(.firstControlSnapshot)
         }
         await self.applyLoginDefaultIfNeeded()
+        if !self.didAttemptEnhancedStartup,
+          !self.currentSnapshot.daemonCompatibility.blocksControlActions,
+          self.currentSnapshot.activeProfile != nil {
+          self.didAttemptEnhancedStartup = true
+          let startup = try await self.control.localDoHStatus()
+          if startup.resumeEnhancedTUN == true, !self.currentSnapshot.enhancedTUN {
+            do {
+              try await self.withShellMutation {
+                var busy = self.currentSnapshot
+                busy.tunOperationInFlight = true
+                self.publish(busy)
+                defer {
+                  var complete = self.currentSnapshot
+                  complete.tunOperationInFlight = false
+                  self.publish(complete)
+                }
+                _ = try await self.control.startAgent()
+                self.apply(try await self.control.poll(), retainDelays: false)
+                self.clearError()
+              }
+            } catch {
+              self.publishError("Automatic Enhanced TUN startup failed. Retry from the Enhanced TUN switch.")
+            }
+          }
+        }
       } catch let error as ControlError {
         if case .protocolVersionMismatch(let expected, let received) = error {
           self.consecutivePollFailures = 0
@@ -716,15 +743,10 @@ final class TrayStateCoordinator: TrayService {
   }
 
   private func applyLoginDefaultIfNeeded() async {
-    guard !loginDefaultDoneOrInFlight,
-      currentSnapshot.enhancedTUN, currentSnapshot.networkHealthy == true
-    else { return }
+    guard !loginDefaultDoneOrInFlight else { return }
     loginDefaultDoneOrInFlight = true
     do {
-      let outcome = try await login.applyIfHealthy(
-        enhancedTUN: currentSnapshot.enhancedTUN,
-        networkHealthy: currentSnapshot.networkHealthy
-      )
+      let outcome = try await login.applyDefault()
       AppLog.info("event=login_autostart_default result=\(outcome.rawValue)")
       loginDefaultDoneOrInFlight = true
     } catch {

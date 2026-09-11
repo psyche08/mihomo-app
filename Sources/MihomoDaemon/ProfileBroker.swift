@@ -69,7 +69,8 @@ final class ProfileBroker: @unchecked Sendable {
             if stored.localDoH == LocalDoHConfiguration(),
                !current.manageSystemDNS,
                current.enhancedTUNEnabled != nil,
-               !current.expectsEnhancedTUN || allowEnhancedTUN {
+               (!current.expectsEnhancedTUN || allowEnhancedTUN),
+               MihomoConfigurator.hasLocalDoHIPC(configPath: root.appendingPathComponent("mihomo-data/config.yaml").path) {
                 return
             }
 

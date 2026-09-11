@@ -153,17 +153,20 @@ persists `tun.enable: true`; turning it off persists `false` and returns to a
 healthy controller/DNS standby. Neither action stops LocalHttpDns or writes the
 macOS system DNS server list.
 
-The first time an installed App observes that Enhanced TUN and the managed
-network are both healthy, the native App enables a current-user macOS login
-item. This is a one-time default: a cancelled or failed action that never
-reaches healthy runtime state cannot register anything, and MihomoBox does not
+On first installed App launch, the native App enables a current-user macOS login
+item independently of helper, network, or Enhanced TUN readiness. This is a
+one-time default, and MihomoBox does not
 re-add the login item after the user later turns it off in System Settings.
 Only an App under `/Applications` or `~/Applications` can apply the default, so
 a DMG, App Translocation, Downloads copy, or development smoke build cannot
 persist a temporary path. The AppKit shell writes and validates the user-level
 LaunchAgent atomically; SwiftUI views receive no LaunchAgent write API. The login
 item starts the hidden menu-bar App after login and does not directly launch
-Mihomo or execute a privileged operation.
+Mihomo or execute a privileged operation. After the first compatible controller
+snapshot with an active profile, the App reads the daemon's sticky Enhanced-mode
+preference and attempts one authenticated start if needed. Failed starts do not
+create a polling restart loop. Turning Enhanced mode off affects this session;
+the daemon remembers successful activation for the next boot or App launch.
 
 The tray has exactly two administrator-authorized entry points: the first TUN
 enable when the daemon is not installed, and explicit `Install / Repair

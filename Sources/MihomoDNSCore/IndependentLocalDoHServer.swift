@@ -9,14 +9,13 @@ import NIOFoundationCompat
 /// A loopback DoH endpoint whose lifetime is independent from Mihomo and TUN.
 ///
 /// The root daemon owns this server. A healthy managed Mihomo DNS listener is
-/// preferred so proxy domains retain Fake-IP semantics while the proxy is up;
-/// the current physical/scoped resolver is an unconditional fallback so the
-/// installed split-DNS profile never loses name resolution when Mihomo stops.
+/// used over a protected Unix socket. When it is absent/unresponsive, the
+/// daemon forwards directly to current network DNS without depending on the
+/// agent's 1054 listener or recursing through the system DoH profile.
 public final class IndependentLocalDoHServer: @unchecked Sendable {
     private static let identityDirectory = "/Library/Application Support/Mihomo App/local-doh"
     private let queue = DispatchQueue(label: "dev.linsheng.mihomo-app.local-doh")
     private let configurationPath: String
-    private let primaryAvailable: @Sendable () -> Bool
     private var group: MultiThreadedEventLoopGroup?
     private var listener: Channel?
     private var networkState: NetworkDNSState?
@@ -27,15 +26,18 @@ public final class IndependentLocalDoHServer: @unchecked Sendable {
     private var failureHandler: (@Sendable () -> Void)?
 
     public init(
-        configurationPath: String,
-        primaryAvailable: @escaping @Sendable () -> Bool
+        configurationPath: String
     ) {
         self.configurationPath = configurationPath
-        self.primaryAvailable = primaryAvailable
     }
 
     public var isRunning: Bool {
         queue.sync { listener?.isActive == true }
+    }
+
+    /// Passive resolver availability, not proof that an upstream is reachable.
+    public var originalDNSAvailable: Bool {
+        queue.sync { networkState?.snapshot().servers.isEmpty == false }
     }
 
     public func setFailureHandler(_ handler: @escaping @Sendable () -> Void) {
@@ -136,30 +138,18 @@ public final class IndependentLocalDoHServer: @unchecked Sendable {
         let sslContext = try NIOSSLContext(configuration: tls)
 
         let networkState = NetworkDNSState(
-            excludedServers: [
-                configuration.systemDNSListen.host,
-                configuration.mihomoDNS.host,
-                configuration.upstreamListen.host,
-                localDoH.endpoint.host,
-            ],
-            fallbackServers: configuration.fallbackDNSServers
+            excludedServers: [configuration.systemDNSListen.host, configuration.mihomoDNS.host,
+                              configuration.upstreamListen.host, localDoH.endpoint.host],
+            // Only the current network's DNS, never an invented public resolver.
+            fallbackServers: []
         )
         try networkState.start()
-
         let group = MultiThreadedEventLoopGroup(numberOfThreads: min(2, max(1, System.coreCount)))
-        let primary = FixedAsyncDNSForwarder(
-            endpoint: configuration.mihomoDNS,
-            timeoutMilliseconds: min(configuration.queryTimeoutMilliseconds, 1_000)
-        )
-        let fallback = DynamicAsyncDNSForwarder(
-            state: networkState,
-            timeoutMilliseconds: configuration.queryTimeoutMilliseconds
-        )
-        let forwarder = FallbackAsyncDNSForwarder(
-            primary: primary,
-            fallback: fallback,
-            primaryAllowed: { [primaryAvailable] _ in primaryAvailable() },
-            fallbackAllowed: { _ in true }
+        let forwarder = LocalDoHForwarder(
+            ipc: UnixDoHForwarder(timeoutMilliseconds: min(configuration.queryTimeoutMilliseconds, 1_000)),
+            originalDNS: DynamicAsyncDNSForwarder(
+                state: networkState, timeoutMilliseconds: configuration.queryTimeoutMilliseconds
+            )
         )
 
         do {

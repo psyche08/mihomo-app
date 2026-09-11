@@ -65,6 +65,10 @@ final class AgentSupervisor: @unchecked Sendable {
         (try? ProxyConfiguration.load(path: configPath).expectsEnhancedTUN) ?? true
     }
 
+    var resumesEnhancedTUN: Bool {
+        (try? ProxyConfiguration.load(path: configPath).resumesEnhancedTUN) ?? false
+    }
+
     var localDoHIdentityPrepared: Bool {
         let support = URL(fileURLWithPath: configPath).deletingLastPathComponent()
         let required: [(String, mode_t)] = [
@@ -85,18 +89,15 @@ final class AgentSupervisor: @unchecked Sendable {
         }
     }
 
-    /// Passive availability used by the daemon-owned DoH server to decide
-    /// whether Mihomo DNS is a viable first upstream. Missing/stale health is
-    /// treated as unavailable so queries immediately use physical DNS.
-    var mihomoDNSAvailable: Bool {
+    /// Generation-bound passive backend readiness, including TUN-off standby.
+    /// This affects status only; every DoH packet still goes through Mihomo IPC.
+    var localDoHBackendReady: Bool {
         guard isRunning,
-              let configuration = try? ProxyConfiguration.load(path: configPath),
-              let health = HealthSnapshotStore.read(from: configuration.healthSnapshotPath)
+              let snapshot = try? expectedHealthSnapshot(),
+              LocalDoHIPC.socketIsProtected()
         else { return false }
+        let health = snapshot.health
         return health.controllerReachable
-            && health.tunEnabled
-            && health.fakeIPMode
-            && health.fakeIPRouteReady
             && health.mihomoDNSReady
             && health.networkConsistent
     }

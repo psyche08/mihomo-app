@@ -3,6 +3,21 @@ import MihomoControl
 import XCTest
 
 final class ControlProtocolTests: XCTestCase {
+    func testGlobalDoHProfileOmitsSupplementalMatchDomains() throws {
+        let root = Data([1, 2, 3])
+        let data = try LocalDoHProfileDocument.data(
+            for: LocalDoHDomainPlan(domains: [""]), rootCertificate: root
+        )
+        let profile = try XCTUnwrap(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+        let payloads = try XCTUnwrap(profile["PayloadContent"] as? [[String: Any]])
+        let dns = try XCTUnwrap(payloads.last?["DNSSettings"] as? [String: Any])
+        XCTAssertNil(dns["SupplementalMatchDomains"])
+        XCTAssertEqual(dns["ServerURL"] as? String, "https://127.0.0.1/dns-query")
+        XCTAssertEqual(LocalDoHProfileDocument.validatedDomainCount(in: data, expectedRootCertificate: root), 1)
+        XCTAssertEqual(LocalDoHProfileInspection.validatedInstalled(
+            propertyList: data, expectedRootCertificate: root
+        ), LocalDoHProfileInspection(installed: true, domainCount: 1))
+    }
     func testRoutineAuditSuppressesOnlyHighFrequencySuccessfulReads() {
         XCTAssertFalse(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .trayState))
         XCTAssertFalse(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .controllerStreamNext))

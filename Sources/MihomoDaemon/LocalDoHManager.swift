@@ -56,7 +56,10 @@ final class LocalDoHManager: @unchecked Sendable {
         guard agent.usesLocalDoH, !agent.managesSystemDNS else {
             throw localDoHError("Install or repair the root helper before preparing LocalHttpDns")
         }
-        let plan = try controller.localDoHPlan()
+        // No rule/geosite expansion is needed for the default global resolver.
+        // Empty suffix denotes global scope internally; the document omits
+        // SupplementalMatchDomains, as required by the macOS DNS payload.
+        let plan = LocalDoHDomainPlan(domains: [""])
 
         let snapshot = try captureIdentitySnapshot()
         defer { try? FileManager.default.removeItem(at: snapshot.directory) }

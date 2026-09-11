@@ -121,6 +121,13 @@ public enum MihomoConfigurator {
         var dns = Array(lines[(dnsStart + 1) ..< dnsEnd])
         for (key, value) in managedScalars { dns = replaceScalar(dns, key: key, value: value) }
         for (key, value) in managedLists { dns = replaceList(dns, key: key, values: [value]) }
+        // Standby still resolves through Mihomo, but must not hand applications
+        // unroutable Fake-IPs. The active source profile restores its filter
+        // when Enhanced TUN is enabled again.
+        if localDoH != nil, runtime?.enhancedTUNEnabled == false {
+            dns = replaceScalar(dns, key: "fake-ip-filter-mode", value: "rule")
+            dns = replaceList(dns, key: "fake-ip-filter", values: ["MATCH,real-ip"])
+        }
         if runtime?.globalDNSFallbackEnabled == true {
             dns = replaceScalar(dns, key: "fake-ip-range", value: "198.18.0.1/16")
         }
@@ -143,6 +150,10 @@ public enum MihomoConfigurator {
             for key in ["external-controller-tls", "external-doh-server", "tls"] {
                 lines = removeTopLevelValue(lines, key: key)
             }
+            lines = replaceTopLevelScalar(lines, key: "external-controller-unix",
+                                          value: jsonQuoted(LocalDoHIPC.socketPath))
+            lines = replaceTopLevelScalar(lines, key: "external-doh-server",
+                                          value: jsonQuoted(LocalDoHIPC.requestPath))
         }
 
         lines = excludeProxyServersFromTunnel(lines, resolver: resolver)
@@ -157,6 +168,13 @@ public enum MihomoConfigurator {
         }
         let contents = try String(contentsOfFile: backup, encoding: .utf8)
         try contents.write(toFile: config, atomically: true, encoding: .utf8)
+    }
+
+    public static func hasLocalDoHIPC(configPath: String) -> Bool {
+        guard let contents = try? String(contentsOfFile: configPath, encoding: .utf8) else { return false }
+        let lines = contents.components(separatedBy: "\n")
+        return topLevelScalar(lines, "external-controller-unix") == LocalDoHIPC.socketPath
+            && topLevelScalar(lines, "external-doh-server") == LocalDoHIPC.requestPath
     }
 
     // MARK: - Tunnel exclusion

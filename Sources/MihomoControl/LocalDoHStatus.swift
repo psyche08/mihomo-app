@@ -8,6 +8,7 @@ public struct LocalDoHStatus: Codable, Equatable, Sendable {
     public var profileInspectionSucceeded: Bool
     public var runtimeHealthy: Bool
     public var certificateTrusted: Bool?
+    public var resumeEnhancedTUN: Bool?
     public var systemDNSManaged: Bool?
     public var installedDomainCount: Int
     public var preparedDomainCount: Int
@@ -24,13 +25,15 @@ public struct LocalDoHStatus: Codable, Equatable, Sendable {
         preparedDomainCount: Int = 0,
         globalDNSFallback: Bool = false,
         fallbackProfileRemovalRequired: Bool = false,
-        certificateTrusted: Bool? = nil
+        certificateTrusted: Bool? = nil,
+        resumeEnhancedTUN: Bool? = nil
     ) {
         self.serverPrepared = serverPrepared
         self.profileInstalled = profileInstalled
         self.profileInspectionSucceeded = profileInspectionSucceeded
         self.runtimeHealthy = runtimeHealthy
         self.certificateTrusted = certificateTrusted
+        self.resumeEnhancedTUN = resumeEnhancedTUN
         self.systemDNSManaged = systemDNSManaged
         self.installedDomainCount = installedDomainCount
         self.preparedDomainCount = preparedDomainCount
@@ -44,6 +47,7 @@ public struct LocalDoHStatus: Codable, Equatable, Sendable {
         case profileInspectionSucceeded = "profile_inspection_succeeded"
         case runtimeHealthy = "runtime_healthy"
         case certificateTrusted = "certificate_trusted"
+        case resumeEnhancedTUN = "resume_enhanced_tun"
         case systemDNSManaged = "system_dns_managed"
         case installedDomainCount = "installed_domain_count"
         case preparedDomainCount = "prepared_domain_count"
@@ -61,6 +65,7 @@ public struct LocalDoHStatus: Codable, Equatable, Sendable {
         )
         runtimeHealthy = try container.decode(Bool.self, forKey: .runtimeHealthy)
         certificateTrusted = try container.decodeIfPresent(Bool.self, forKey: .certificateTrusted)
+        resumeEnhancedTUN = try container.decodeIfPresent(Bool.self, forKey: .resumeEnhancedTUN)
         systemDNSManaged = try container.decodeIfPresent(Bool.self, forKey: .systemDNSManaged)
         installedDomainCount = try container.decodeIfPresent(
             Int.self,

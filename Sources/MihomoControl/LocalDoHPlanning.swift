@@ -306,7 +306,7 @@ public enum LocalDoHProfileDocument {
       "PayloadCertificateFileName": "MihomoBox-Local-DoH-Root-CA.cer",
       "PayloadContent": rootCertificate,
     ]
-    let dnsPayload: [String: Any] = [
+    var dnsPayload: [String: Any] = [
       "PayloadType": "com.apple.dnsSettings.managed",
       "PayloadVersion": 1,
       "PayloadIdentifier": "\(identifier).dns",
@@ -319,6 +319,11 @@ public enum LocalDoHProfileDocument {
         "SupplementalMatchDomains": plan.domains,
       ],
     ]
+    if plan.domains == [""] {
+      var settings = dnsPayload["DNSSettings"] as! [String: Any]
+      settings.removeValue(forKey: "SupplementalMatchDomains")
+      dnsPayload["DNSSettings"] = settings
+    }
     let profile: [String: Any] = [
       "PayloadType": "Configuration",
       "PayloadVersion": 1,
@@ -326,12 +331,12 @@ public enum LocalDoHProfileDocument {
       "PayloadUUID": "EB76D427-128C-4F94-BD19-8937D352899B",
       "PayloadDisplayName": "MihomoBox Local DoH",
       "PayloadDescription":
-        "Routes selected proxy-domain DNS queries to MihomoBox over local HTTPS. Other domains keep using the current macOS default DNS.",
+        "Routes DNS queries to MihomoBox over local HTTPS. Mihomo determines the DNS response using the active profile.",
       "PayloadOrganization": "MihomoBox",
       "PayloadScope": "System",
       "PayloadRemovalDisallowed": false,
       // The manually installed profile is the macOS authorization boundary:
-      // it installs both the root CA and the split-DNS settings together.
+      // it installs both the root CA and the DNS settings together.
       // Manual installation may leave SSL trust unspecified; the daemon must
       // evaluate native system SSL trust separately before enabling TUN.
       // The root LaunchDaemon never edits Admin Trust Settings directly.
@@ -378,8 +383,10 @@ public enum LocalDoHProfileDocument {
       let settings = dnsPayload["DNSSettings"] as? [String: Any],
       settings["DNSProtocol"] as? String == "HTTPS",
       settings["ServerURL"] as? String == serverURL,
-      settings["ServerAddresses"] as? [String] == ["127.0.0.1"],
-      let domains = settings["SupplementalMatchDomains"] as? [String],
+      settings["ServerAddresses"] as? [String] == ["127.0.0.1"]
+    else { return nil }
+    if settings["SupplementalMatchDomains"] == nil { return 1 }
+    guard let domains = settings["SupplementalMatchDomains"] as? [String],
       !domains.isEmpty,
       domains.allSatisfy({ !$0.isEmpty && $0 != "." })
     else { return nil }

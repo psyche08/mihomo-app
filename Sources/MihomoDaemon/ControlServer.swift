@@ -31,8 +31,7 @@ final class ControlDispatcher: @unchecked Sendable {
             try Self.validateStartedRuntime(agent: agent, controller: controllerBroker)
         }
         let localDoHServer = IndependentLocalDoHServer(
-            configurationPath: configPath,
-            primaryAvailable: { [weak agent] in agent?.mihomoDNSAvailable == true }
+            configurationPath: configPath
         )
         controller = controllerBroker
         self.localDoHServer = localDoHServer
@@ -73,6 +72,9 @@ final class ControlDispatcher: @unchecked Sendable {
     func startInitialRuntime() {
         mutationLock.lock()
         defer { mutationLock.unlock() }
+        // Prepared Local DoH is a daemon base service, even if the agent's
+        // recovery/startup subsequently fails or remains intentionally stopped.
+        localDoHServer.startSupervising()
         if components.recoveryRequired {
             let restored = agent.stopAndRestoreVerified()
             ServiceLog.error(
@@ -91,6 +93,7 @@ final class ControlDispatcher: @unchecked Sendable {
             return
         }
         let preserveFallback = agent.globalDNSFallbackConfigured
+        let resumeEnhancedTUN = agent.resumesEnhancedTUN
         // Restore using the OLD DNS owner before changing daemon.json, or a
         // persisted 198.18.0.1 backup would be compared against 127.0.0.53.
         guard agent.stopAndRestoreVerified() else {
@@ -163,6 +166,7 @@ final class ControlDispatcher: @unchecked Sendable {
                 try ensureStartedRuntimeLocked()
                 if preserveFallback { finishGlobalDNSFallbackLocked() }
             }
+            if resumeEnhancedTUN { try resumeEnhancedRuntimeLocked() }
             try components.commitPendingBootValidation()
             ServiceLog.info("event=initial_runtime result=ready")
             logInitialRuntimeStartup(result: "ready")
@@ -292,6 +296,7 @@ final class ControlDispatcher: @unchecked Sendable {
                 try ensureRuntimePrerequisiteLocked()
                 try agent.start()
                 try ensureStartedRuntimeLocked()
+                if agent.resumesEnhancedTUN { try resumeEnhancedRuntimeLocked() }
                 payload = nil
             case .stopAgent:
                 guard agent.stopAndRestoreVerified() else {
@@ -320,14 +325,16 @@ final class ControlDispatcher: @unchecked Sendable {
                     serverPrepared: prepared,
                     profileInstalled: profile.inspection.installed,
                     profileInspectionSucceeded: profile.succeeded,
-                    runtimeHealthy: prepared && localDoHServer.isRunning && trusted,
+                    runtimeHealthy: prepared && localDoHServer.isRunning && trusted
+                        && (agent.localDoHBackendReady || localDoHServer.originalDNSAvailable),
                     systemDNSManaged: health?.systemDNSManaged,
                     installedDomainCount: profile.inspection.domainCount,
                     preparedDomainCount: preparedProfile.domainCount,
                     globalDNSFallback: agent.globalDNSFallbackConfigured,
                     fallbackProfileRemovalRequired: agent.globalDNSFallbackConfigured
                         && profile.present != false,
-                    certificateTrusted: trusted
+                    certificateTrusted: trusted,
+                    resumeEnhancedTUN: agent.resumesEnhancedTUN
                 )
                 payload = try JSONEncoder().encode(status)
             case .installLocalDoH:
@@ -494,6 +501,19 @@ final class ControlDispatcher: @unchecked Sendable {
             try Self.validateStartedRuntime(agent: agent, controller: controller)
         } catch {
             throw ControllerBrokerCriticalError.unsafeGlobalRuntime
+        }
+    }
+
+    private func resumeEnhancedRuntimeLocked() throws {
+        guard !agent.expectsEnhancedTUN else { return }
+        let profile = LocalDoHStatusProvider.inspectInstalledProfile()
+        if profile.inspection.installed && LocalDoHStatusProvider.certificateTrusted()
+            && localDoHServer.isRunning {
+            try profiles.setEnhancedTUN(true)
+        } else {
+            // Remembering Enhanced mode must not depend on a fresh profile
+            // approval at every boot. The existing verified fallback is safe.
+            try activateGlobalDNSFallbackLocked()
         }
     }
 

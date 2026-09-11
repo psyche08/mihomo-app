@@ -72,19 +72,22 @@ The installer:
    MihomoBox address remains in persistent or effective system DNS.
 
 From the Config page, **Prepare & Open Profile** first asks the authenticated
-root daemon to build the split-DNS plan from the current controller routes and
-managed `GeoSite.dat`. The daemon writes the fixed profile at
+root daemon to prepare a global/default DNS profile, independent of domain rules
+and controller mode. The daemon writes the fixed profile at
 `/Library/Application Support/Mihomo App/MihomoBox-Local-DoH.mobileconfig` as
 root:wheel mode `0644` and returns only aggregate counts. The profile contains
-both a `com.apple.security.root` certificate payload and the split-DNS payload,
+both a `com.apple.security.root` certificate payload and the global DNS payload,
 so the later macOS approval owns both trust and resolver installation. In the
 same typed XPC transaction, the already-installed root daemon validates that
 artifact, keeps its control service and standby agent online, generates a
 root-owned local CA and loopback server certificate/private key, discards the
 CA private key, and starts the daemon-owned DoH endpoint. The endpoint is
 validated independently; profile preparation does not require TUN or a Fake-IP
-route. It uses Mihomo DNS only when the complete proxy path is healthy and
-otherwise keeps resolving through physical DNS. Failure restores the previous
+route. It always forwards raw DNS through Mihomo's root-private Unix socket;
+TUN-off standby makes Mihomo return real addresses. When Mihomo is stopped or
+IPC is unresponsive, a daemon-owned forwarder uses current physical/scoped DNS
+without depending on the agent, changing system DNS, or stopping port 443.
+Valid Mihomo DNS error responses are returned unchanged. Preparation failure restores the previous
 identity and prepared profile atomically before returning an error.
 No administrator dialog, `sudo`, or AppleScript is used after the helper is
 installed. The App opens the validated root-owned profile. Apple requires the
@@ -98,18 +101,17 @@ the root installation.
 Config shows separate `Awaiting macOS Approval`, `Active`, and `Needs Attention`
 states. It refreshes authenticated root/profile state while visible, so
 finishing approval in System Settings does not require relaunching the App.
-Preparation is limited to Rule mode and follows each rule target through the
-controller's current selector chain. Proxy-routed `GEOSITE` selectors are fully
-expanded with attribute filtering; unsupported entry kinds and unrepresentable
-inversions are counted in the panel. Changing a selector, domain rule, or
-GeoSite database requires regenerating the profile.
+New profiles omit `SupplementalMatchDomains` for global coverage. Existing split
+profiles need one regeneration and manual reinstall to adopt this behavior;
+later rule, selector, and GeoSite changes no longer require profile regeneration.
 
 There are two intentionally separate startup mechanisms. The root LaunchDaemon
 starts LocalHttpDns and the managed Mihomo runtime at system startup. The
-persisted `enhancedTUNEnabled` value chooses controller/DNS standby or Enhanced
-TUN; LocalHttpDns is unchanged by that choice. Once
-the App has observed a healthy Enhanced TUN runtime, it also applies a one-time
-current-user login-item default so the hidden tray App returns after login.
+sticky `enhancedTUNPreviouslyEnabled` value resumes Enhanced TUN after a successful
+activation even if the prior session was turned off; never-enabled installations
+stay in standby. LocalHttpDns is unchanged by that choice. On launch, the App
+also applies a one-time current-user login-item default, without requiring TUN
+or a healthy network, so the hidden tray App returns after login.
 Only an installed copy under `/Applications` or `~/Applications` applies this
 default. That login item is not privileged and never owns a Mihomo process.
 Turning it off later in macOS System Settings is respected.
@@ -441,4 +443,9 @@ observation immediately disables Fake-IP answers. Domains still owned by
 Fake-IP fail closed instead of leaking to original DNS; only domains explicitly
 excluded by the active Fake-IP policy may receive real upstream answers.
 Recovery starts after three consecutive failures. TUN-off standby does not
-accrue those failures, and LocalHttpDns remains available through physical DNS.
+accrue those failures. LocalHttpDns now delegates all DNS decisions to Mihomo
+over IPC when available. A stopped/restarting Mihomo uses the daemon's independent
+current-network DNS fallback; the next request retries IPC automatically.
+Local DoH status accepts either a ready Mihomo backend or an available original
+DNS resolver configuration, plus listener and SSL trust. This is not proof of
+Internet reachability; acceptance must still exercise actual DNS and HTTPS.

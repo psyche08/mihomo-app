@@ -42,6 +42,9 @@ public final class MihomoSupervisor: @unchecked Sendable {
             throw MihomoSupervisorError.configMissing(configuration.configPath)
         }
         Self.stopOwnedProcess(configuration: configuration)
+        if configuration.binaryPath == "/Library/Application Support/Mihomo App/mihomo" {
+            try LocalDoHIPC.prepareDirectory()
+        }
         try SanitizedProcessLogMigration.prepare(logPath: configuration.logPath)
         lock.lock()
         stopping = false
