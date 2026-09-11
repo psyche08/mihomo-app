@@ -191,17 +191,16 @@ final class TrayControlClientTests: XCTestCase {
       runtimeHealthy: false, certificateTrusted: false
     )
     let session = QueueSession(responses: [
-      ControlResponse(success: true),
       ControlResponse(success: true, payload: try JSONEncoder().encode(status)),
     ])
     let client = TrayControlClient(makeSession: { session })
     do {
-      try await client.trustLocalDoHCertificate()
+      try await client.verifyLocalDoHCertificateTrust()
       XCTFail("import success must not imply SSL trust")
     } catch let error as TrayControlError {
       guard case .readbackMismatch = error else { return XCTFail("wrong error") }
     }
-    XCTAssertEqual(session.operations, [.trustLocalDoHCertificate, .localDoHStatus])
+    XCTAssertEqual(session.operations, [.localDoHStatus])
     XCTAssertTrue(session.arguments.allSatisfy(\.isEmpty))
   }
 
@@ -209,10 +208,10 @@ final class TrayControlClientTests: XCTestCase {
     let session = QueueSession(responses: [ControlResponse(success: false, error: "authorization cancelled")])
     let client = TrayControlClient(makeSession: { session })
     do {
-      try await client.trustLocalDoHCertificate()
+      _ = try await client.prepareLocalDoHCertificateTrust()
       XCTFail("expected cancellation")
     } catch {}
-    XCTAssertEqual(session.operations, [.trustLocalDoHCertificate])
+    XCTAssertEqual(session.operations, [.prepareLocalDoHCertificateTrust])
   }
 
   func testGlobalDNSSelectionRequiresProfileRemovalReadback() async throws {

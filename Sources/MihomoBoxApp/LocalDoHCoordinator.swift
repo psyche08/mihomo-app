@@ -41,7 +41,14 @@ final class LocalDoHCoordinator: DashboardLocalDoHService {
   func prepare() async throws -> LocalDoHPlanSummary {
     try confirmTrust(preparing: true)
     let summary = try await control.installLocalDoH()
-    try await control.trustLocalDoHCertificate()
+    try await LocalDoHPreparationFlow.finish(
+      trust: { try await self.authorizePreparedCertificate() },
+      openProfile: { try self.openPreparedProfile() }
+    )
+    return summary
+  }
+
+  private func openPreparedProfile() throws {
     let url = URL(fileURLWithPath: LocalDoHProfileDocument.managedProfilePath)
     let profileOpened = NSWorkspace.shared.open(url)
     let settingsOpened = NSWorkspace.shared.open(Self.deviceManagementURL)
@@ -55,12 +62,18 @@ final class LocalDoHCoordinator: DashboardLocalDoHService {
         ]
       )
     }
-    return summary
   }
 
   func trustCertificate() async throws {
     try confirmTrust(preparing: false)
-    try await control.trustLocalDoHCertificate()
+    try await authorizePreparedCertificate()
+  }
+
+  private func authorizePreparedCertificate() async throws {
+    if try await control.localDoHStatus().certificateTrusted == true { return }
+    let certificate = try await control.prepareLocalDoHCertificateTrust()
+    try await LocalDoHCertificateTrust.authorize(certificate)
+    try await control.verifyLocalDoHCertificateTrust()
   }
 
   func setDNSMode(_ mode: DNSIntegrationMode) async throws {
@@ -90,7 +103,7 @@ final class LocalDoHCoordinator: DashboardLocalDoHService {
     let alert = NSAlert()
     alert.messageText = preparing ? "Prepare Local DoH and trust its certificate?" : "Trust the Local DoH certificate?"
     alert.informativeText = "The installed root helper will install this Mac's MihomoBox Local DoH Root CA "
-      + "in the System keychain and enable SSL trust for all users, not code-signing or mail trust. "
+      + "in the System keychain. The App then asks macOS to authorize SSL trust for 127.0.0.1 for all users, not code-signing or mail trust. "
       + "Approve any macOS authorization dialog; MihomoBox never requests your password itself. "
       + (preparing ? "This prepares Local DoH standby and restores any managed Global DNS. Then approve the DNS profile in System Settings." : "")
     alert.addButton(withTitle: preparing ? "Prepare & Trust" : "Trust for SSL")
@@ -109,5 +122,18 @@ final class LocalDoHCoordinator: DashboardLocalDoHService {
         ]
       )
     }
+  }
+}
+
+@MainActor
+enum LocalDoHPreparationFlow {
+  static func finish(trust: () async throws -> Void, openProfile: () throws -> Void) async throws {
+    var trustFailure: Error?
+    do { try await trust() }
+    catch { trustFailure = error }
+    // Profile review is still available after denial or cancellation. Installing
+    // the profile never implies trust or a successful Local DoH activation.
+    try openProfile()
+    if let trustFailure { throw trustFailure }
   }
 }

@@ -185,8 +185,13 @@ actor TrayControlClient {
     return try JSONDecoder().decode(LocalDoHPlanSummary.self, from: payload)
   }
 
-  func trustLocalDoHCertificate() throws {
-    _ = try send(ControlRequest(operation: .trustLocalDoHCertificate), retryReadOnce: false)
+  func prepareLocalDoHCertificateTrust() throws -> Data {
+    let data = try send(ControlRequest(operation: .prepareLocalDoHCertificateTrust), retryReadOnce: false)
+    guard !data.isEmpty, data.count <= 16_384 else { throw TrayControlError.missingPayload }
+    return data
+  }
+
+  func verifyLocalDoHCertificateTrust() throws {
     guard try localDoHStatus().certificateTrusted == true else {
       throw TrayControlError.readbackMismatch("Local DoH SSL trust")
     }

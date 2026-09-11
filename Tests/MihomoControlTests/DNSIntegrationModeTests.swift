@@ -46,14 +46,13 @@ final class DNSIntegrationModeTests: XCTestCase {
         XCTAssertNil(value.confirmedDNSMode)
     }
 
-    func testTrustCommandIsFixedAdminSSLOnlyAndDoesNotExecute() {
-        XCTAssertEqual(LocalDoHTrustCommand.executable, "/usr/bin/security")
-        XCTAssertEqual(LocalDoHTrustCommand.arguments, [
-            "add-trusted-cert", "-d", "-r", "trustRoot", "-p", "ssl",
-            "-k", "/Library/Keychains/System.keychain",
-            "/Library/Application Support/Mihomo App/local-doh/ca.der",
-        ])
-        XCTAssertEqual(LocalDoHTrustCommand.timeout, 120)
+    func testEnhancedTUNSelectsGlobalDNSForEveryMissingDoHPrerequisite() {
+        for mask in 0..<16 {
+            XCTAssertEqual(EnhancedDNSSelection.useLocalDoH(
+                profileVerified: mask & 1 != 0, identityPrepared: mask & 2 != 0,
+                certificateTrusted: mask & 4 != 0, listenerRunning: mask & 8 != 0
+            ), mask == 15)
+        }
     }
 
     func testDNSModeCannotEncodeAnOutboundModeOrArbitraryCommand() throws {

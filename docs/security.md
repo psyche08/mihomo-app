@@ -85,22 +85,27 @@
   output path, or arbitrary domain argument. The daemon generates the identity at a fixed root-owned
   path and deletes the CA private key after issuing the loopback server
   certificate. The root CA is embedded as a `com.apple.security.root` payload
-  in the same manually approved profile as global/default DNS. An explicit
-  `local-doh.trust-certificate` action may install only that current validated,
-  root-owned CA in the System keychain and set Admin Trust Settings for SSL only.
-  The App confirms this user action; the root daemon invokes fixed
-  `security add-trusted-cert -d -r trustRoot -p ssl` arguments with a two-minute
-  authorization deadline and verifies native SSL trust afterward. No caller
-  certificate bytes, paths or policies are accepted. Cancellation, denial and
-  timeout are not retried automatically, and partial import is not called trust
-  success. macOS may require its own authorization UI; if unavailable, the App
+  in the same manually approved profile as global/default DNS. The explicit
+  `local-doh.prepare-certificate-trust` action imports only the current validated,
+  root-owned CA into the System keychain using Security.framework. It returns
+  only that public DER certificate (at most 16 KiB), never a private key. The
+  native AppKit process requests Admin Trust Settings with SSL policy scoped to
+  `127.0.0.1` using `SecTrustSettingsSetTrustSettings`; macOS owns administrator
+  authorization in the GUI session. This is not a SwiftUI privilege capability.
+  Headless helper trust writes cannot reliably present that authorization UI;
+  the old `local-doh.trust-certificate` action now rejects with an App-upgrade
+  instruction. No caller certificate bytes, paths or policies are accepted by
+  the daemon. The App verifies current native SSL trust through XPC afterward.
+  Cancellation and denial are not retried, and import alone is not called trust
+  success. The prepared profile still opens when trust fails. If needed, the App
   offers Keychain Access for manual approval. Neither process changes
   `authorizationdb`, unlocks a keychain, or collects a password. Startup,
   polling, fallback and profile-generation code never initiate trust writes.
   Manual profile approval may
   import a CA without granting SSL trust. Native system SSL evaluation, without
-  custom anchors or exceptions, gates Enhanced TUN and LocalHttpDns health;
-  persistent trust failure uses Global DNS fallback instead of granting trust.
+  custom anchors or exceptions, gates Local DoH selection and health;
+  missing certificate/profile or failed trust selects verified Global DNS when
+  enabling Enhanced TUN, without initiating trust or profile authorization.
   `runtime.set-dns-mode` accepts only `global-dns` or `local-doh`, not arbitrary
   network settings. Selecting Local DoH requires current profile and SSL trust;
   selecting Global DNS validates TUN DNS and verifies removal of only the fixed
@@ -114,8 +119,9 @@
   one fixed root-owned profile artifact and validates its ownership, mode and
   fixed payload fields before publication. The root XPC service, standby agent
   and existing LocalHttpDns listener remain available; identity and prepared
-  profile are rolled back together on failure. XPC returns only server/profile
-  booleans and aggregate counts. Full helper uninstall verifies the fixed
+  profile are rolled back together on failure. Normal status XPC returns only
+  server/profile booleans and aggregate counts; the explicit trust preparation
+  additionally returns the public CA. Full helper uninstall verifies the fixed
   installed profile is absent before deleting legacy trust residue, server
   identity, or the prepared artifact.
 - LocalHttpDns forwards only raw DNS POSTs to the fixed `/dns-query` endpoint on

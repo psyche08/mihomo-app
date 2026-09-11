@@ -23,6 +23,7 @@ public enum ControlOperation: String, Codable, Sendable {
     case localDoHStatus = "local-doh.status"
     case installLocalDoH = "local-doh.install"
     case trustLocalDoHCertificate = "local-doh.trust-certificate"
+    case prepareLocalDoHCertificateTrust = "local-doh.prepare-certificate-trust"
     case setDNSMode = "runtime.set-dns-mode"
     case upgradeComponents = "component.upgrade"
     case setTUN = "runtime.set-tun"

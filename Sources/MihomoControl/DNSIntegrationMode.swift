@@ -6,14 +6,11 @@ public enum DNSIntegrationMode: String, Codable, CaseIterable, Sendable {
     case localDoH = "local-doh"
 }
 
-/// Fixed, user-initiated trust operation. No caller-supplied paths or policies.
-/// The helper validates the protected identity before invoking this command.
-public enum LocalDoHTrustCommand {
-    public static let executable = "/usr/bin/security"
-    public static let arguments = [
-        "add-trusted-cert", "-d", "-r", "trustRoot", "-p", "ssl",
-        "-k", "/Library/Keychains/System.keychain",
-        "/Library/Application Support/Mihomo App/local-doh/ca.der",
-    ]
-    public static let timeout: TimeInterval = 120
+/// Missing DoH prerequisites select the verified Global DNS transaction, never
+/// block Enhanced TUN or silently initiate certificate/profile authorization.
+public enum EnhancedDNSSelection {
+    public static func useLocalDoH(profileVerified: Bool, identityPrepared: Bool,
+                                  certificateTrusted: Bool, listenerRunning: Bool) -> Bool {
+        profileVerified && identityPrepared && certificateTrusted && listenerRunning
+    }
 }

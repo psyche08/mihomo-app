@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 import MihomoControl
 import MihomoDNSCore
+import Security
 
 /// Owns the fixed Local DoH privileged mutation behind authenticated XPC.
 ///
@@ -97,7 +98,7 @@ final class LocalDoHManager: @unchecked Sendable {
     /// status polling, listener recovery, or profile preparation. macOS owns
     /// any authorization UI; cancellation/timeout is not a reason to weaken
     /// authorization policy or unlock a keychain.
-    func trustCertificate() throws {
+    func prepareCertificateTrust() throws -> Data {
         guard root.path == "/Library/Application Support/Mihomo App" else {
             throw localDoHError("certificate trust requires the fixed installed identity")
         }
@@ -105,28 +106,26 @@ final class LocalDoHManager: @unchecked Sendable {
         guard identityIsValid(), LocalDoHStatusProvider.inspectPreparedProfile().installed else {
             throw localDoHError("prepare the current Local DoH identity and profile before trusting it")
         }
-        if LocalDoHStatusProvider.certificateTrusted() { return }
-        do {
-            try command.run(
-                LocalDoHTrustCommand.executable,
-                LocalDoHTrustCommand.arguments,
-                timeout: LocalDoHTrustCommand.timeout
-            )
-        } catch {
-            // Import and trust are separate system operations. Do not erase a
-            // successfully imported certificate or retry a cancelled prompt.
-            throw localDoHError(
-                "SSL trust was not completed (authorization may have been cancelled, denied, or timed out). " +
-                "Retry Trust Certificate, or approve the current MihomoBox Local DoH Root CA for SSL in Keychain Access."
-            )
+        let certificate = try Data(contentsOf: caCertificateDER)
+        guard !certificate.isEmpty, certificate.count <= 16_384 else {
+            throw localDoHError("the prepared CA certificate has an invalid size")
         }
-        guard LocalDoHStatusProvider.certificateTrusted() else {
-            throw localDoHError(
-                "the certificate was installed but system SSL verification still failed; " +
-                "review the current MihomoBox Local DoH Root CA in Keychain Access"
-            )
+        guard let ca = SecCertificateCreateWithData(nil, certificate as CFData) else {
+            throw localDoHError("the prepared CA certificate is invalid")
         }
-        ServiceLog.info("event=local_doh_trust result=ssl_verified")
+        var keychain: SecKeychain?
+        let opened = SecKeychainOpen("/Library/Keychains/System.keychain", &keychain)
+        guard opened == errSecSuccess, let keychain else {
+            throw localDoHError("System keychain access failed (OSStatus \(opened)); no SSL trust was changed")
+        }
+        let imported = SecCertificateAddToKeychain(ca, keychain)
+        guard imported == errSecSuccess || imported == errSecDuplicateItem else {
+            throw localDoHError("CA import failed (OSStatus \(imported)); no SSL trust was changed")
+        }
+        // Public DER only. The App must request SSL Admin trust in its GUI
+        // context, then verify it through local-doh.status. Never return keys.
+        ServiceLog.info("event=local_doh_trust result=imported_pending_gui_authorization")
+        return certificate
     }
 
     /// A split encrypted-DNS payload overrides the plain Global resolver for

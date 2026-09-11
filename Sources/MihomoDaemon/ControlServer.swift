@@ -361,12 +361,13 @@ final class ControlDispatcher: @unchecked Sendable {
                     )
                 }
             case .trustLocalDoHCertificate:
+                throw serverError("SSL trust requires the current MihomoBox App's interactive Trust Certificate action")
+            case .prepareLocalDoHCertificateTrust:
                 guard request.arguments.isEmpty, request.payload == nil else {
                     throw serverError("certificate trust accepts no arguments or certificate bytes")
                 }
-                try localDoH.trustCertificate()
+                payload = try localDoH.prepareCertificateTrust()
                 localDoHReadinessRecovery = LocalDoHReadinessRecovery()
-                payload = nil
             case .setDNSMode:
                 guard request.payload == nil, request.arguments.count == 1,
                       let raw = request.arguments["mode"],
@@ -448,6 +449,8 @@ final class ControlDispatcher: @unchecked Sendable {
                 if agent.globalDNSFallbackConfigured {
                     if enabled {
                         try ensureStartedRuntimeLocked()
+                        finishGlobalDNSFallbackLocked()
+                        try verifyGlobalDNSProfileRemovalLocked()
                     } else {
                         // There is no independent DNS service in fallback.
                         // Turning TUN off therefore stops the worker and
@@ -461,15 +464,17 @@ final class ControlDispatcher: @unchecked Sendable {
                 }
                 if enabled {
                     let profile = LocalDoHStatusProvider.inspectInstalledProfile()
-                    guard profile.succeeded,
-                          profile.inspection.installed,
-                          profile.inspection.domainCount > 0,
-                          agent.localDoHIdentityPrepared,
-                          LocalDoHStatusProvider.certificateTrusted(),
-                          localDoHServer.isRunning else {
-                        throw serverError(
-                            "install the LocalHttpDns profile and approve its SSL certificate trust before enabling Enhanced TUN"
-                        )
+                    if !EnhancedDNSSelection.useLocalDoH(
+                        profileVerified: profile.succeeded && profile.inspection.installed
+                            && profile.inspection.domainCount > 0,
+                        identityPrepared: agent.localDoHIdentityPrepared,
+                        certificateTrusted: LocalDoHStatusProvider.certificateTrusted(),
+                        listenerRunning: localDoHServer.isRunning
+                    ) {
+                        try activateGlobalDNSFallbackLocked()
+                        try verifyGlobalDNSProfileRemovalLocked()
+                        payload = nil
+                        break
                     }
                 }
                 try profiles.setEnhancedTUN(enabled)
@@ -531,7 +536,8 @@ final class ControlDispatcher: @unchecked Sendable {
         case .startAgent, .stopAgent, .restartAgent, .upgradeComponents,
              .importProfile, .switchProfile, .reloadProfile, .setTUN,
              .setOutboundMode, .selectProxy, .refreshProxyProvider,
-             .closeAllConnections, .installLocalDoH, .trustLocalDoHCertificate, .setDNSMode:
+             .closeAllConnections, .installLocalDoH, .trustLocalDoHCertificate,
+             .prepareLocalDoHCertificateTrust, .setDNSMode:
             return true
         case .controllerRequest:
             // ControllerRequestPolicy is still the authority for the exact
@@ -587,9 +593,9 @@ final class ControlDispatcher: @unchecked Sendable {
               agent.localDoHIdentityPrepared,
               LocalDoHStatusProvider.certificateTrusted(),
               localDoHServer.isRunning else {
-            throw serverError(
-                "LocalHttpDns must be installed and healthy before starting Enhanced TUN"
-            )
+            try activateGlobalDNSFallbackLocked()
+            try verifyGlobalDNSProfileRemovalLocked()
+            return
         }
     }
 
@@ -650,6 +656,13 @@ final class ControlDispatcher: @unchecked Sendable {
             "event=global_dns_fallback result=" +
             (removed ? "ready" : "profile_removal_required")
         )
+    }
+
+    private func verifyGlobalDNSProfileRemovalLocked() throws {
+        let profile = LocalDoHStatusProvider.inspectInstalledProfile()
+        guard profile.succeeded, profile.present == false else {
+            throw serverError("Global DNS is configured, but its use is not confirmed. Remove only the MihomoBox Local DoH profile in Device Management.")
+        }
     }
 
     private func handleLocalDoHFailure() {

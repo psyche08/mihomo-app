@@ -492,15 +492,15 @@ public struct ConfigView: View {
     case .statusUnavailable:
       "The authenticated daemon could not verify Local DoH state. Allow component synchronization or use Install / Repair Daemon, then refresh."
     case .off:
-      "Install the root helper, then prepare and approve the LocalHttpDns profile before enabling Enhanced TUN."
+      "Enhanced TUN can use Global DNS without a certificate or profile. To use Local DoH instead, prepare its certificate and approve the DNS profile."
     case .awaitingApproval:
       "The identity is prepared, but the installed DNS Settings profile does not yet match. Finish confirmation in General › Device Management. Profile installation alone does not guarantee SSL trust."
     case .certificateUntrusted:
-      "The profile is installed, but SSL trust is not ready. Choose Trust Certificate for SSL and approve any macOS authorization dialog. If macOS refuses the helper operation, review the current CA in Keychain Access. A persistent failure falls back to Global DNS."
+      "The profile is installed, but SSL trust is not ready. Choose Trust Certificate for SSL and approve the macOS authorization dialog in the App. Enhanced TUN can use Global DNS instead."
     case .active:
       "The HTTPS listener has a DNS backend, the certificate passes system SSL trust, and the installed DNS settings match. It prefers Mihomo IPC and falls back to current network DNS when Mihomo is unavailable. Proxy access still requires Enhanced TUN or an explicit proxy."
     case .degraded:
-      "The server and installed profile do not agree. Regenerate and approve the LocalHttpDns profile; Enhanced TUN remains unavailable until it is healthy."
+      "Local DoH is not ready. Enhanced TUN can use Global DNS without a certificate or profile. Prepare and approve the profile to use Local DoH."
     case .globalDNSFallback:
       "System DNS uses 198.18.0.1 through Enhanced TUN, either by selection or fallback. Stop Mihomo to restore the original DNS. Prepare & Trust and reinstall the profile to return to Local DoH."
     case .fallbackNeedsProfileRemoval:

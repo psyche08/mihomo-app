@@ -17,8 +17,9 @@ it never kills an unrelated process merely because a PID file exists.
 
 LocalHttpDns is the default macOS DNS integration. Installing the root
 helper creates a valid Mihomo standby runtime with TUN disabled. The user then
-prepares and approves one macOS DNS Settings profile before Enhanced TUN can be
-enabled:
+prepares and approves one macOS DNS Settings profile to select Local DoH.
+Enhanced TUN does not require this setup: it uses verified Global DNS when the
+certificate, profile, or listener is not ready.
 
 ```text
 macOS default DNS -> https://127.0.0.1/dns-query (root daemon, port 443)
@@ -33,10 +34,13 @@ RFC 8484 GET/POST wire messages and uses non-blocking DNS forwarders. The typed
 `local-doh.install` operation generates a local root CA plus a host-only server
 certificate with the `127.0.0.1` IP SAN, keeps the server private key root-only,
 and discards the CA private key after signing. The CA certificate is embedded in
-the generated profile. A separate user-confirmed `local-doh.trust-certificate`
-operation installs this exact CA and grants SSL-only Admin trust, with system
-authorization UI when required. Startup and preparation never grant trust on
-their own. It never unlocks a keychain. The profile uses a fixed
+the generated profile. A user-confirmed `local-doh.prepare-certificate-trust`
+operation imports this exact CA and returns its public DER. The App requests
+SSL-only, loopback-scoped Admin trust through Security.framework in its GUI
+context so macOS can present authorization. Native trust is then read back over
+XPC. Trust failure no longer prevents opening the prepared profile. Startup
+and helper preparation never grant trust on their own. Neither process unlocks
+a keychain. The profile uses a fixed
 identifier so regeneration updates the existing settings. Global DNS fallback
 removes only that profile; full helper uninstall additionally removes legacy
 trust residue and server identity. Mihomo neither binds 443 nor reads that
@@ -175,9 +179,11 @@ does not invalidate a healthy independent DoH listener using network DNS.
 
 `runtime.set-tun` is a persistent transition between two valid agent states.
 Standby retains the controller and Mihomo DNS with TUN and the Fake-IP route
-absent; Enhanced mode adds TUN only after the installed profile, identity and
-443 listener are verified. Disabling Enhanced TUN returns to standby and
-never stops LocalHttpDns.
+absent; Enhanced mode uses Local DoH only after the installed profile, identity,
+native SSL trust and 443 listener are verified. Otherwise it runs the verified
+Global DNS fallback transaction and confirms removal of any overriding DoH
+profile. Disabling Enhanced TUN returns Local DoH to standby; in Global DNS it
+stops the worker and restores original DNS.
 
 `enhancedTUNPreviouslyEnabled` separately remembers a successful enable. Turning
 TUN off changes the current session but preserves that preference. A subsequent

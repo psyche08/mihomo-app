@@ -42,11 +42,12 @@ if /usr/bin/grep -Eq 'remove-trusted-cert|delete-certificate|authorizationdb|unl
   echo "explicit SSL trust must not delete certificates or bypass system authorization" >&2
   exit 1
 fi
-/usr/bin/grep -Fq 'func trustCertificate() throws' "$XPC_MANAGER"
-/usr/bin/grep -Fq 'LocalDoHTrustCommand.arguments' "$XPC_MANAGER"
-/usr/bin/grep -Fq 'guard LocalDoHStatusProvider.certificateTrusted()' "$XPC_MANAGER"
+/usr/bin/grep -Fq 'func prepareCertificateTrust() throws -> Data' "$XPC_MANAGER"
+/usr/bin/grep -Fq 'SecCertificateAddToKeychain(ca, keychain)' "$XPC_MANAGER"
+/usr/bin/grep -Fq 'SecTrustSettingsSetTrustSettings(certificate, .admin, settings() as CFDictionary)' \
+  "$ROOT/Sources/MihomoBoxApp/LocalDoHCertificateTrust.swift"
 /usr/bin/grep -Fq 'try confirmTrust(preparing: true)' "$APP_COORDINATOR"
-/usr/bin/grep -Fq 'try await control.trustLocalDoHCertificate()' "$APP_COORDINATOR"
+/usr/bin/grep -Fq 'try await control.verifyLocalDoHCertificateTrust()' "$APP_COORDINATOR"
 /usr/bin/grep -Fq 'try await control.installLocalDoH()' "$APP_COORDINATOR"
 if /usr/bin/grep -Eq 'InstallerCoordinator|osascript|runSpecialInstaller' "$APP_COORDINATOR"; then
   echo "Local DoH App actions must use the installed authenticated XPC helper" >&2

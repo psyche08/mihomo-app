@@ -282,7 +282,8 @@ final class TrayStateCoordinator: TrayService {
         let ready = try await waitForControllerReadiness()
         apply(ready, retainDelays: false)
       }
-      guard try await ensureLocalHttpDNSPrerequisite() else { return }
+      // The daemon chooses verified Global DNS when Local DoH is not ready.
+      // TUN enable must never initiate a profile or certificate authorization.
       apply(try await control.enableEnhancedTUN(), retainDelays: false)
       await applyLoginDefaultIfNeeded()
       clearError()
@@ -441,36 +442,6 @@ final class TrayStateCoordinator: TrayService {
       if attempt < 29 { try await Task.sleep(for: .milliseconds(500)) }
     }
     throw TrayControlError.readbackMismatch("controller readiness")
-  }
-
-  /// Enhanced TUN is never allowed to become the bootstrap mechanism for its
-  /// own DNS profile. The standby agent exposes the controller first, then the
-  /// user approves LocalHttpDns, and only a later click enables TUN.
-  private func ensureLocalHttpDNSPrerequisite() async throws -> Bool {
-    let status = await localDoH.status()
-    switch status.phase {
-    case .certificateUntrusted:
-      throw NSError(domain: "MihomoBoxLocalDoH", code: 5, userInfo: [
-        NSLocalizedDescriptionKey:
-          "The LocalHttpDns profile is installed, but macOS has not approved its SSL certificate trust. Review the current Local DoH CA in Keychain Access; persistent failure will use Global DNS fallback."
-      ])
-    case .active, .globalDNSFallback, .fallbackUnavailable:
-      return true
-    case .fallbackNeedsProfileRemoval:
-      try await localDoH.openDeviceManagement()
-      publishError("Remove the MihomoBox Local DoH profile to complete Global DNS fallback.")
-      return false
-    case .awaitingApproval:
-      try await localDoH.openDeviceManagement()
-    case .off, .degraded:
-      _ = try await localDoH.prepare()
-    case .unavailable, .statusUnavailable:
-      throw TrayControlError.readbackMismatch("LocalHttpDns prerequisite")
-    }
-    publishError(
-      "Install the MihomoBox LocalHttpDns profile in Device Management, then enable Enhanced TUN again."
-    )
-    return false
   }
 
   private func waitForDaemonProtocolReadiness() async throws -> TrayControlPoll {
