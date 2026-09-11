@@ -81,4 +81,12 @@ release_script="$ROOT/scripts/release-macos.sh"
 /usr/bin/grep -Fq 'NOTARY_RS_APP_STATE' "$release_script"
 /usr/bin/grep -Fq 'notarize_with_rust_api_key' "$release_script"
 
+# In zsh, `path` is tied to PATH even when declared local. An asset-path
+# variable can therefore make nested git/curl subprocesses unable to find ssh.
+if /usr/bin/grep -Eq '^[[:space:]]*(local|typeset)[[:space:]]+path([=[:space:]]|$)' \
+  "$ROOT/scripts/release-github.zsh" "$ROOT/scripts/prepare-cloud-release.zsh"; then
+  echo "release scripts must not shadow zsh's special path variable" >&2
+  exit 1
+fi
+
 echo "release common tests passed"

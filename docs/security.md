@@ -85,11 +85,26 @@
   output path, or arbitrary domain argument. The daemon generates the identity at a fixed root-owned
   path and deletes the CA private key after issuing the loopback server
   certificate. The root CA is embedded as a `com.apple.security.root` payload
-  in the same manually approved profile as global/default DNS; the daemon never edits
-  Admin Trust Settings and never unlocks a keychain. Manual profile approval may
+  in the same manually approved profile as global/default DNS. An explicit
+  `local-doh.trust-certificate` action may install only that current validated,
+  root-owned CA in the System keychain and set Admin Trust Settings for SSL only.
+  The App confirms this user action; the root daemon invokes fixed
+  `security add-trusted-cert -d -r trustRoot -p ssl` arguments with a two-minute
+  authorization deadline and verifies native SSL trust afterward. No caller
+  certificate bytes, paths or policies are accepted. Cancellation, denial and
+  timeout are not retried automatically, and partial import is not called trust
+  success. macOS may require its own authorization UI; if unavailable, the App
+  offers Keychain Access for manual approval. Neither process changes
+  `authorizationdb`, unlocks a keychain, or collects a password. Startup,
+  polling, fallback and profile-generation code never initiate trust writes.
+  Manual profile approval may
   import a CA without granting SSL trust. Native system SSL evaluation, without
   custom anchors or exceptions, gates Enhanced TUN and LocalHttpDns health;
   persistent trust failure uses Global DNS fallback instead of granting trust.
+  `runtime.set-dns-mode` accepts only `global-dns` or `local-doh`, not arbitrary
+  network settings. Selecting Local DoH requires current profile and SSL trust;
+  selecting Global DNS validates TUN DNS and verifies removal of only the fixed
+  DoH profile. Unknown/removal-required state is never reported as success.
   The installed `profiles show` report redacts CA bytes, so profile matching
   checks fixed UUIDs, payload types and the complete prepared DNS settings;
   this is explicitly separate from certificate trust. New profiles deliberately

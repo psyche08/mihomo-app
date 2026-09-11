@@ -360,6 +360,58 @@ final class ControlDispatcher: @unchecked Sendable {
                         "Check LocalHttpDns status for any required profile removal."
                     )
                 }
+            case .trustLocalDoHCertificate:
+                guard request.arguments.isEmpty, request.payload == nil else {
+                    throw serverError("certificate trust accepts no arguments or certificate bytes")
+                }
+                try localDoH.trustCertificate()
+                localDoHReadinessRecovery = LocalDoHReadinessRecovery()
+                payload = nil
+            case .setDNSMode:
+                guard request.payload == nil, request.arguments.count == 1,
+                      let raw = request.arguments["mode"],
+                      let mode = DNSIntegrationMode(rawValue: raw),
+                      !profiles.activationRequired else {
+                    throw serverError("a valid DNS integration mode and an activated profile are required")
+                }
+                switch mode {
+                case .globalDNS:
+                    try activateGlobalDNSFallbackLocked()
+                    let profile = LocalDoHStatusProvider.inspectInstalledProfile()
+                    guard profile.succeeded, profile.present == false else {
+                        throw serverError(
+                            "Global DNS is configured, but the Local DoH profile still overrides it. " +
+                            "Remove only the MihomoBox Local DoH profile in Device Management."
+                        )
+                    }
+                case .localDoH:
+                    let profile = LocalDoHStatusProvider.inspectInstalledProfile()
+                    guard profile.succeeded, profile.inspection.installed,
+                          agent.localDoHIdentityPrepared,
+                          LocalDoHStatusProvider.certificateTrusted() else {
+                        throw serverError(
+                            "prepare and trust the Local DoH certificate, then install its current profile before selecting Local DoH"
+                        )
+                    }
+                    do {
+                        if agent.globalDNSFallbackConfigured {
+                            if !agent.isRunning { try agent.start() }
+                            try profiles.setEnhancedTUN(agent.expectsEnhancedTUN)
+                        }
+                        guard localDoHServer.startSupervising() else {
+                            throw serverError("the Local DoH HTTPS listener is unavailable")
+                        }
+                        guard agent.localDoHBackendReady || localDoHServer.originalDNSAvailable else {
+                            throw serverError("the Local DoH DNS backend is unavailable")
+                        }
+                        localDoHReadinessRecovery = LocalDoHReadinessRecovery()
+                    } catch {
+                        try activateGlobalDNSFallbackLocked()
+                        throw serverError("Local DoH activation failed; Global DNS fallback was configured")
+                    }
+                }
+                DNSCacheMaintenance.flushSystemCaches()
+                payload = nil
             case .upgradeComponents:
                 guard let package = request.payload else {
                     throw serverError("component update package is required")
@@ -479,7 +531,7 @@ final class ControlDispatcher: @unchecked Sendable {
         case .startAgent, .stopAgent, .restartAgent, .upgradeComponents,
              .importProfile, .switchProfile, .reloadProfile, .setTUN,
              .setOutboundMode, .selectProxy, .refreshProxyProvider,
-             .closeAllConnections, .installLocalDoH:
+             .closeAllConnections, .installLocalDoH, .trustLocalDoHCertificate, .setDNSMode:
             return true
         case .controllerRequest:
             // ControllerRequestPolicy is still the authority for the exact

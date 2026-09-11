@@ -223,6 +223,51 @@ final class DashboardStoreIPCTests: XCTestCase {
     XCTAssertTrue(store.actionError?.contains("require Rule mode") == true)
   }
 
+  func testTrustAuthorizationDisablesRepeatedActions() async throws {
+    let service = FakeDashboardLocalDoHService()
+    service.trustDelay = 100_000_000
+    let store = DashboardStore(gateway: FakeDashboardGateway())
+    store.configureLocalDoHService(service)
+    let first = Task { await store.trustLocalDoHCertificate() }
+    try await eventually { service.trustCallCount == 1 }
+    XCTAssertEqual(store.configAction, .trustingLocalDoH)
+    await store.trustLocalDoHCertificate()
+    await store.setDNSMode(.globalDNS)
+    await first.value
+    XCTAssertEqual(service.trustCallCount, 1)
+    XCTAssertTrue(service.selectedModes.isEmpty)
+    XCTAssertNil(store.configAction)
+  }
+
+  func testCancelledTrustDoesNotReportSuccessOrFailure() async {
+    let service = FakeDashboardLocalDoHService()
+    service.trustError = CancellationError()
+    let store = DashboardStore(gateway: FakeDashboardGateway())
+    store.configureLocalDoHService(service)
+    await store.trustLocalDoHCertificate()
+    XCTAssertFalse(store.localDoHCertificateTrusted)
+    XCTAssertNil(store.confirmedDNSMode)
+    XCTAssertNil(store.actionError)
+    XCTAssertNil(store.configAction)
+  }
+
+  func testDNSModeUsesReadbackEvenAfterPartialFailure() async {
+    let service = FakeDashboardLocalDoHService()
+    service.modeError = ControlError.rejected("profile removal required")
+    service.observedStatus = DashboardLocalDoHStatus(
+      available: true, serverPrepared: true, profileInstalled: true,
+      systemDNSManaged: true, globalDNSFallback: true,
+      fallbackProfileRemovalRequired: true
+    )
+    let store = DashboardStore(gateway: FakeDashboardGateway())
+    store.configureLocalDoHService(service)
+    await store.setDNSMode(.globalDNS)
+    XCTAssertEqual(service.selectedModes, [.globalDNS])
+    XCTAssertNil(store.confirmedDNSMode)
+    XCTAssertEqual(store.localDoHPhase, .fallbackNeedsProfileRemoval)
+    XCTAssertNotNil(store.actionError)
+  }
+
   private func eventually(
     timeout: TimeInterval = 2,
     condition: @MainActor () -> Bool
@@ -255,9 +300,15 @@ private final class FakeDashboardLocalDoHService: DashboardLocalDoHService {
   var summary = LocalDoHPlanSummary(domainCount: 1)
   var prepareError: Error?
   private(set) var prepareCallCount = 0
+  var observedStatus = DashboardLocalDoHStatus(available: true)
+  var trustError: Error?
+  var modeError: Error?
+  var trustDelay: UInt64 = 0
+  private(set) var trustCallCount = 0
+  private(set) var selectedModes: [DNSIntegrationMode] = []
 
   func status() async -> DashboardLocalDoHStatus {
-    DashboardLocalDoHStatus(available: true)
+    observedStatus
   }
 
   func prepare() async throws -> LocalDoHPlanSummary {
@@ -267,6 +318,16 @@ private final class FakeDashboardLocalDoHService: DashboardLocalDoHService {
   }
 
   func openDeviceManagement() async throws {}
+  func openKeychainAccess() async throws {}
+  func trustCertificate() async throws {
+    trustCallCount += 1
+    if trustDelay > 0 { try await Task.sleep(nanoseconds: trustDelay) }
+    if let trustError { throw trustError }
+  }
+  func setDNSMode(_ mode: DNSIntegrationMode) async throws {
+    selectedModes.append(mode)
+    if let modeError { throw modeError }
+  }
 }
 
 private final class FakeDashboardGateway: DashboardControlGateway, @unchecked Sendable {

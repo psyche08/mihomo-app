@@ -194,21 +194,21 @@ file_mode() {
 }
 
 require_safe_regular_file() {
-  local path="$1"
+  local release_file_path="$1"
   local label="$2"
 
-  [[ -f "$path" && ! -L "$path" ]] ||
-    die "$label must be a regular non-symlink file: $path"
+  [[ -f "$release_file_path" && ! -L "$release_file_path" ]] ||
+    die "$label must be a regular non-symlink file: $release_file_path"
 }
 
 require_mode_600() {
-  local path="$1"
+  local release_file_path="$1"
   local label="$2"
   local mode=''
 
-  mode="$(file_mode "$path")"
+  mode="$(file_mode "$release_file_path")"
   [[ "$mode" == '600' ]] ||
-    die "$label must have mode 0600: $path"
+    die "$label must have mode 0600: $release_file_path"
 }
 
 parse_arguments() {
@@ -545,7 +545,7 @@ build_local_asset_manifest() {
   local allow_create="$1"
   local index=0
   local name=''
-  local path=''
+  local release_file_path=''
   local digest=''
   local size=''
   local manifest_temporary=''
@@ -560,14 +560,14 @@ build_local_asset_manifest() {
 
   for (( index = 1; index <= ${#ASSET_NAMES[@]}; ++index )); do
     name="${ASSET_NAMES[$index]}"
-    path="${ASSET_PATHS[$index]}"
-    require_safe_regular_file "$path" "release asset $name"
-    size="$(file_size "$path")"
+    release_file_path="${ASSET_PATHS[$index]}"
+    require_safe_regular_file "$release_file_path" "release asset $name"
+    size="$(file_size "$release_file_path")"
     [[ "$size" =~ ^[1-9][0-9]*$ ]] || die "release asset is empty: $name"
-    digest="$(sha256_file "$path")"
+    digest="$(sha256_file "$release_file_path")"
     [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || die "could not hash release asset: $name"
 
-    LOCAL_ASSET_PATH[$name]="$path"
+    LOCAL_ASSET_PATH[$name]="$release_file_path"
     LOCAL_ASSET_SHA256[$name]="$digest"
     LOCAL_ASSET_SIZE[$name]="$size"
     /usr/bin/printf '%s\t%s\t%s\n' "$digest" "$size" "$name" >> "$manifest_temporary"
@@ -1145,12 +1145,12 @@ reconcile_uploaded_asset() {
 upload_asset_by_release_id() {
   local release_id="$1"
   local name="$2"
-  local path="$3"
+  local release_file_path="$3"
   local upload_url=''
 
   [[ "$release_id" =~ ^[1-9][0-9]*$ ]] || die "internal invalid upload release ID"
   [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] || die "internal invalid upload asset name"
-  require_safe_regular_file "$path" "release asset $name"
+  require_safe_regular_file "$release_file_path" "release asset $name"
   upload_url="https://uploads.github.com/repos/$REPOSITORY/releases/$release_id/assets?name=$name"
   : > "$RESPONSE_FILE"
 
@@ -1181,7 +1181,7 @@ upload_asset_by_release_id() {
       --header 'Accept: application/vnd.github+json' \
       --header 'X-GitHub-Api-Version: 2022-11-28' \
       --header 'Content-Type: application/octet-stream' \
-      --data-binary "@$path" \
+      --data-binary "@$release_file_path" \
       --output "$RESPONSE_FILE" \
       "$upload_url"
 }
@@ -1189,7 +1189,7 @@ upload_asset_by_release_id() {
 upload_missing_assets() {
   local release_id="$1"
   local name=''
-  local path=''
+  local release_file_path=''
   local upload_exit=0
 
   fetch_release_by_id "$release_id"
@@ -1197,13 +1197,13 @@ upload_missing_assets() {
   load_and_validate_remote_assets "$release_id"
 
   for name in "${MISSING_ASSETS[@]}"; do
-    path="${LOCAL_ASSET_PATH[$name]}"
+    release_file_path="${LOCAL_ASSET_PATH[$name]}"
     require_single_canonical_release "$release_id"
     fetch_release_by_id "$release_id"
     [[ "$RELEASE_DRAFT" == 'true' ]] || die "release became public during upload"
     write_state uploading "$release_id"
 
-    if upload_asset_by_release_id "$release_id" "$name" "$path"; then
+    if upload_asset_by_release_id "$release_id" "$name" "$release_file_path"; then
       upload_exit=0
     else
       upload_exit="$?"

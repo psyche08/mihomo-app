@@ -22,6 +22,8 @@ public enum ControlOperation: String, Codable, Sendable {
     case componentStatus = "component.status"
     case localDoHStatus = "local-doh.status"
     case installLocalDoH = "local-doh.install"
+    case trustLocalDoHCertificate = "local-doh.trust-certificate"
+    case setDNSMode = "runtime.set-dns-mode"
     case upgradeComponents = "component.upgrade"
     case setTUN = "runtime.set-tun"
     case setOutboundMode = "runtime.set-outbound-mode"

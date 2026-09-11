@@ -5,6 +5,19 @@ import XCTest
 @testable import MihomoBoxUI
 
 final class LocalDoHProfileTests: XCTestCase {
+  func testUnknownTrustAndUnverifiedProfileCannotSelectLocalDoH() {
+    var status = DashboardLocalDoHStatus(
+      available: true, serverPrepared: true, profileInstalled: true,
+      runtimeHealthy: true
+    )
+    XCTAssertNil(status.confirmedDNSMode)
+    XCTAssertNotEqual(status.phase, .active)
+    status.certificateTrusted = true
+    XCTAssertEqual(status.confirmedDNSMode, .localDoH)
+    status.statusVerified = false
+    XCTAssertNil(status.confirmedDNSMode)
+    XCTAssertEqual(status.phase, .statusUnavailable)
+  }
   func testInstalledProfileWithRejectedSSLTrustIsNeverActive() {
     XCTAssertEqual(DashboardLocalDoHStatus(
       available: true, serverPrepared: true, profileInstalled: true,
@@ -231,7 +244,8 @@ final class LocalDoHProfileTests: XCTestCase {
         available: true,
         serverPrepared: true,
         profileInstalled: true,
-        runtimeHealthy: true
+        runtimeHealthy: true,
+        certificateTrusted: true
       ).phase,
       .active
     )

@@ -33,8 +33,10 @@ RFC 8484 GET/POST wire messages and uses non-blocking DNS forwarders. The typed
 `local-doh.install` operation generates a local root CA plus a host-only server
 certificate with the `127.0.0.1` IP SAN, keeps the server private key root-only,
 and discards the CA private key after signing. The CA certificate is embedded in
-the generated profile; neither the installer nor the headless daemon writes
-Keychain trust directly. It never unlocks a keychain. The profile uses a fixed
+the generated profile. A separate user-confirmed `local-doh.trust-certificate`
+operation installs this exact CA and grants SSL-only Admin trust, with system
+authorization UI when required. Startup and preparation never grant trust on
+their own. It never unlocks a keychain. The profile uses a fixed
 identifier so regeneration updates the existing settings. Global DNS fallback
 removes only that profile; full helper uninstall additionally removes legacy
 trust residue and server identity. Mihomo neither binds 443 nor reads that
@@ -140,8 +142,8 @@ booleans plus numeric counts. Profile contents, expanded domain names, and
 GeoSite entries never cross XPC or enter logs. The UI distinguishes setup,
 waiting for macOS profile approval, active LocalHttpDns, and a profile/server
 mismatch, and refreshes while Config is visible. The profile carries both the
-root certificate and global-DNS payload so macOS applies their trust and DNS
-authorization together only after the user approves installation.
+root certificate and global-DNS payload. Manual profile approval is a separate
+DNS authorization gate, not proof that SSL trust was granted.
 
 Profile installation is not proof of SSL trust: macOS may import the CA with
 an SSL-specific `Unspecified` trust setting. The daemon evaluates its current
@@ -156,7 +158,20 @@ observes installed-profile and trust readiness. A continuous one-minute failure
 switches to the existing Global DNS fallback, releases 443, and removes only
 the fixed DoH profile after TUN DNS is healthy. No profile/unknown inspection
 does not trigger this transition. Config reports SSL trust failure explicitly;
-the operator, not the daemon, approves SSL trust in Keychain Access.
+the operator can select **Trust Certificate for SSL**, approve any system
+authorization, or use **Open Keychain Access** if the headless trust request is
+refused. Trust is changed only by this explicit action, never by the observer.
+
+Config exposes **Use Global DNS** and **Use Local DoH**. They refer to macOS DNS
+ownership, not Mihomo's rule/global/direct routing mode. Global DNS selection
+uses the same persisted, validated transition as fallback, including Enhanced
+TUN, release of 443, and removal of only the MihomoBox DoH profile. The UI
+confirms that impact before changing ownership. Identity and prepared profile
+files are retained; returning to Local DoH requires preparing/opening the
+profile and macOS installation approval again. The Local DoH selection is
+gated on matching installed profile and native SSL trust, and listener/backend
+readiness is checked before reporting success. A missing agent health snapshot
+does not invalidate a healthy independent DoH listener using network DNS.
 
 `runtime.set-tun` is a persistent transition between two valid agent states.
 Standby retains the controller and Mihomo DNS with TUN and the Fake-IP route

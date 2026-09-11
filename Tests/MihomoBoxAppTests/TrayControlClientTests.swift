@@ -185,6 +185,71 @@ final class TrayControlClientTests: XCTestCase {
     XCTAssertEqual(session.operations, [.localDoHStatus])
   }
 
+  func testTrustCertificateRequiresNativeSSLReadback() async throws {
+    let status = LocalDoHStatus(
+      serverPrepared: true, profileInstalled: true, profileInspectionSucceeded: true,
+      runtimeHealthy: false, certificateTrusted: false
+    )
+    let session = QueueSession(responses: [
+      ControlResponse(success: true),
+      ControlResponse(success: true, payload: try JSONEncoder().encode(status)),
+    ])
+    let client = TrayControlClient(makeSession: { session })
+    do {
+      try await client.trustLocalDoHCertificate()
+      XCTFail("import success must not imply SSL trust")
+    } catch let error as TrayControlError {
+      guard case .readbackMismatch = error else { return XCTFail("wrong error") }
+    }
+    XCTAssertEqual(session.operations, [.trustLocalDoHCertificate, .localDoHStatus])
+    XCTAssertTrue(session.arguments.allSatisfy(\.isEmpty))
+  }
+
+  func testTrustCancellationIsNotRetried() async {
+    let session = QueueSession(responses: [ControlResponse(success: false, error: "authorization cancelled")])
+    let client = TrayControlClient(makeSession: { session })
+    do {
+      try await client.trustLocalDoHCertificate()
+      XCTFail("expected cancellation")
+    } catch {}
+    XCTAssertEqual(session.operations, [.trustLocalDoHCertificate])
+  }
+
+  func testGlobalDNSSelectionRequiresProfileRemovalReadback() async throws {
+    let status = LocalDoHStatus(
+      serverPrepared: true, profileInstalled: true, profileInspectionSucceeded: true,
+      runtimeHealthy: false, systemDNSManaged: true, globalDNSFallback: true,
+      fallbackProfileRemovalRequired: true
+    )
+    let session = QueueSession(responses: [
+      ControlResponse(success: true),
+      ControlResponse(success: true, payload: try JSONEncoder().encode(status)),
+    ])
+    let client = TrayControlClient(makeSession: { session })
+    do {
+      try await client.setDNSMode(.globalDNS)
+      XCTFail("a stale DoH profile still overrides Global DNS")
+    } catch let error as TrayControlError {
+      guard case .readbackMismatch = error else { return XCTFail("wrong error") }
+    }
+    XCTAssertEqual(session.operations, [.setDNSMode, .localDoHStatus])
+    XCTAssertEqual(session.arguments.first, ["mode": "global-dns"])
+  }
+
+  func testLocalDNSSelectionConfirmsAllReadinessGates() async throws {
+    let status = LocalDoHStatus(
+      serverPrepared: true, profileInstalled: true, profileInspectionSucceeded: true,
+      runtimeHealthy: true, systemDNSManaged: false, certificateTrusted: true
+    )
+    let session = QueueSession(responses: [
+      ControlResponse(success: true),
+      ControlResponse(success: true, payload: try JSONEncoder().encode(status)),
+    ])
+    let client = TrayControlClient(makeSession: { session })
+    try await client.setDNSMode(.localDoH)
+    XCTAssertEqual(session.arguments.first, ["mode": "local-doh"])
+  }
+
   func testLocalDoHInstallationReturnsCountsButNoDomains() async throws {
     let expected = LocalDoHPlanSummary(
       domainCount: 5_123,

@@ -93,6 +93,42 @@ final class LocalDoHManager: @unchecked Sendable {
         return plan.summary
     }
 
+    /// Explicit authenticated user action only: never called by startup,
+    /// status polling, listener recovery, or profile preparation. macOS owns
+    /// any authorization UI; cancellation/timeout is not a reason to weaken
+    /// authorization policy or unlock a keychain.
+    func trustCertificate() throws {
+        guard root.path == "/Library/Application Support/Mihomo App" else {
+            throw localDoHError("certificate trust requires the fixed installed identity")
+        }
+        try validateIdentityDirectory()
+        guard identityIsValid(), LocalDoHStatusProvider.inspectPreparedProfile().installed else {
+            throw localDoHError("prepare the current Local DoH identity and profile before trusting it")
+        }
+        if LocalDoHStatusProvider.certificateTrusted() { return }
+        do {
+            try command.run(
+                LocalDoHTrustCommand.executable,
+                LocalDoHTrustCommand.arguments,
+                timeout: LocalDoHTrustCommand.timeout
+            )
+        } catch {
+            // Import and trust are separate system operations. Do not erase a
+            // successfully imported certificate or retry a cancelled prompt.
+            throw localDoHError(
+                "SSL trust was not completed (authorization may have been cancelled, denied, or timed out). " +
+                "Retry Trust Certificate, or approve the current MihomoBox Local DoH Root CA for SSL in Keychain Access."
+            )
+        }
+        guard LocalDoHStatusProvider.certificateTrusted() else {
+            throw localDoHError(
+                "the certificate was installed but system SSL verification still failed; " +
+                "review the current MihomoBox Local DoH Root CA in Keychain Access"
+            )
+        }
+        ServiceLog.info("event=local_doh_trust result=ssl_verified")
+    }
+
     /// A split encrypted-DNS payload overrides the plain Global resolver for
     /// its matched domains. Remove only our fixed profile before reporting a
     /// completed fallback. Identity and prepared profile remain for retry.
@@ -434,22 +470,22 @@ private struct FixedLocalDoHCommandRunner {
         process.standardOutput = pipe ?? FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try process.run()
-        let deadline = Date().addingTimeInterval(timeout)
-        while process.isRunning, Date() < deadline { usleep(50_000) }
+        let deadline = ProcessInfo.processInfo.systemUptime + timeout
+        while process.isRunning, ProcessInfo.processInfo.systemUptime < deadline { usleep(50_000) }
         if process.isRunning {
             process.terminate()
-            let terminateDeadline = Date().addingTimeInterval(1)
-            while process.isRunning, Date() < terminateDeadline { usleep(50_000) }
+            let terminateDeadline = ProcessInfo.processInfo.systemUptime + 1
+            while process.isRunning, ProcessInfo.processInfo.systemUptime < terminateDeadline { usleep(50_000) }
         }
         if process.isRunning {
             kill(process.processIdentifier, SIGKILL)
-            let killDeadline = Date().addingTimeInterval(1)
-            while process.isRunning, Date() < killDeadline { usleep(50_000) }
+            let killDeadline = ProcessInfo.processInfo.systemUptime + 1
+            while process.isRunning, ProcessInfo.processInfo.systemUptime < killDeadline { usleep(50_000) }
         }
         guard !process.isRunning, process.terminationStatus == 0 else {
             throw NSError(
                 domain: "MihomoLocalDoHCommand",
-                code: Int(process.terminationStatus),
+                code: process.isRunning ? -1 : Int(process.terminationStatus),
                 userInfo: [NSLocalizedDescriptionKey: "a fixed Local DoH system operation failed"]
             )
         }

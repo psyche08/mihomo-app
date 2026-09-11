@@ -71,13 +71,14 @@ The installer:
 7. verifies controller, Mihomo DNS, absent TUN/Fake-IP route, and that no
    MihomoBox address remains in persistent or effective system DNS.
 
-From the Config page, **Prepare & Open Profile** first asks the authenticated
+From the Config page, **Prepare & Trust / Open Profile** asks for explicit
+confirmation of SSL trust and then asks the authenticated
 root daemon to prepare a global/default DNS profile, independent of domain rules
 and controller mode. The daemon writes the fixed profile at
 `/Library/Application Support/Mihomo App/MihomoBox-Local-DoH.mobileconfig` as
 root:wheel mode `0644` and returns only aggregate counts. The profile contains
 both a `com.apple.security.root` certificate payload and the global DNS payload,
-so the later macOS approval owns both trust and resolver installation. In the
+but manual macOS profile approval does not itself prove SSL trust. In the
 same typed XPC transaction, the already-installed root daemon validates that
 artifact, keeps its control service and standby agent online, generates a
 root-owned local CA and loopback server certificate/private key, discards the
@@ -89,8 +90,15 @@ IPC is unresponsive, a daemon-owned forwarder uses current physical/scoped DNS
 without depending on the agent, changing system DNS, or stopping port 443.
 Valid Mihomo DNS error responses are returned unchanged. Preparation failure restores the previous
 identity and prepared profile atomically before returning an error.
-No administrator dialog, `sudo`, or AppleScript is used after the helper is
-installed. The App opens the validated root-owned profile. Apple requires the
+After preparation, the App sends a separate fixed `local-doh.trust-certificate`
+action to install the current CA into the System keychain with SSL-only Admin
+trust. It permits a macOS authorization dialog for up to two minutes, never
+unlocks a keychain or weakens authorization rules, and verifies native SSL
+trust before opening the profile. Cancellation/denial is reported without
+automatic retry; **Trust Certificate for SSL** retries explicitly and **Open
+Keychain Access** provides the manual path when system authorization cannot
+run from the helper. No `sudo` or AppleScript is used. The App opens the
+validated root-owned profile. Apple requires the
 user to finish installation in **General > Device Management**; **Open Device
 Management** reopens that exact System Settings pane at any time. There is no
 normal LocalHttpDns-off action: after approval it remains available whether
@@ -377,6 +385,21 @@ that first-install activation fails, it stops the agent and confirms TUN and
 system DNS restoration before returning the error, rather than leaving the
 minimal direct profile active.
 
+## Selecting DNS integration
+
+In Config > DNS Integration, **Use Global DNS** persists the existing Global
+DNS configuration (`globalDNSFallbackEnabled` is retained as the compatible
+storage key), starts and verifies Enhanced TUN DNS at `198.18.0.1`, releases
+443, and removes only MihomoBox's installed DoH profile. The App confirms this
+impact before starting. A removal error remains visible, never an active-mode
+success. Certificate identity files and the prepared profile are retained.
+
+To return, choose **Prepare & Trust / Open Profile**, authorize SSL trust if
+needed, and approve the profile in Device Management. **Use Local DoH** is
+enabled only after certificate and installed-profile readiness. Local DoH
+continues using original-network DNS when the Mihomo backend is unavailable.
+Global DNS requires Enhanced TUN and restores the original DNS when stopped.
+
 ## Diagnosis
 
 Local DoH status is available through `mihomoboxctl local-doh status`. A matched
@@ -385,7 +408,8 @@ installed profile and a listening 443 port do not prove macOS trusts HTTPS.
 native system SSL evaluation. Manual profile installation can import the CA
 while leaving SSL trust unspecified. Review the exact current certificate in
 Keychain Access; do not trust or delete every certificate sharing its name.
-MihomoBox never silently grants trust. After one minute of continuously observed
+MihomoBox never silently grants trust; use the explicit SSL-trust action or
+Keychain Access. After one minute of continuously observed
 installed-profile/trust failure it releases 443 and enters Global DNS fallback.
 The identity and prepared profile remain for retry; only the fixed installed
 DoH profile is removed after the fallback DNS runtime passes its health gate.

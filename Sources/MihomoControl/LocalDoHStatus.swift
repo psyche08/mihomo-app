@@ -15,6 +15,17 @@ public struct LocalDoHStatus: Codable, Equatable, Sendable {
     public var globalDNSFallback: Bool
     public var fallbackProfileRemovalRequired: Bool
 
+    /// Configured intent alone must not be presented as active DNS ownership.
+    public var confirmedDNSMode: DNSIntegrationMode? {
+        guard profileInspectionSucceeded else { return nil }
+        if globalDNSFallback {
+            return !profileInstalled && !fallbackProfileRemovalRequired
+                && systemDNSManaged == true ? .globalDNS : nil
+        }
+        return serverPrepared && profileInstalled && certificateTrusted == true
+            && runtimeHealthy ? .localDoH : nil
+    }
+
     public init(
         serverPrepared: Bool,
         profileInstalled: Bool,

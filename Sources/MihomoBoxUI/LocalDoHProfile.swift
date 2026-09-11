@@ -26,6 +26,16 @@ public struct DashboardLocalDoHStatus: Equatable, Sendable {
   public var globalDNSFallback: Bool
   public var fallbackProfileRemovalRequired: Bool
 
+  public var confirmedDNSMode: DNSIntegrationMode? {
+    guard available, statusVerified else { return nil }
+    if globalDNSFallback {
+      return !profileInstalled && !fallbackProfileRemovalRequired
+        && systemDNSManaged == true ? .globalDNS : nil
+    }
+    return serverPrepared && profileInstalled && certificateTrusted == true
+      && runtimeHealthy ? .localDoH : nil
+  }
+
   public init(
     available: Bool,
     statusVerified: Bool = true,
@@ -60,7 +70,7 @@ public struct DashboardLocalDoHStatus: Equatable, Sendable {
     if serverPrepared && profileInstalled && certificateTrusted == false {
       return .certificateUntrusted
     }
-    if serverPrepared && profileInstalled && runtimeHealthy { return .active }
+    if serverPrepared && profileInstalled && runtimeHealthy && certificateTrusted == true { return .active }
     if serverPrepared && !profileInstalled { return .awaitingApproval }
     if serverPrepared || profileInstalled { return .degraded }
     return .off
@@ -71,5 +81,8 @@ public struct DashboardLocalDoHStatus: Equatable, Sendable {
 public protocol DashboardLocalDoHService: AnyObject {
   func status() async -> DashboardLocalDoHStatus
   func prepare() async throws -> LocalDoHPlanSummary
+  func trustCertificate() async throws
+  func setDNSMode(_ mode: DNSIntegrationMode) async throws
+  func openKeychainAccess() async throws
   func openDeviceManagement() async throws
 }

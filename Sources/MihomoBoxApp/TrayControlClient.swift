@@ -185,6 +185,24 @@ actor TrayControlClient {
     return try JSONDecoder().decode(LocalDoHPlanSummary.self, from: payload)
   }
 
+  func trustLocalDoHCertificate() throws {
+    _ = try send(ControlRequest(operation: .trustLocalDoHCertificate), retryReadOnce: false)
+    guard try localDoHStatus().certificateTrusted == true else {
+      throw TrayControlError.readbackMismatch("Local DoH SSL trust")
+    }
+  }
+
+  func setDNSMode(_ mode: DNSIntegrationMode) throws {
+    _ = try send(
+      ControlRequest(operation: .setDNSMode, arguments: ["mode": mode.rawValue]),
+      retryReadOnce: false
+    )
+    let status = try localDoHStatus()
+    guard status.confirmedDNSMode == mode else {
+      throw TrayControlError.readbackMismatch("DNS integration mode")
+    }
+  }
+
   func upgradeComponents(_ package: ComponentUpdatePackage, daemonWillRestart: Bool) throws {
     do {
       _ = try send(

@@ -209,7 +209,7 @@ public struct ConfigView: View {
         }
 
         Text(
-          "Enhanced TUN remains read-only here. LocalHttpDns must be installed first and stays active when TUN is turned off. MihomoBox does not replace the system DNS server list."
+          "Enhanced TUN remains read-only here. Local DoH stays active when TUN is off; Global DNS uses 198.18.0.1 and requires Enhanced TUN."
         )
         .font(.system(size: 10))
         .foregroundStyle(DashboardTheme.muted.opacity(0.72))
@@ -306,7 +306,7 @@ public struct ConfigView: View {
   }
 
   private var localDoHPanel: some View {
-    configPanel("LocalHttpDns", symbol: "lock.shield") {
+    configPanel("DNS Integration", symbol: "lock.shield") {
       VStack(alignment: .leading, spacing: 10) {
         HStack(spacing: 10) {
           StatusPill(
@@ -320,6 +320,27 @@ public struct ConfigView: View {
           }
           Spacer()
         }
+
+        HStack(spacing: 10) {
+          actionButton(
+            store.confirmedDNSMode == .globalDNS ? "Global DNS · Active" : "Use Global DNS",
+            symbol: "network", tint: DashboardTheme.info, actionKind: .switchingDNSMode
+          ) { await store.setDNSMode(.globalDNS) }
+          .disabled(!store.localDoHAvailable || store.configAction != nil
+            || store.confirmedDNSMode == .globalDNS)
+
+          actionButton(
+            store.confirmedDNSMode == .localDoH ? "Local DoH · Active" : "Use Local DoH",
+            symbol: "lock.shield", tint: DashboardTheme.primary, actionKind: .switchingDNSMode
+          ) { await store.setDNSMode(.localDoH) }
+          .disabled(!store.localDoHAvailable || store.configAction != nil
+            || !store.localDoHPrepared || !store.localDoHProfileInstalled
+            || !store.localDoHCertificateTrusted || store.confirmedDNSMode == .localDoH)
+        }
+
+        Text("Certificate SSL trust: \(store.localDoHCertificateTrusted ? "Ready" : "Not ready") · DNS profile: \(store.localDoHProfileInstalled ? "Installed" : "Not installed / not matched")")
+          .font(.system(size: 11, weight: .medium))
+          .foregroundStyle(DashboardTheme.muted)
 
         Text(
           localDoHStatusDetail
@@ -374,7 +395,7 @@ public struct ConfigView: View {
         }
 
         Text(
-          "Prepare and approve the profile, then verify SSL trust. LocalHttpDns stays active on port 443 with TUN on or off. A persistent profile or SSL trust failure falls back to Global DNS through Enhanced TUN and removes only its DoH profile. Re-run Prepare to retry LocalHttpDns."
+          "Prepare & Trust installs this Mac's CA for SSL, then opens the DNS profile for macOS approval. Local DoH is ready only when both pass verification. Global DNS removes only this app's DoH profile and releases 443; switching back requires Prepare & Trust and profile approval again. The existing identity is reused."
         )
         .font(.system(size: 10))
         .foregroundStyle(DashboardTheme.muted.opacity(0.72))
@@ -382,7 +403,7 @@ public struct ConfigView: View {
 
         HStack(spacing: 10) {
           actionButton(
-            store.localDoHPrepared ? "Regenerate & Open Profile" : "Prepare & Open Profile",
+            "Prepare & Trust / Open Profile",
             symbol: "plus.shield.fill",
             tint: DashboardTheme.primary,
             actionKind: .preparingLocalDoH
@@ -419,6 +440,21 @@ public struct ConfigView: View {
             .disabled(store.configAction != nil)
           }
         }
+
+        HStack(spacing: 10) {
+          actionButton(
+            "Trust Certificate for SSL", symbol: "checkmark.shield",
+            tint: DashboardTheme.primary, actionKind: .trustingLocalDoH
+          ) { await store.trustLocalDoHCertificate() }
+          .disabled(!store.localDoHAvailable || !store.localDoHPrepared
+            || store.configAction != nil || store.localDoHCertificateTrusted)
+
+          actionButton(
+            "Open Keychain Access", symbol: "key",
+            tint: DashboardTheme.content, actionKind: .openingKeychainAccess
+          ) { await store.openKeychainAccess() }
+          .disabled(store.configAction != nil)
+        }
       }
     }
   }
@@ -433,7 +469,7 @@ public struct ConfigView: View {
     case .certificateUntrusted: "SSL Trust Required"
     case .active: "Active"
     case .degraded: "Needs Attention"
-    case .globalDNSFallback: "Global DNS Fallback"
+    case .globalDNSFallback: "Global DNS"
     case .fallbackNeedsProfileRemoval: "Remove DoH Profile"
     case .fallbackUnavailable: "Global DNS Inactive"
     }
@@ -460,13 +496,13 @@ public struct ConfigView: View {
     case .awaitingApproval:
       "The identity is prepared, but the installed DNS Settings profile does not yet match. Finish confirmation in General › Device Management. Profile installation alone does not guarantee SSL trust."
     case .certificateUntrusted:
-      "The profile is installed, but macOS rejects the Local DoH certificate for SSL. Review the current MihomoBox Local DoH Root CA in Keychain Access and approve SSL trust. MihomoBox never changes this permission silently; a persistent failure switches to Global DNS after one minute."
+      "The profile is installed, but SSL trust is not ready. Choose Trust Certificate for SSL and approve any macOS authorization dialog. If macOS refuses the helper operation, review the current CA in Keychain Access. A persistent failure falls back to Global DNS."
     case .active:
       "The HTTPS listener has a DNS backend, the certificate passes system SSL trust, and the installed DNS settings match. It prefers Mihomo IPC and falls back to current network DNS when Mihomo is unavailable. Proxy access still requires Enhanced TUN or an explicit proxy."
     case .degraded:
       "The server and installed profile do not agree. Regenerate and approve the LocalHttpDns profile; Enhanced TUN remains unavailable until it is healthy."
     case .globalDNSFallback:
-      "LocalHttpDns is unavailable. System DNS uses 198.18.0.1 through Enhanced TUN. Stop Mihomo to restore the original DNS, or Prepare to retry LocalHttpDns."
+      "System DNS uses 198.18.0.1 through Enhanced TUN, either by selection or fallback. Stop Mihomo to restore the original DNS. Prepare & Trust and reinstall the profile to return to Local DoH."
     case .fallbackNeedsProfileRemoval:
       "Global DNS fallback is configured, but macOS has not confirmed removal of the MihomoBox Local DoH profile. Remove it in Device Management so matching domains can use Global DNS."
     case .fallbackUnavailable:

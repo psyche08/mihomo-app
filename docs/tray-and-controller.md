@@ -143,7 +143,9 @@ network restoration cannot be proved, the daemon stops the agent and restores
 DNS. The App sends one typed XPC request and renders the returned snapshot; it
 does not repeat rollback or stop decisions outside the privilege boundary.
 
-LocalHttpDns is the service prerequisite for Enhanced TUN. Without a selected
+In Local DoH mode, LocalHttpDns is the service prerequisite for Enhanced TUN.
+Explicit Global DNS mode instead requires the verified TUN DNS path and no
+remaining MihomoBox DoH profile. Without a selected
 profile the item first tells the user to add one. When the daemon is absent it
 opens the signed installer with administrator authorization and supplies the
 selected profile for the first standby start. It then prepares the fixed
@@ -151,7 +153,8 @@ certificate/profile and opens Device Management. Until macOS reports that
 profile installed, enabling TUN is rejected. Once approved, the same item
 persists `tun.enable: true`; turning it off persists `false` and returns to a
 healthy controller/DNS standby. Neither action stops LocalHttpDns or writes the
-macOS system DNS server list.
+macOS system DNS server list in Local DoH mode. Global DNS mode restores the
+original system DNS when Enhanced TUN is stopped.
 
 On first installed App launch, the native App enables a current-user macOS login
 item independently of helper, network, or Enhanced TUN readiness. This is a
@@ -198,6 +201,8 @@ activation transaction.
 | Start/stop/restart proxy runtime | `agent.start` / `agent.stop` / `agent.restart` |
 | Read fixed Local DoH server/profile state | `local-doh.status` |
 | Prepare identity/runtime and root-owned Local DoH profile | `local-doh.install` |
+| Explicitly install/trust the fixed CA for SSL | `local-doh.trust-certificate` |
+| Select Global DNS or ready Local DoH | `runtime.set-dns-mode` |
 | SwiftUI controller reads/mutations | typed operations or validated `dashboard.controller-request` |
 | SwiftUI live streams | `dashboard.controller-stream-open/next/close` |
 
@@ -232,7 +237,16 @@ disabled. An automatically downloaded update uses Sparkle's no-UI immediate
 install/relaunch path; the daemon-owned active tunnel does not depend on the App
 process remaining alive.
 
-Config also exposes **Local DNS over HTTPS**. The store reads the current
+Config's **DNS Integration** panel exposes Global DNS / Local DoH selection,
+separate certificate-trust and installed-profile readiness, explicit SSL trust
+approval, and links to Device Management and Keychain Access. The App confirms
+trust and Global DNS profile-removal actions before authenticated XPC. Busy
+state prevents duplicate clicks; failed or cancelled authorization cannot
+optimistically mark SSL trust ready. Mode selection is read back from the
+daemon, including confirmed DoH profile removal for Global DNS. Re-entering
+Local DoH after Global DNS requires user-approved profile installation again.
+
+The legacy split-DNS planner reads the current
 authenticated `/rules` and `/proxies` snapshot, recognizes both YAML
 `DOMAIN-SUFFIX` and controller `DomainSuffix` spellings, follows each current
 selector chain to a concrete remote proxy, and expands selected `GEOSITE`

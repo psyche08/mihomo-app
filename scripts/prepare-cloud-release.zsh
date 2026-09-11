@@ -46,9 +46,9 @@ sha256_file() {
 }
 
 require_regular_file() {
-  local path="$1"
+  local release_file_path="$1"
   local label="$2"
-  [[ -f "$path" && ! -L "$path" ]] || fail "$label must be a regular, non-symlink file"
+  [[ -f "$release_file_path" && ! -L "$release_file_path" ]] || fail "$label must be a regular, non-symlink file"
 }
 
 typeset CLOUD_ZIP=''

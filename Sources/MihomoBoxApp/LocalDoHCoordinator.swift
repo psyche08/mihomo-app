@@ -39,7 +39,9 @@ final class LocalDoHCoordinator: DashboardLocalDoHService {
   }
 
   func prepare() async throws -> LocalDoHPlanSummary {
+    try confirmTrust(preparing: true)
     let summary = try await control.installLocalDoH()
+    try await control.trustLocalDoHCertificate()
     let url = URL(fileURLWithPath: LocalDoHProfileDocument.managedProfilePath)
     let profileOpened = NSWorkspace.shared.open(url)
     let settingsOpened = NSWorkspace.shared.open(Self.deviceManagementURL)
@@ -54,6 +56,46 @@ final class LocalDoHCoordinator: DashboardLocalDoHService {
       )
     }
     return summary
+  }
+
+  func trustCertificate() async throws {
+    try confirmTrust(preparing: false)
+    try await control.trustLocalDoHCertificate()
+  }
+
+  func setDNSMode(_ mode: DNSIntegrationMode) async throws {
+    if mode == .globalDNS {
+      let alert = NSAlert()
+      alert.messageText = "Switch to Global DNS?"
+      alert.informativeText = "This enables Enhanced TUN and uses 198.18.0.1 for system DNS. "
+        + "MihomoBox will remove only its own DoH profile and release port 443. "
+        + "The certificate and private key are retained. Switching back requires profile installation in System Settings."
+      alert.addButton(withTitle: "Use Global DNS")
+      alert.addButton(withTitle: "Cancel")
+      guard alert.runModal() == .alertFirstButtonReturn else { throw CancellationError() }
+    }
+    try await control.setDNSMode(mode)
+  }
+
+  func openKeychainAccess() async throws {
+    // Open the system UI only; never unlock a keychain or collect a password.
+    guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.keychainaccess") else {
+      throw NSError(domain: "MihomoBoxLocalDoH", code: 5,
+        userInfo: [NSLocalizedDescriptionKey: "Open Keychain Access manually to review SSL trust."])
+    }
+    _ = try await NSWorkspace.shared.openApplication(at: url, configuration: .init())
+  }
+
+  private func confirmTrust(preparing: Bool) throws {
+    let alert = NSAlert()
+    alert.messageText = preparing ? "Prepare Local DoH and trust its certificate?" : "Trust the Local DoH certificate?"
+    alert.informativeText = "The installed root helper will install this Mac's MihomoBox Local DoH Root CA "
+      + "in the System keychain and enable SSL trust for all users, not code-signing or mail trust. "
+      + "Approve any macOS authorization dialog; MihomoBox never requests your password itself. "
+      + (preparing ? "This prepares Local DoH standby and restores any managed Global DNS. Then approve the DNS profile in System Settings." : "")
+    alert.addButton(withTitle: preparing ? "Prepare & Trust" : "Trust for SSL")
+    alert.addButton(withTitle: "Cancel")
+    guard alert.runModal() == .alertFirstButtonReturn else { throw CancellationError() }
   }
 
   func openDeviceManagement() async throws {

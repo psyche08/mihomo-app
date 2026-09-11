@@ -63,6 +63,9 @@ public enum DashboardConfigAction: Equatable, Sendable {
   case flushingDNS
   case updatingGeoData
   case preparingLocalDoH
+  case trustingLocalDoH
+  case switchingDNSMode
+  case openingKeychainAccess
   case openingDeviceManagement
 
   public var progressTitle: String {
@@ -73,7 +76,10 @@ public enum DashboardConfigAction: Equatable, Sendable {
     case .flushingFakeIP: "Flushing Fake-IP cache…"
     case .flushingDNS: "Flushing DNS cache…"
     case .updatingGeoData: "Updating GEO data…"
-    case .preparingLocalDoH: "Preparing local DoH…"
+    case .preparingLocalDoH: "Preparing Local DoH / waiting for SSL authorization…"
+    case .trustingLocalDoH: "Waiting for SSL trust authorization…"
+    case .switchingDNSMode: "Switching DNS mode…"
+    case .openingKeychainAccess: "Opening Keychain Access…"
     case .openingDeviceManagement: "Opening Device Management…"
     }
   }
@@ -128,6 +134,8 @@ public final class DashboardStore: ObservableObject {
   @Published public private(set) var localDoHProfileInstalled = false
   @Published public private(set) var localDoHRuntimeHealthy = false
   @Published public private(set) var localDoHSystemDNSManaged: Bool?
+  @Published public private(set) var localDoHCertificateTrusted = false
+  @Published public private(set) var confirmedDNSMode: DNSIntegrationMode?
   @Published public private(set) var localDoHPhase: DashboardLocalDoHPhase = .unavailable
   @Published public private(set) var localDoHDomainCount = 0
   @Published public private(set) var localDoHOmittedRuleCount = 0
@@ -517,14 +525,39 @@ public final class DashboardStore: ObservableObject {
       localDoHExpandedGeoSiteRuleCount = summary.expandedGeoSiteRuleCount
       localDoHUnrepresentableGeoSiteEntryCount = summary.unrepresentableGeoSiteEntryCount
       localDoHInvertedGeoSiteRuleCount = summary.invertedGeoSiteRuleCount
-      await refreshLocalDoHStatus()
     }
+    await refreshLocalDoHStatus()
   }
 
   public func openDeviceManagement() async {
     guard let localDoHService else { return }
     await performConfigAction(.openingDeviceManagement) {
       try await localDoHService.openDeviceManagement()
+    }
+  }
+
+  public func trustLocalDoHCertificate() async {
+    guard let localDoHService else { return }
+    await performConfigAction(.trustingLocalDoH) {
+      try await localDoHService.trustCertificate()
+    }
+    await refreshLocalDoHStatus()
+  }
+
+  public func setDNSMode(_ mode: DNSIntegrationMode) async {
+    guard let localDoHService else { return }
+    await performConfigAction(.switchingDNSMode) {
+      try await localDoHService.setDNSMode(mode)
+    }
+    // Always read back after failure too: Global DNS may be configured while
+    // macOS still requires manual removal of the old encrypted-DNS profile.
+    await refreshLocalDoHStatus()
+  }
+
+  public func openKeychainAccess() async {
+    guard let localDoHService else { return }
+    await performConfigAction(.openingKeychainAccess) {
+      try await localDoHService.openKeychainAccess()
     }
   }
 
@@ -535,6 +568,8 @@ public final class DashboardStore: ObservableObject {
       localDoHProfileInstalled = false
       localDoHRuntimeHealthy = false
       localDoHSystemDNSManaged = nil
+      localDoHCertificateTrusted = false
+      confirmedDNSMode = nil
       localDoHPhase = .unavailable
       localDoHDomainCount = 0
       return
@@ -545,6 +580,8 @@ public final class DashboardStore: ObservableObject {
     localDoHProfileInstalled = status.profileInstalled
     localDoHRuntimeHealthy = status.runtimeHealthy
     localDoHSystemDNSManaged = status.systemDNSManaged
+    localDoHCertificateTrusted = status.certificateTrusted == true
+    confirmedDNSMode = status.confirmedDNSMode
     localDoHPhase = status.phase
     localDoHDomainCount = status.installedDomainCount
   }
@@ -664,6 +701,8 @@ public final class DashboardStore: ObservableObject {
     do {
       try await operation()
       return true
+    } catch is CancellationError {
+      return false
     } catch {
       guard !Task.isCancelled else { return false }
       let message = "Action failed: \(safeErrorMessage(error))"
@@ -691,6 +730,7 @@ public final class DashboardStore: ObservableObject {
   ) async -> Bool {
     guard !previewMode else { return true }
     guard configAction == nil else { return false }
+    actionError = nil
     configAction = action
     defer { configAction = nil }
     return await performAction(operation)

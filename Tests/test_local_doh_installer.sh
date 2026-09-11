@@ -38,10 +38,15 @@ fi
 /usr/bin/grep -Fq '"PayloadType": "com.apple.security.root"' "$PROFILE_DOCUMENT"
 /usr/bin/grep -Fq 'expectedRootCertificate: rootCertificate' \
   "$ROOT/Sources/MihomoDaemon/LocalDoHStatusProvider.swift"
-if /usr/bin/grep -Eq 'add-trusted-cert|remove-trusted-cert|delete-certificate' "$XPC_MANAGER"; then
-  echo "the headless XPC helper must leave certificate trust to profile approval" >&2
+if /usr/bin/grep -Eq 'remove-trusted-cert|delete-certificate|authorizationdb|unlock-keychain' "$XPC_MANAGER"; then
+  echo "explicit SSL trust must not delete certificates or bypass system authorization" >&2
   exit 1
 fi
+/usr/bin/grep -Fq 'func trustCertificate() throws' "$XPC_MANAGER"
+/usr/bin/grep -Fq 'LocalDoHTrustCommand.arguments' "$XPC_MANAGER"
+/usr/bin/grep -Fq 'guard LocalDoHStatusProvider.certificateTrusted()' "$XPC_MANAGER"
+/usr/bin/grep -Fq 'try confirmTrust(preparing: true)' "$APP_COORDINATOR"
+/usr/bin/grep -Fq 'try await control.trustLocalDoHCertificate()' "$APP_COORDINATOR"
 /usr/bin/grep -Fq 'try await control.installLocalDoH()' "$APP_COORDINATOR"
 if /usr/bin/grep -Eq 'InstallerCoordinator|osascript|runSpecialInstaller' "$APP_COORDINATOR"; then
   echo "Local DoH App actions must use the installed authenticated XPC helper" >&2

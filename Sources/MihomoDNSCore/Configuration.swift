@@ -34,8 +34,8 @@ public struct ProxyConfiguration: Codable, Equatable {
     public var mihomoDNS: Endpoint
     public var upstreamListen: Endpoint
     public var manageSystemDNS: Bool
-    /// Explicit compatibility mode used only when the fixed LocalHttpDns
-    /// listener cannot start. macOS Global DNS points at Mihomo's Fake-IP
+    /// Persisted Global DNS mode, explicitly selected or entered as fallback
+    /// when LocalHttpDns is unavailable. macOS DNS points at Mihomo's Fake-IP
     /// gateway and therefore requires Enhanced TUN to remain enabled.
     public var globalDNSFallbackEnabled: Bool?
     /// Persisted desired TUN state. `nil` is accepted only for upgrades from
@@ -242,8 +242,8 @@ public enum LocalDoHConfigurationStore {
         try write(configuration, to: configurationPath)
     }
 
-    /// Restores the proven legacy ownership model when the local HTTPS
-    /// endpoint cannot be kept alive. Global DNS is coupled to Enhanced TUN.
+    /// Selects the proven Global DNS ownership model explicitly or when the
+    /// HTTPS endpoint cannot be kept alive. Global DNS is coupled to Enhanced TUN.
     public static func useGlobalDNSFallback(configurationPath: String) throws {
         var configuration = try ProxyConfiguration.load(path: configurationPath)
         configuration.manageSystemDNS = true
