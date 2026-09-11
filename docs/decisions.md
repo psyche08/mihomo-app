@@ -85,19 +85,24 @@ restores LocalHttpDns and the persisted standby/Enhanced state at system startup
 
 ## LocalHttpDns as the base service, Enhanced TUN as an optional layer
 
-MihomoBox no longer manages the active PrimaryService or Global DNS server
-list. Installing the root helper establishes a valid controller/DNS standby
+MihomoBox normally leaves the PrimaryService and Global DNS server list alone.
+Installing the root helper establishes a valid controller/DNS standby
 with TUN off. The daemon then prepares a manual DNS Settings profile with
 `SupplementalMatchDomains` and an embedded local root certificate. Enhanced
 TUN is unavailable until macOS reports that fixed profile installed and the
-daemon-owned `127.0.0.1:9443` endpoint is live.
+daemon-owned `127.0.0.1:443` endpoint is live.
 
 The endpoint remains available when Mihomo restarts or TUN is disabled. It
 prefers Mihomo DNS only for a completely healthy Enhanced runtime and otherwise
 resolves through the current physical/scoped DNS. Manual profile confirmation
 is retained because macOS does not permit the `profiles` CLI to install a
-configuration profile interactively on the user's behalf. Removing
-LocalHttpDns is therefore part of full helper uninstall, not a runtime mode.
+configuration profile interactively on the user's behalf. A failed LocalHttpDns
+startup or preparation falls back to Global DNS at `198.18.0.1:53` with TUN
+required. The daemon removes its fixed DoH profile so it cannot override Global
+DNS, retaining the identity for retry. Failed removal remains visible in Config.
+Port 9443 is released. A wildcard 443 listener cannot be evaded by binding a
+different local IPv4 address; the TUN address also cannot support an independent
+always-on HTTPS resolver.
 
 ## Separate port 53 and port 1054
 

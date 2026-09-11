@@ -7,7 +7,7 @@ splits while moving between standby and Enhanced TUN:
 
 - supervise exactly one bundled Mihomo process and restart it after failure;
 - keep the original-DNS escape bound to the current physical/scoped resolver;
-- observe controller, DNS and route health without owning macOS DNS settings.
+- observe controller, DNS and route health; own macOS DNS only in fallback.
 
 The agent records the Mihomo child PID. A later agent instance validates the PID's
 executable path with `proc_pidpath` before terminating a stale owned process;
@@ -15,13 +15,13 @@ it never kills an unrelated process merely because a PID file exists.
 
 ## DNS Flow
 
-LocalHttpDns is the default and only macOS DNS integration. Installing the root
+LocalHttpDns is the default macOS DNS integration. Installing the root
 helper creates a valid Mihomo standby runtime with TUN disabled. The user then
 prepares and approves one macOS DNS Settings profile before Enhanced TUN can be
 enabled:
 
 ```text
-matching macOS queries -> https://127.0.0.1:9443/dns-query (root daemon)
+matching macOS queries -> https://127.0.0.1/dns-query (root daemon, port 443)
                               |-- healthy controller + TUN + route -> Mihomo DNS
                               +-- otherwise/failure -> current physical/scoped DNS
 all other queries      -> current macOS default/scoped resolver
@@ -36,9 +36,10 @@ certificate with the `127.0.0.1` IP SAN, keeps the server private key root-only,
 and discards the CA private key after signing. The CA certificate is embedded in
 the generated profile; neither the installer nor the headless daemon writes
 Keychain trust directly. It never unlocks a keychain. The profile uses a fixed
-identifier so regeneration updates the existing settings. Only full helper
-uninstall removes the profile, legacy trust residue and server identity. Mihomo
-neither binds 9443 nor reads that identity, and its child never inherits
+identifier so regeneration updates the existing settings. Global DNS fallback
+removes only that profile; full helper uninstall additionally removes legacy
+trust residue and server identity. Mihomo neither binds 443 nor reads that
+identity, and its child never inherits
 `SAFE_PATHS`.
 
 The root daemon builds `SupplementalMatchDomains` from enabled `DOMAIN`,
@@ -108,15 +109,17 @@ ambiguous. Domain-scoped VPN and enterprise resolvers remain deterministic.
 
 ## LocalHttpDns ownership
 
-MihomoBox does not replace the system DNS server list. The independent daemon
+In LocalHttpDns mode MihomoBox does not replace the system DNS server list. The independent daemon
 endpoint remains live before, during and after agent/TUN transitions. It uses
 Mihomo DNS only while the complete controller/TUN/Fake-IP route is healthy and
 otherwise immediately uses the current physical/scoped resolver. The
 original-DNS `1054` listener, physical-interface binding, route observer, wake
 recovery, egress probes, and generation-bound health snapshots remain active.
-A five-second daemon supervisor retries `9443` after a transient bind conflict
-or listener failure for as long as the fixed root-owned identity remains
-installed.
+A five-second daemon supervisor retries `443` after a listener failure. Three
+failed recovery attempts trigger Global DNS fallback. Startup bind failure with
+a prepared identity and failed preparation transactions also trigger fallback.
+An unprepared fresh installation stays in setup/standby. Port 9443 is no longer
+bound; only its former fixed configuration is accepted for upgrade migration.
 
 The Config page asks the daemon to prepare the fixed root-owned profile,
 identity and independent resolver through the typed `local-doh.install`
@@ -133,15 +136,48 @@ authorization together only after the user approves installation.
 `runtime.set-tun` is a persistent transition between two valid agent states.
 Standby retains the controller and Mihomo DNS with TUN and the Fake-IP route
 absent; Enhanced mode adds TUN only after the installed profile, identity and
-9443 listener are verified. Disabling Enhanced TUN returns to standby and
+443 listener are verified. Disabling Enhanced TUN returns to standby and
 never stops LocalHttpDns.
+
+### Global DNS fallback
+
+Fallback persists `globalDNSFallbackEnabled: true`, `manageSystemDNS: true`,
+`enhancedTUNEnabled: true`, and no `localDoH`. It uses this shorter path:
+
+```text
+macOS Global DNS -> 198.18.0.1:53 -> Mihomo TUN DNS
+Mihomo upstream -> 127.0.0.1:1054 -> physical/scoped DNS
+```
+
+No loopback port-53 bridge or alias is created. The managed profile forces the
+matching Fake-IP range, auto-route, and UDP/TCP hijack for `198.18.0.1:53`.
+The current controller, owned TUN route and DNS response must be healthy before
+the agent applies Global DNS. The compatibility `dns_bridge_ready` health field
+reports the TUN DNS probe in this mode. Reload and shutdown restore the original
+DNS before replacing/stopping Mihomo; a TUN DNS outage restores it on the first
+failed observation while restart recovery retains its existing debounce.
+
+An installed DoH profile can still win over Global DNS for matched domains.
+After the new runtime validates, the daemon removes only
+`dev.linsheng.mihomobox.local-doh` and verifies absence independently of its
+certificate/URL validity. A stale profile must not be mistaken for absence.
+If removal fails or cannot be confirmed, Config explicitly requests removal in
+Device Management; network health alone does not prove fallback completion.
+The identity and prepared profile remain available for a later Prepare retry.
+
+Fallback survives daemon restart and does not repeatedly contend for 443.
+Disabling TUN in fallback stops the worker and restores system DNS. Prepare
+restores Global DNS before switching to LocalHttpDns standby; another failure
+re-enters fallback. LocalHttpDns remains on loopback: binding it to the TUN
+address would couple its lifetime to TUN and would not evade a wildcard 443
+listener. Privileged fault-injection acceptance must use a signed Cloud build.
 
 ### Legacy DNS restoration
 
-The SystemConfiguration code below is retained only to restore installations
-from releases that wrote `127.0.0.53`. Protocol-3 startup migrates the runtime
-to LocalHttpDns/TUN-off, restores that recorded state once, and never reapplies
-the managed server. The legacy agent used to read `CurrentSet`, then manage:
+The SystemConfiguration code below restores legacy `127.0.0.53` installations
+and manages `198.18.0.1` in explicit fallback. Startup restores recorded DNS with
+the old configuration before changing ownership. The agent reads `CurrentSet`,
+then manages:
 
 ```text
 <CurrentSet>/Network/Service/<PrimaryService>/DNS
@@ -245,7 +281,8 @@ The root daemon owns the LocalHttpDns data plane. It authenticates
 XPC clients, serializes lifecycle/profile transactions, prepares the fixed
 split-DNS profile from managed controller/GeoSite state, keeps the TLS endpoint
 alive with a physical-DNS fallback, and supervises the agent. TUN and the 1054
-original-DNS escape remain agent-owned; no component owns the system DNS list.
+original-DNS escape remain agent-owned. Only explicit fallback owns the system
+DNS list.
 
 Each agent launch receives a daemon-generated runtime generation. The
 consistency observer includes that generation in its mode-`0600` atomic health

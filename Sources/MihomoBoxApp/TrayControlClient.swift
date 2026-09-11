@@ -80,8 +80,11 @@ actor TrayControlClient {
       retryReadOnce: false
     )
     let observed = try poll()
-    guard observed.agentRunning, observed.controllerReachable,
-      !observed.enhancedTUN, observed.networkHealthy == true
+    let standby = observed.agentRunning && observed.controllerReachable
+    let stopped = !observed.agentRunning && !observed.controllerReachable
+    guard (standby || stopped), !observed.enhancedTUN,
+      observed.healthTUNEnabled == false, observed.systemDNSManaged == false,
+      observed.networkHealthy == true
     else {
       throw TrayControlError.readbackMismatch("Enhanced TUN standby")
     }

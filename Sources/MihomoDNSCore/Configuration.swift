@@ -17,8 +17,8 @@ public struct LocalDoHConfiguration: Codable, Equatable {
     public var privateKeyPath: String
 
     public init(
-        endpoint: Endpoint = Endpoint(host: "127.0.0.1", port: 9443),
-        serverURL: String = "https://127.0.0.1:9443/dns-query",
+        endpoint: Endpoint = Endpoint(host: "127.0.0.1", port: 443),
+        serverURL: String = "https://127.0.0.1/dns-query",
         certificatePath: String = "/Library/Application Support/Mihomo App/local-doh/server.crt",
         privateKeyPath: String = "/Library/Application Support/Mihomo App/local-doh/server.key"
     ) {
@@ -34,6 +34,10 @@ public struct ProxyConfiguration: Codable, Equatable {
     public var mihomoDNS: Endpoint
     public var upstreamListen: Endpoint
     public var manageSystemDNS: Bool
+    /// Explicit compatibility mode used only when the fixed LocalHttpDns
+    /// listener cannot start. macOS Global DNS points at Mihomo's Fake-IP
+    /// gateway and therefore requires Enhanced TUN to remain enabled.
+    public var globalDNSFallbackEnabled: Bool?
     /// Persisted desired TUN state. `nil` is accepted only for upgrades from
     /// older installations and means the previously always-on TUN behavior.
     public var enhancedTUNEnabled: Bool?
@@ -54,6 +58,7 @@ public struct ProxyConfiguration: Codable, Equatable {
         mihomoDNS: Endpoint = Endpoint(host: "127.0.0.1", port: 1153),
         upstreamListen: Endpoint = Endpoint(host: "127.0.0.1", port: 1054),
         manageSystemDNS: Bool = true,
+        globalDNSFallbackEnabled: Bool? = nil,
         enhancedTUNEnabled: Bool? = nil,
         loopbackInterface: String = "lo0",
         loopbackAlias: String = "127.0.0.53",
@@ -71,6 +76,7 @@ public struct ProxyConfiguration: Codable, Equatable {
         self.mihomoDNS = mihomoDNS
         self.upstreamListen = upstreamListen
         self.manageSystemDNS = manageSystemDNS
+        self.globalDNSFallbackEnabled = globalDNSFallbackEnabled
         self.enhancedTUNEnabled = enhancedTUNEnabled
         self.loopbackInterface = loopbackInterface
         self.loopbackAlias = loopbackAlias
@@ -87,7 +93,17 @@ public struct ProxyConfiguration: Codable, Equatable {
 
     public static func load(path: String) throws -> ProxyConfiguration {
         let data = try Data(contentsOf: URL(fileURLWithPath: path))
-        let configuration = try JSONDecoder().decode(ProxyConfiguration.self, from: data)
+        var configuration = try JSONDecoder().decode(ProxyConfiguration.self, from: data)
+        // Accept only the former fixed endpoint during an in-place upgrade.
+        // Normalizing before validation lets DNS restoration run with old
+        // daemon.json bytes, without widening accepted paths or ports.
+        let legacy = LocalDoHConfiguration(
+            endpoint: Endpoint(host: "127.0.0.1", port: 9443),
+            serverURL: "https://127.0.0.1:9443/dns-query"
+        )
+        if configuration.localDoH == legacy {
+            configuration.localDoH = LocalDoHConfiguration()
+        }
         try configuration.validate()
         return configuration
     }
@@ -121,6 +137,18 @@ public struct ProxyConfiguration: Codable, Equatable {
         // TUN enabled. Preserve that state for an in-place component upgrade;
         // newly installed configuration writes an explicit false.
         enhancedTUNEnabled ?? true
+    }
+
+    public var usesGlobalDNSFallback: Bool {
+        globalDNSFallbackEnabled == true
+    }
+
+    public var managedSystemDNSServers: [String] {
+        usesGlobalDNSFallback ? ["198.18.0.1"] : [systemDNSListen.host]
+    }
+
+    public var managedDNSProbeEndpoint: Endpoint {
+        usesGlobalDNSFallback ? Endpoint(host: "198.18.0.1", port: 53) : systemDNSListen
     }
 
     public func validate() throws {
@@ -168,7 +196,13 @@ public struct ProxyConfiguration: Codable, Equatable {
                 throw ConfigurationError.incompatibleDNSOwnership
             }
         }
-        if enhancedTUNEnabled != nil {
+        if usesGlobalDNSFallback {
+            guard manageSystemDNS,
+                  localDoH == nil,
+                  enhancedTUNEnabled == true else {
+                throw ConfigurationError.incompatibleDNSOwnership
+            }
+        } else if enhancedTUNEnabled != nil {
             guard localDoH == LocalDoHConfiguration(), !manageSystemDNS else {
                 throw ConfigurationError.incompatibleDNSOwnership
             }
@@ -180,6 +214,7 @@ public enum LocalDoHConfigurationStore {
     public static func ensureBaseService(configurationPath: String) throws {
         var configuration = try ProxyConfiguration.load(path: configurationPath)
         configuration.manageSystemDNS = false
+        configuration.globalDNSFallbackEnabled = false
         configuration.localDoH = LocalDoHConfiguration()
         // Installing or migrating the base service must never preserve an
         // already-enabled tunnel. Certificate/profile approval is the explicit
@@ -191,8 +226,20 @@ public enum LocalDoHConfigurationStore {
     public static func setEnhancedTUN(_ enabled: Bool, configurationPath: String) throws {
         var configuration = try ProxyConfiguration.load(path: configurationPath)
         configuration.manageSystemDNS = false
+        configuration.globalDNSFallbackEnabled = false
         configuration.localDoH = LocalDoHConfiguration()
         configuration.enhancedTUNEnabled = enabled
+        try write(configuration, to: configurationPath)
+    }
+
+    /// Restores the proven legacy ownership model when the local HTTPS
+    /// endpoint cannot be kept alive. Global DNS is coupled to Enhanced TUN.
+    public static func useGlobalDNSFallback(configurationPath: String) throws {
+        var configuration = try ProxyConfiguration.load(path: configurationPath)
+        configuration.manageSystemDNS = true
+        configuration.localDoH = nil
+        configuration.globalDNSFallbackEnabled = true
+        configuration.enhancedTUNEnabled = true
         try write(configuration, to: configurationPath)
     }
 
@@ -206,6 +253,29 @@ public enum LocalDoHConfigurationStore {
             [.posixPermissions: 0o600],
             ofItemAtPath: configurationPath
         )
+    }
+}
+
+/// Keeps restoration, ownership change, verified TUN startup and encrypted
+/// profile removal in order. A failed new runtime always gets a verified stop.
+public enum GlobalDNSFallbackTransition {
+    public enum Failure: Error { case restoreUnconfirmed }
+
+    public static func run(
+        stopAndRestore: () -> Bool,
+        configure: () throws -> Void,
+        startAndValidate: () throws -> Void,
+        finish: () -> Void
+    ) throws {
+        guard stopAndRestore() else { throw Failure.restoreUnconfirmed }
+        do {
+            try configure()
+            try startAndValidate()
+        } catch {
+            guard stopAndRestore() else { throw Failure.restoreUnconfirmed }
+            throw error
+        }
+        finish()
     }
 }
 

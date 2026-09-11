@@ -70,6 +70,32 @@ final class ControlProtocolTests: XCTestCase {
         )
     }
 
+    func testFallbackStatusAndStaleProfilePresence() throws {
+        let status = LocalDoHStatus(
+            serverPrepared: true, profileInstalled: false,
+            profileInspectionSucceeded: true, runtimeHealthy: false,
+            systemDNSManaged: true, globalDNSFallback: true,
+            fallbackProfileRemovalRequired: true
+        )
+        XCTAssertEqual(status, try JSONDecoder().decode(
+            LocalDoHStatus.self, from: JSONEncoder().encode(status)
+        ))
+        let stale: [String: Any] = [
+            "PayloadIdentifier": LocalDoHStatus.profileIdentifier,
+            "PayloadContent": [["DNSSettings": [
+                "ServerURL": "https://127.0.0.1:9443/dns-query",
+                "SupplementalMatchDomains": ["example.com"],
+            ]]],
+        ]
+        let data = try PropertyListSerialization.data(fromPropertyList: stale, format: .xml, options: 0)
+        XCTAssertEqual(LocalDoHProfileInspection.presence(in: data), true)
+        XCTAssertNil(LocalDoHProfileDocument.validatedDomainCount(in: data))
+        XCTAssertEqual(LocalDoHProfileInspection.presence(in: Data(
+            "There are no configuration profiles installed in the system domain".utf8
+        )), false)
+        XCTAssertNil(LocalDoHProfileInspection.presence(in: Data("unexpected output".utf8)))
+    }
+
     func testPreparedLocalDoHProfileRejectsAlteredPrivilegedFields() throws {
         let rootCertificate = Data([0x30, 0x03, 0x02, 0x01, 0x00])
         let valid = try LocalDoHProfileDocument.data(

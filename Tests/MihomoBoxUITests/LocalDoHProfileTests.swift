@@ -5,6 +5,18 @@ import XCTest
 @testable import MihomoBoxUI
 
 final class LocalDoHProfileTests: XCTestCase {
+  func testFallbackDistinguishesActiveStoppedAndPendingProfileRemoval() {
+    XCTAssertEqual(DashboardLocalDoHStatus(
+      available: true, systemDNSManaged: true, globalDNSFallback: true
+    ).phase, .globalDNSFallback)
+    XCTAssertEqual(DashboardLocalDoHStatus(
+      available: true, systemDNSManaged: false, globalDNSFallback: true
+    ).phase, .fallbackUnavailable)
+    XCTAssertEqual(DashboardLocalDoHStatus(
+      available: true, statusVerified: false, systemDNSManaged: true,
+      globalDNSFallback: true, fallbackProfileRemovalRequired: true
+    ).phase, .fallbackNeedsProfileRemoval)
+  }
   func testProxyGeoSiteRuleExpandsAttributesAndCountsUnrepresentableEntries() throws {
     let database = GeoSiteDatabase(sites: [
       "category-ai-!cn": [

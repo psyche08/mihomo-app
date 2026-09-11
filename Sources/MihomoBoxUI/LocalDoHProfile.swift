@@ -8,6 +8,9 @@ public enum DashboardLocalDoHPhase: Equatable, Sendable {
   case awaitingApproval
   case active
   case degraded
+  case globalDNSFallback
+  case fallbackNeedsProfileRemoval
+  case fallbackUnavailable
 }
 
 public struct DashboardLocalDoHStatus: Equatable, Sendable {
@@ -18,6 +21,8 @@ public struct DashboardLocalDoHStatus: Equatable, Sendable {
   public var runtimeHealthy: Bool
   public var systemDNSManaged: Bool?
   public var installedDomainCount: Int
+  public var globalDNSFallback: Bool
+  public var fallbackProfileRemovalRequired: Bool
 
   public init(
     available: Bool,
@@ -26,7 +31,9 @@ public struct DashboardLocalDoHStatus: Equatable, Sendable {
     profileInstalled: Bool = false,
     runtimeHealthy: Bool = false,
     systemDNSManaged: Bool? = nil,
-    installedDomainCount: Int = 0
+    installedDomainCount: Int = 0,
+    globalDNSFallback: Bool = false,
+    fallbackProfileRemovalRequired: Bool = false
   ) {
     self.available = available
     self.statusVerified = statusVerified
@@ -35,10 +42,16 @@ public struct DashboardLocalDoHStatus: Equatable, Sendable {
     self.runtimeHealthy = runtimeHealthy
     self.systemDNSManaged = systemDNSManaged
     self.installedDomainCount = installedDomainCount
+    self.globalDNSFallback = globalDNSFallback
+    self.fallbackProfileRemovalRequired = fallbackProfileRemovalRequired
   }
 
   public var phase: DashboardLocalDoHPhase {
     guard available else { return .unavailable }
+    if globalDNSFallback {
+      if fallbackProfileRemovalRequired { return .fallbackNeedsProfileRemoval }
+      return systemDNSManaged == true ? .globalDNSFallback : .fallbackUnavailable
+    }
     guard statusVerified else { return .statusUnavailable }
     if serverPrepared && profileInstalled && runtimeHealthy { return .active }
     if serverPrepared && !profileInstalled && runtimeHealthy { return .awaitingApproval }

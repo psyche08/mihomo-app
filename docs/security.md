@@ -133,9 +133,9 @@ unsigned bypass or environment-variable override.
   SystemConfiguration writes, and network-change observation.
 - `mihomo-app` / `mihomoboxctl`: current user, authenticated XPC clients only.
 
-The daemon never parses DNS packets or owns the Mihomo child. The agent never
-accepts Desktop/CLI requests. This separation keeps authorization policy out of
-the network data plane.
+The daemon owns the independent LocalHttpDns endpoint but does not own the
+Mihomo child. The agent never accepts Desktop/CLI requests. Typed XPC actions
+remain the only unprivileged entry into network and profile mutations.
 
 ## Supply Chain
 
@@ -200,9 +200,10 @@ bytes to the daemon through XPC.
   and compare-before-write guarantees are retained for uninstall/recovery.
 - Pre-existing `127.0.0.53` aliases are not removed by legacy cleanup.
 - Original-DNS sockets bind to the physical interface to avoid TUN recursion.
-- LocalHttpDns is the only normal DNS integration and never writes the system
-  DNS server list. Enhanced TUN cannot be enabled until the fixed identity,
-  installed profile and live 9443 listener are all verified.
+- LocalHttpDns uses loopback 443 and leaves the system DNS list alone. Explicit
+  fallback uses `198.18.0.1:53` only after Enhanced TUN and DNS validate, restoring
+  original DNS when that path fails. Fallback removes only the fixed MihomoBox
+  DoH profile; removal failure is reported and identity files are retained.
 - A stale PID is terminated only after executable-path verification.
 - Profile reload is serialized by the daemon and rolls back configuration and
   agent state together on failure.

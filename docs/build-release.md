@@ -34,11 +34,11 @@ into `build/MihomoBox.app`.
 The pinned MetaCubeXD checkout is a visual reference only. Its JavaScript is
 never linked, copied into the App, or executed at runtime.
 
-## Operator-owned compilation
+## Local development validation
 
-Compilation, tests, validation, signing, notarization, packaging and deployment
-must be run by the operator outside an agent sandbox. An agent may edit or
-statically inspect the commands, but must not execute them.
+Local compilation, tests and ad-hoc validation may be run by an agent, outside
+the sandbox when required. This does not authorize installation or publication.
+Production signing, notarization and packaging remain exclusive to Xcode Cloud.
 
 From the repository root, the operator runs:
 

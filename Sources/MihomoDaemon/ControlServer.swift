@@ -47,6 +47,13 @@ final class ControlDispatcher: @unchecked Sendable {
             agent: agent,
             validateStartedRuntime: validateStartedRuntime
         )
+        localDoHServer.setFailureHandler { [weak self] in
+            // The callback originates on the listener queue. Enter lifecycle
+            // serialization elsewhere so stopping the server cannot deadlock.
+            DispatchQueue.global().async { [weak self] in
+                self?.handleLocalDoHFailure()
+            }
+        }
     }
 
     /// Boot keeps the Mach service available even when the managed runtime
@@ -72,15 +79,25 @@ final class ControlDispatcher: @unchecked Sendable {
             scheduleDaemonRestart()
             return
         }
+        let preserveFallback = agent.globalDNSFallbackConfigured
+        // Restore using the OLD DNS owner before changing daemon.json, or a
+        // persisted 198.18.0.1 backup would be compared against 127.0.0.53.
+        guard agent.stopAndRestoreVerified() else {
+            ServiceLog.error("event=initial_runtime result=dns_restore_unconfirmed")
+            logInitialRuntimeStartup(result: "dns_restore_unconfirmed")
+            return
+        }
         let installedProfile = LocalDoHStatusProvider.inspectInstalledProfile()
         let enhancedPrerequisitePrepared = installedProfile.succeeded
             && installedProfile.inspection.installed
             && installedProfile.inspection.domainCount > 0
             && agent.localDoHIdentityPrepared
         do {
-            try profiles.ensureLocalHttpDNSBaseConfiguration(
-                allowEnhancedTUN: enhancedPrerequisitePrepared
-            )
+            if !preserveFallback {
+                try profiles.ensureLocalHttpDNSBaseConfiguration(
+                    allowEnhancedTUN: enhancedPrerequisitePrepared
+                )
+            }
         } catch {
             let restored = agent.stopAndRestoreVerified()
             ServiceLog.error(
@@ -92,21 +109,16 @@ final class ControlDispatcher: @unchecked Sendable {
             )
             return
         }
-        // A legacy installation may still have 127.0.0.53 persisted when its
-        // config is migrated. Restore that backup once before the new standby
-        // runtime starts; normal LocalHttpDns operation never writes DNS prefs.
-        guard agent.stopAndRestoreVerified() else {
-            ServiceLog.error("event=initial_runtime result=legacy_dns_restore_unconfirmed")
-            logInitialRuntimeStartup(result: "legacy_dns_restore_unconfirmed")
-            return
-        }
-        if localDoHServer.startSupervising() {
+        let localStarted = localDoHServer.startSupervising()
+        if localStarted {
             ServiceLog.info("event=initial_local_doh result=ready")
         }
         do {
-            try profiles.ensureLocalHttpDNSBaseConfiguration(
-                allowEnhancedTUN: enhancedPrerequisitePrepared && localDoHServer.isRunning
-            )
+            if !preserveFallback {
+                try profiles.ensureLocalHttpDNSBaseConfiguration(
+                    allowEnhancedTUN: enhancedPrerequisitePrepared && localStarted
+                )
+            }
         } catch {
             ServiceLog.error("event=initial_runtime result=local_http_dns_start_failed")
             logInitialRuntimeStartup(result: "local_http_dns_start_failed")
@@ -131,8 +143,14 @@ final class ControlDispatcher: @unchecked Sendable {
             return
         }
         do {
-            try agent.start()
-            try ensureStartedRuntimeLocked()
+            if !preserveFallback && !localStarted
+                && (agent.localDoHIdentityPrepared || installedProfile.present == true) {
+                try activateGlobalDNSFallbackLocked()
+            } else {
+                try agent.start()
+                try ensureStartedRuntimeLocked()
+                if preserveFallback { finishGlobalDNSFallbackLocked() }
+            }
             try components.commitPendingBootValidation()
             ServiceLog.info("event=initial_runtime result=ready")
             logInitialRuntimeStartup(result: "ready")
@@ -236,6 +254,7 @@ final class ControlDispatcher: @unchecked Sendable {
                     with: agent.diagnosticHealth()
                 )) as? [String: Any] ?? [:]
                 status["agent_running"] = agent.isRunning
+                status["global_dns_fallback"] = agent.globalDNSFallbackConfigured
                 payload = try JSONSerialization.data(withJSONObject: status, options: [.sortedKeys])
             case .trayState:
                 let agentRunning = agent.isRunning
@@ -291,11 +310,34 @@ final class ControlDispatcher: @unchecked Sendable {
                     runtimeHealthy: prepared && localDoHServer.isRunning,
                     systemDNSManaged: health?.systemDNSManaged,
                     installedDomainCount: profile.inspection.domainCount,
-                    preparedDomainCount: preparedProfile.domainCount
+                    preparedDomainCount: preparedProfile.domainCount,
+                    globalDNSFallback: agent.globalDNSFallbackConfigured,
+                    fallbackProfileRemovalRequired: agent.globalDNSFallbackConfigured
+                        && profile.present != false
                 )
                 payload = try JSONEncoder().encode(status)
             case .installLocalDoH:
-                payload = try JSONEncoder().encode(localDoH.install())
+                guard !profiles.activationRequired else {
+                    throw serverError("activate a profile before preparing LocalHttpDns")
+                }
+                do {
+                    if agent.globalDNSFallbackConfigured {
+                        if !agent.isRunning {
+                            try agent.start()
+                            try ensureStartedRuntimeLocked()
+                        }
+                        // setEnhancedTUN is a root-file transaction which
+                        // restores the old Global DNS owner before switching.
+                        try profiles.setEnhancedTUN(false)
+                    }
+                    payload = try JSONEncoder().encode(localDoH.install())
+                } catch {
+                    try activateGlobalDNSFallbackLocked()
+                    throw serverError(
+                        "LocalHttpDns preparation failed; Global DNS fallback was configured. " +
+                        "Check LocalHttpDns status for any required profile removal."
+                    )
+                }
             case .upgradeComponents:
                 guard let package = request.payload else {
                     throw serverError("component update package is required")
@@ -328,6 +370,20 @@ final class ControlDispatcher: @unchecked Sendable {
                 guard let raw = request.arguments["enabled"],
                       let enabled = ["true": true, "false": false][raw] else {
                     throw serverError("Enhanced TUN enabled state is required")
+                }
+                if agent.globalDNSFallbackConfigured {
+                    if enabled {
+                        try ensureStartedRuntimeLocked()
+                    } else {
+                        // There is no independent DNS service in fallback.
+                        // Turning TUN off therefore stops the worker and
+                        // restores physical DNS through verified shutdown.
+                        guard agent.stopAndRestoreVerified() else {
+                            throw ControllerBrokerCriticalError.unsafeGlobalRuntime
+                        }
+                    }
+                    payload = nil
+                    break
                 }
                 if enabled {
                     let profile = LocalDoHStatusProvider.inspectInstalledProfile()
@@ -426,8 +482,14 @@ final class ControlDispatcher: @unchecked Sendable {
     }
 
     private func ensureRuntimePrerequisiteLocked() throws {
+        if agent.globalDNSFallbackConfigured { return }
         guard agent.localHttpDNSBaseConfigured else {
             throw serverError("repair the LocalHttpDns base service before starting Mihomo")
+        }
+        if agent.localDoHIdentityPrepared, !localDoHServer.isRunning,
+           (try? localDoHServer.startIfPrepared()) != true {
+            try activateGlobalDNSFallbackLocked()
+            return
         }
         guard agent.expectsEnhancedTUN else { return }
         let profile = LocalDoHStatusProvider.inspectInstalledProfile()
@@ -442,9 +504,54 @@ final class ControlDispatcher: @unchecked Sendable {
         }
     }
 
-    /// The agent has two valid states: controller/DNS standby with TUN off, or
-    /// the complete Enhanced TUN path. Neither state owns macOS DNS settings;
-    /// LocalHttpDns remains a daemon service outside this validation.
+    private func activateGlobalDNSFallbackLocked() throws {
+        // Cancel recovery before the stop/configure transaction: otherwise a
+        // timer could rebind 443 while daemon.json still says LocalHttpDns.
+        localDoHServer.shutdown()
+        do {
+            try GlobalDNSFallbackTransition.run(
+                stopAndRestore: { agent.stopAndRestoreVerified() },
+                configure: { try profiles.configureGlobalDNSFallback() },
+                startAndValidate: {
+                    try agent.start()
+                    try ensureStartedRuntimeLocked()
+                },
+                finish: { finishGlobalDNSFallbackLocked() }
+            )
+        } catch GlobalDNSFallbackTransition.Failure.restoreUnconfirmed {
+            throw ControllerBrokerCriticalError.unsafeGlobalRuntime
+        } catch {
+            throw error
+        }
+    }
+
+    private func finishGlobalDNSFallbackLocked() {
+        let removed = localDoH.removeProfileForGlobalDNSFallback()
+        DNSCacheMaintenance.flushSystemCaches()
+        ServiceLog.info(
+            "event=global_dns_fallback result=" +
+            (removed ? "ready" : "profile_removal_required")
+        )
+    }
+
+    private func handleLocalDoHFailure() {
+        mutationLock.lock()
+        defer { mutationLock.unlock() }
+        guard agent.isRunning, agent.localHttpDNSBaseConfigured,
+              !localDoHServer.isRunning, !profiles.activationRequired,
+              !components.recoveryRequired, !components.requiresDaemonRestart,
+              !components.ownsPendingMutationFileLock else { return }
+        do {
+            let externalLock = try ComponentMutationFileLock()
+            defer { withExtendedLifetime(externalLock) {} }
+            try activateGlobalDNSFallbackLocked()
+        } catch {
+            ServiceLog.error("event=global_dns_fallback result=failed")
+        }
+    }
+
+    /// Validate standby, LocalHttpDns Enhanced mode, or the explicit Global
+    /// DNS fallback. Fallback requires both TUN and its port-53 data path.
     private static func validateStartedRuntime(
         agent: AgentSupervisor,
         controller: ControllerBroker,
@@ -460,14 +567,21 @@ final class ControlDispatcher: @unchecked Sendable {
                 guard let health = try agent.expectedHealthSnapshot()?.health else {
                     throw serverErrorStatic("awaiting current agent health generation")
                 }
-                guard agent.usesLocalDoH,
-                      !agent.managesSystemDNS,
-                      health.controllerReachable,
+                guard health.controllerReachable,
                       health.fakeIPMode,
                       health.mihomoDNSReady,
-                      !health.systemDNSManaged,
                       health.networkConsistent else {
                     throw serverErrorStatic("the managed network is not ready")
+                }
+                if agent.globalDNSFallbackConfigured {
+                    guard health.systemDNSManaged, health.dnsBridgeReady else {
+                        throw serverErrorStatic("the Global DNS fallback is not ready")
+                    }
+                } else {
+                    guard agent.usesLocalDoH, !agent.managesSystemDNS,
+                          !health.systemDNSManaged else {
+                        throw serverErrorStatic("the DNS ownership is not ready")
+                    }
                 }
                 if agent.expectsEnhancedTUN {
                     guard health.tunEnabled,

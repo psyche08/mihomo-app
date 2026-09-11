@@ -603,8 +603,12 @@ wait_for_runtime_dns_mode() {
   if [[ "$(/usr/bin/plutil -extract manageSystemDNS raw -o - "$APP_SUPPORT/daemon.json" 2>/dev/null)" == "true" ]]; then
     wait_for "macOS PrimaryService DNS preferences" \
       "$APP_SUPPORT/mihomo-agent" --config "$APP_SUPPORT/daemon.json" --check-system-dns
+    local managed_dns_pattern='127\.0\.0\.53'
+    if [[ "$(/usr/bin/plutil -extract globalDNSFallbackEnabled raw -o - "$APP_SUPPORT/daemon.json" 2>/dev/null)" == "true" ]]; then
+      managed_dns_pattern='198\.18\.0\.1'
+    fi
     wait_for "effective macOS DNS" \
-      /bin/sh -c "/usr/sbin/scutil --dns | /usr/bin/grep -q '127\\.0\\.0\\.53'"
+      /bin/sh -c "/usr/sbin/scutil --dns | /usr/bin/grep -q '$managed_dns_pattern'"
   else
     wait_for "restored macOS default DNS" \
       "$APP_SUPPORT/mihomo-agent" --config "$APP_SUPPORT/daemon.json" --check-system-dns-restored
@@ -625,6 +629,20 @@ managed_agent_standby_ready() {
     "$health" == *'"tun_enabled":false'* &&
     "$health" == *'"system_dns_managed":false'* &&
     "$health" == *'"network_consistent":true'* ]]
+}
+
+managed_runtime_dns_ready() {
+  if [[ "$(/usr/bin/plutil -extract globalDNSFallbackEnabled raw -o - "$APP_SUPPORT/daemon.json" 2>/dev/null)" == "true" ]]; then
+    managed_network_ready
+  elif [[ "$(/usr/bin/plutil -extract enhancedTUNEnabled raw -o - "$APP_SUPPORT/daemon.json" 2>/dev/null)" == "true" ]]; then
+    managed_network_ready || return 1
+    /usr/bin/nc -z 127.0.0.1 443
+  else
+    managed_agent_standby_ready || return 1
+    if [[ -f "$LOCAL_DOH_CERT" && -f "$LOCAL_DOH_KEY" ]]; then
+      /usr/bin/nc -z 127.0.0.1 443
+    fi
+  fi
 }
 
 managed_agent_pids() {
@@ -1218,7 +1236,7 @@ validate_local_doh_profile_artifact() {
     'Print :PayloadContent:0:DNSSettings:SupplementalMatchDomains:0' \
     "$LOCAL_DOH_PROFILE" 2>/dev/null || true)"
   [[ "$identifier" == "$LOCAL_DOH_PROFILE_IDENTIFIER" &&
-    "$server_url" == "https://127.0.0.1:9443/dns-query" &&
+    "$server_url" == "https://127.0.0.1/dns-query" &&
     "$protocol" == "HTTPS" && "$server_address" == "127.0.0.1" &&
     -n "$first_domain" && "$first_domain" != "." ]] || {
     echo "the root-owned Local DoH profile failed fixed-field validation" >&2
@@ -1455,10 +1473,7 @@ install_daemon() {
   else
     wait_for "authenticated Mihomo controller" managed_controller_ready
     wait_for_runtime_dns_mode
-    wait_for "Mihomo standby runtime" managed_agent_standby_ready
-    if [[ -f "$LOCAL_DOH_CERT" && -f "$LOCAL_DOH_KEY" ]]; then
-      wait_for "local DoH endpoint" /usr/bin/nc -z 127.0.0.1 9443
-    fi
+    wait_for "LocalHttpDns or Global DNS fallback runtime" managed_runtime_dns_ready
   fi
   install_cli_entry
   trap - ERR

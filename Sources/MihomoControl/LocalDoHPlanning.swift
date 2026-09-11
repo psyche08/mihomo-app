@@ -284,7 +284,7 @@ public struct LocalDoHDomainPlan: Equatable, Sendable {
 
 public enum LocalDoHProfileDocument {
   public static let identifier = LocalDoHStatus.profileIdentifier
-  public static let serverURL = "https://127.0.0.1:9443/dns-query"
+  public static let serverURL = "https://127.0.0.1/dns-query"
   public static let rootCertificatePayloadIdentifier = "\(identifier).root-ca"
   public static let managedProfilePath =
     "/Library/Application Support/Mihomo App/MihomoBox-Local-DoH.mobileconfig"

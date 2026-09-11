@@ -15,6 +15,7 @@ public enum MihomoConfigurator {
     struct RuntimeProfilePolicy {
         var localDoH: LocalDoHConfiguration?
         var enhancedTUNEnabled: Bool
+        var globalDNSFallbackEnabled: Bool
     }
 
     public enum ConfiguratorError: Error, LocalizedError, Equatable {
@@ -103,13 +104,26 @@ public enum MihomoConfigurator {
                 key: "enable",
                 value: runtime.enhancedTUNEnabled ? "true" : "false"
             )
+            if runtime.globalDNSFallbackEnabled {
+                tun = replaceScalar(tun, key: "auto-route", value: "true")
+            }
             lines = Array(lines[...tunStart]) + tun + Array(lines[tunEnd...])
+            if runtime.globalDNSFallbackEnabled {
+                lines = replaceTunList(
+                    lines,
+                    key: "dns-hijack",
+                    entries: ["    - 198.18.0.1:53\n", "    - tcp://198.18.0.1:53\n"]
+                )
+            }
         }
 
         let (dnsStart, dnsEnd) = try block(lines, named: "dns")
         var dns = Array(lines[(dnsStart + 1) ..< dnsEnd])
         for (key, value) in managedScalars { dns = replaceScalar(dns, key: key, value: value) }
         for (key, value) in managedLists { dns = replaceList(dns, key: key, values: [value]) }
+        if runtime?.globalDNSFallbackEnabled == true {
+            dns = replaceScalar(dns, key: "fake-ip-range", value: "198.18.0.1/16")
+        }
         lines = Array(lines[...dnsStart]) + dns + Array(lines[dnsEnd...])
 
         lines = replaceTopLevelScalar(lines, key: "external-controller", value: "\(controller.host):\(controller.port)")
@@ -122,8 +136,8 @@ public enum MihomoConfigurator {
         // logs held nothing at all. Volume is handled by retaining a bounded
         // sample of the text rather than by discarding the level.
         lines = replaceTopLevelScalar(lines, key: "log-level", value: "warning")
-        if localDoH != nil {
-            // Port 9443 belongs to the daemon's independent DoH server. Mihomo
+        if localDoH != nil || runtime?.globalDNSFallbackEnabled == true {
+            // Port 443 belongs to the daemon's independent DoH server. Mihomo
             // must not bind it or read the server identity, so proxy/TUN
             // lifecycle can never take the encrypted resolver down.
             for key in ["external-controller-tls", "external-doh-server", "tls"] {
@@ -280,7 +294,8 @@ public enum MihomoConfigurator {
         }
         return RuntimeProfilePolicy(
             localDoH: localDoH,
-            enhancedTUNEnabled: object["enhancedTUNEnabled"] as? Bool ?? true
+            enhancedTUNEnabled: object["enhancedTUNEnabled"] as? Bool ?? true,
+            globalDNSFallbackEnabled: object["globalDNSFallbackEnabled"] as? Bool ?? false
         )
     }
 

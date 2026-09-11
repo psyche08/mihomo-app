@@ -63,7 +63,10 @@ final class ProfileBroker: @unchecked Sendable {
         try queue.sync {
             let configurationPath = root.appendingPathComponent("daemon.json")
             let current = try ProxyConfiguration.load(path: configurationPath.path)
-            if current.localDoH == LocalDoHConfiguration(),
+            let stored = try JSONDecoder().decode(
+                ProxyConfiguration.self, from: Data(contentsOf: configurationPath)
+            )
+            if stored.localDoH == LocalDoHConfiguration(),
                !current.manageSystemDNS,
                current.enhancedTUNEnabled != nil,
                !current.expectsEnhancedTUN || allowEnhancedTUN {
@@ -132,6 +135,79 @@ final class ProfileBroker: @unchecked Sendable {
                 )
                 throw profileError(
                     "LocalHttpDns base migration failed; the previous configuration was restored"
+                )
+            }
+        }
+    }
+
+    /// Replaces the LocalHttpDns ownership model with the compatibility path
+    /// while the agent is stopped. The raw user profile remains untouched;
+    /// only root-owned runtime files participate in the rollback transaction.
+    func configureGlobalDNSFallback() throws {
+        try queue.sync {
+            guard !agent.isRunning else {
+                throw profileError("Mihomo agent must be stopped before DNS fallback")
+            }
+            let active = try activeProfileName()
+            let source = root.appendingPathComponent("profiles").appendingPathComponent(active)
+            let data = try readStoredProfile(source)
+            try validate(name: active, data: data)
+
+            let transaction = root.appendingPathComponent(
+                ".global-dns-fallback-\(UUID().uuidString)",
+                isDirectory: true
+            )
+            try FileManager.default.createDirectory(
+                at: transaction,
+                withIntermediateDirectories: false,
+                attributes: [.posixPermissions: 0o700]
+            )
+            defer { try? FileManager.default.removeItem(at: transaction) }
+
+            let protected = [
+                "daemon.json", "controller.json", "controller-secret",
+                "mihomo-data/config.yaml",
+            ]
+            var backupDigests: [String: String] = [:]
+            for relative in protected {
+                let current = root.appendingPathComponent(relative)
+                guard FileManager.default.fileExists(atPath: current.path) else { continue }
+                let backup = transaction.appendingPathComponent("backup")
+                    .appendingPathComponent(relative)
+                try FileManager.default.createDirectory(
+                    at: backup.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try FileManager.default.copyItem(at: current, to: backup)
+                backupDigests[relative] = ComponentUpdatePackage.digest(
+                    try Data(contentsOf: backup, options: [.mappedIfSafe])
+                )
+            }
+
+            do {
+                try LocalDoHConfigurationStore.useGlobalDNSFallback(
+                    configurationPath: root.appendingPathComponent("daemon.json").path
+                )
+                let configured = try preparedProfile(data: data, publishController: true)
+                defer {
+                    try? FileManager.default.removeItem(
+                        at: configured.deletingLastPathComponent()
+                    )
+                }
+                try validateMihomo(path: configured)
+                try replace(
+                    configured,
+                    root.appendingPathComponent("mihomo-data/config.yaml"),
+                    permissions: 0o600
+                )
+            } catch {
+                try restoreProtected(
+                    protected,
+                    transaction: transaction,
+                    backupDigests: backupDigests
+                )
+                throw profileError(
+                    "Global DNS fallback failed; the previous configuration was restored"
                 )
             }
         }

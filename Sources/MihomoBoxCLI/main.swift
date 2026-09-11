@@ -885,7 +885,7 @@ private func printStatus(json: Bool) throws -> Int32 {
         if let currentHealth {
             let tun = currentHealth["tun_enabled"] as? Bool == true ? "enabled" : "disabled"
             let interface = currentHealth["tun_interface"] as? String
-            let dns = currentHealth["system_dns_managed"] as? Bool == true ? "127.0.0.53" : "system default"
+            let dns = currentHealth["system_dns_managed"] as? Bool == true ? "managed" : "system default"
             print("TUN: \(tun)\(interface.map { " (\($0))" } ?? "")")
             print("System DNS: \(dns)")
             print("Network consistent: \(consistent ? "yes" : "no")")

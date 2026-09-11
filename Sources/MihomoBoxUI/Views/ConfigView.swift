@@ -374,7 +374,7 @@ public struct ConfigView: View {
         }
 
         Text(
-          "After the root helper is installed, prepare and approve this certificate/profile once. LocalHttpDns then remains active on port 9443 whether Enhanced TUN is on or off. With TUN off it resolves through physical DNS; with TUN healthy it may use Mihomo DNS. MihomoBox never replaces the system DNS server list. Re-run Prepare after changing proxy-domain rules."
+          "Prepare and approve this certificate/profile once. LocalHttpDns stays active on port 443 with TUN on or off. If it cannot start, MihomoBox falls back to Global DNS through Enhanced TUN and removes its DoH profile. Re-run Prepare to retry LocalHttpDns or update proxy-domain rules."
         )
         .font(.system(size: 10))
         .foregroundStyle(DashboardTheme.muted.opacity(0.72))
@@ -391,7 +391,8 @@ public struct ConfigView: View {
           }
           .disabled(!store.localDoHAvailable || store.configAction != nil)
 
-          if store.localDoHPrepared || store.localDoHProfileInstalled {
+          if store.localDoHPrepared || store.localDoHProfileInstalled
+            || store.localDoHPhase == .fallbackNeedsProfileRemoval {
             actionButton(
               "Open Device Management",
               symbol: "gearshape.fill",
@@ -431,6 +432,9 @@ public struct ConfigView: View {
     case .awaitingApproval: "Awaiting macOS Approval"
     case .active: "Active"
     case .degraded: "Needs Attention"
+    case .globalDNSFallback: "Global DNS Fallback"
+    case .fallbackNeedsProfileRemoval: "Remove DoH Profile"
+    case .fallbackUnavailable: "Global DNS Inactive"
     }
   }
 
@@ -438,7 +442,8 @@ public struct ConfigView: View {
     switch store.localDoHPhase {
     case .active: DashboardTheme.success
     case .awaitingApproval: DashboardTheme.info
-    case .degraded: DashboardTheme.warning
+    case .degraded, .globalDNSFallback, .fallbackNeedsProfileRemoval,
+         .fallbackUnavailable: DashboardTheme.warning
     case .unavailable, .statusUnavailable, .off: DashboardTheme.muted
     }
   }
@@ -454,9 +459,15 @@ public struct ConfigView: View {
     case .awaitingApproval:
       "The local HTTPS server is healthy, but the DNS Settings profile is not installed. Finish the required confirmation in General › Device Management."
     case .active:
-      "The independent local HTTPS server and macOS split-DNS profile are both active; proxy or TUN failure does not stop DNS on port 9443."
+      "The independent HTTPS server and macOS split-DNS profile are active. DNS on port 443 remains available when Enhanced TUN stops."
     case .degraded:
       "The server and installed profile do not agree. Regenerate and approve the LocalHttpDns profile; Enhanced TUN remains unavailable until it is healthy."
+    case .globalDNSFallback:
+      "LocalHttpDns is unavailable. System DNS uses 198.18.0.1 through Enhanced TUN. Stop Mihomo to restore the original DNS, or Prepare to retry LocalHttpDns."
+    case .fallbackNeedsProfileRemoval:
+      "Global DNS fallback is configured, but macOS has not confirmed removal of the MihomoBox Local DoH profile. Remove it in Device Management so matching domains can use Global DNS."
+    case .fallbackUnavailable:
+      "Global DNS fallback is configured but not currently active. Start Mihomo to restore the TUN DNS path, or Prepare to retry LocalHttpDns."
     }
   }
 

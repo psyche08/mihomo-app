@@ -10,6 +10,8 @@ public struct LocalDoHStatus: Codable, Equatable, Sendable {
     public var systemDNSManaged: Bool?
     public var installedDomainCount: Int
     public var preparedDomainCount: Int
+    public var globalDNSFallback: Bool
+    public var fallbackProfileRemovalRequired: Bool
 
     public init(
         serverPrepared: Bool,
@@ -18,7 +20,9 @@ public struct LocalDoHStatus: Codable, Equatable, Sendable {
         runtimeHealthy: Bool,
         systemDNSManaged: Bool? = nil,
         installedDomainCount: Int = 0,
-        preparedDomainCount: Int = 0
+        preparedDomainCount: Int = 0,
+        globalDNSFallback: Bool = false,
+        fallbackProfileRemovalRequired: Bool = false
     ) {
         self.serverPrepared = serverPrepared
         self.profileInstalled = profileInstalled
@@ -27,6 +31,8 @@ public struct LocalDoHStatus: Codable, Equatable, Sendable {
         self.systemDNSManaged = systemDNSManaged
         self.installedDomainCount = installedDomainCount
         self.preparedDomainCount = preparedDomainCount
+        self.globalDNSFallback = globalDNSFallback
+        self.fallbackProfileRemovalRequired = fallbackProfileRemovalRequired
     }
 
     enum CodingKeys: String, CodingKey {
@@ -37,6 +43,8 @@ public struct LocalDoHStatus: Codable, Equatable, Sendable {
         case systemDNSManaged = "system_dns_managed"
         case installedDomainCount = "installed_domain_count"
         case preparedDomainCount = "prepared_domain_count"
+        case globalDNSFallback = "global_dns_fallback"
+        case fallbackProfileRemovalRequired = "fallback_profile_removal_required"
     }
 
     public init(from decoder: Decoder) throws {
@@ -57,6 +65,10 @@ public struct LocalDoHStatus: Codable, Equatable, Sendable {
             Int.self,
             forKey: .preparedDomainCount
         ) ?? 0
+        globalDNSFallback = try container.decodeIfPresent(Bool.self, forKey: .globalDNSFallback) ?? false
+        fallbackProfileRemovalRequired = try container.decodeIfPresent(
+            Bool.self, forKey: .fallbackProfileRemovalRequired
+        ) ?? false
     }
 }
 
@@ -67,6 +79,19 @@ public struct LocalDoHProfileInspection: Equatable, Sendable {
     public init(installed: Bool, domainCount: Int = 0) {
         self.installed = installed
         self.domainCount = domainCount
+    }
+
+    /// Presence is independent of certificate/URL validity: an old or stale
+    /// profile still owns matching DNS queries and must not look absent.
+    public static func presence(in data: Data) -> Bool? {
+        if let inspection = inspect(propertyList: data) { return inspection.installed }
+        let text = String(decoding: data, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if text == "there are no configuration profiles installed"
+            || text == "there are no configuration profiles installed in the system domain" {
+            return false
+        }
+        return nil
     }
 
     /// Reduces `profiles show` output to two non-sensitive values. No profile

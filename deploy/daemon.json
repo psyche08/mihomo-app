@@ -31,9 +31,9 @@
   "localDoH": {
     "endpoint": {
       "host": "127.0.0.1",
-      "port": 9443
+      "port": 443
     },
-    "serverURL": "https://127.0.0.1:9443/dns-query",
+    "serverURL": "https://127.0.0.1/dns-query",
     "certificatePath": "/Library/Application Support/Mihomo App/local-doh/server.crt",
     "privateKeyPath": "/Library/Application Support/Mihomo App/local-doh/server.key"
   }

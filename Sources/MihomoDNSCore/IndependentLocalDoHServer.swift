@@ -22,6 +22,9 @@ public final class IndependentLocalDoHServer: @unchecked Sendable {
     private var networkState: NetworkDNSState?
     private var recoveryTimer: DispatchSourceTimer?
     private var recoveryFailureReported = false
+    private var consecutiveRecoveryFailures = 0
+    private var hasStarted = false
+    private var failureHandler: (@Sendable () -> Void)?
 
     public init(
         configurationPath: String,
@@ -33,6 +36,10 @@ public final class IndependentLocalDoHServer: @unchecked Sendable {
 
     public var isRunning: Bool {
         queue.sync { listener?.isActive == true }
+    }
+
+    public func setFailureHandler(_ handler: @escaping @Sendable () -> Void) {
+        queue.sync { failureHandler = handler }
     }
 
     /// Keeps the endpoint bound for the daemon's lifetime. In particular, a
@@ -81,8 +88,15 @@ public final class IndependentLocalDoHServer: @unchecked Sendable {
         if listener?.isActive == true { return true }
         guard Self.identityIsPrepared() else { return false }
         let configuration = try ProxyConfiguration.load(path: configurationPath)
+        // A failed LocalHttpDns transition switches the daemon back to the
+        // legacy Global DNS owner. Supervision must respect that persisted
+        // mode and never reclaim port 443 behind the fallback runtime.
+        guard configuration.localDoH == LocalDoHConfiguration(),
+              !configuration.manageSystemDNS else { return false }
         try startLocked(configuration: configuration)
         recoveryFailureReported = false
+        consecutiveRecoveryFailures = 0
+        hasStarted = true
         return true
     }
 
@@ -100,7 +114,13 @@ public final class IndependentLocalDoHServer: @unchecked Sendable {
 
     private func recoverIfNeededLocked() {
         guard listener?.isActive != true else { return }
-        _ = startIfPreparedLocked()
+        guard let configuration = try? ProxyConfiguration.load(path: configurationPath),
+              configuration.localDoH != nil, !configuration.manageSystemDNS,
+              hasStarted || Self.identityIsPrepared() else { return }
+        if !startIfPreparedLocked() {
+            consecutiveRecoveryFailures += 1
+            if consecutiveRecoveryFailures >= 3 { failureHandler?() }
+        }
     }
 
     private func startLocked(configuration: ProxyConfiguration) throws {

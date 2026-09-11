@@ -75,6 +75,11 @@ final class LocalDoHManager: @unchecked Sendable {
             guard try server.startIfPrepared() else {
                 throw localDoHError("the independent Local DoH server did not start")
             }
+            // A prior fallback cancels supervision as well as the listener.
+            // Successful preparation explicitly re-enables both.
+            guard server.startSupervising() else {
+                throw localDoHError("the independent Local DoH server could not be supervised")
+            }
         } catch {
             server.stopServing()
             try restoreIdentity(snapshot)
@@ -83,6 +88,20 @@ final class LocalDoHManager: @unchecked Sendable {
         }
         ServiceLog.info("event=local_doh_install result=prepared_for_profile_approval")
         return plan.summary
+    }
+
+    /// A split encrypted-DNS payload overrides the plain Global resolver for
+    /// its matched domains. Remove only our fixed profile before reporting a
+    /// completed fallback. Identity and prepared profile remain for retry.
+    func removeProfileForGlobalDNSFallback() -> Bool {
+        let before = LocalDoHStatusProvider.inspectInstalledProfile()
+        guard before.present != false else { return true }
+        guard command.succeeds("/usr/bin/profiles", [
+            "remove", "-type", "configuration",
+            "-identifier", LocalDoHStatus.profileIdentifier, "-forced",
+        ]) else { return false }
+        let after = LocalDoHStatusProvider.inspectInstalledProfile()
+        return after.succeeded && after.present == false
     }
 
     private func captureIdentitySnapshot() throws -> IdentitySnapshot {

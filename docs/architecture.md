@@ -18,14 +18,14 @@ MihomoBox.app (current user)
 └── mihomo-daemon                   privileged XPC broker only
     ├── validates every peer's code-signing requirement
     ├── owns privileged lifecycle/profile transactions
-    ├── keeps 127.0.0.1:9443 Local DoH alive independently of TUN
+    ├── keeps 127.0.0.1:443 Local DoH alive independently of TUN
     └── launches and monitors exactly one mihomo-agent
               │
               ▼
     mihomo-agent (root worker)
     ├── launches and supervises the pinned Mihomo process
     ├── listens on 127.0.0.1:1054 for Mihomo's original-DNS escape
-    ├── never replaces CurrentSet/Network/Service/*/DNS in normal use
+    ├── manages CurrentSet/Network/Service/*/DNS only in explicit fallback
     └── observes DHCP, interface, route, and split-DNS changes
 ```
 
@@ -126,14 +126,16 @@ not a background consequence of polling or update checks.
 1. launchd starts `mihomo-daemon` and registers its Mach service before login.
 2. The daemon atomically migrates any legacy configuration to LocalHttpDns with
    TUN off and restores stale `127.0.0.53` DNS ownership once.
-3. When a LocalHttpDns identity exists, it starts `127.0.0.1:9443`; a
-   five-second supervisor rebinds after a transient port conflict or listener
-   failure.
+3. When a LocalHttpDns identity exists, it starts `127.0.0.1:443`; startup
+   failure enters Global DNS fallback. Later listener failures get three
+   five-second recovery attempts before fallback.
 4. The agent discovers DHCP/supplemental resolvers, binds the original-DNS
    listener on `127.0.0.1:1054`, and starts Mihomo.
 5. Its generation-bound observer commits either controller/DNS standby (TUN
    and Fake-IP route absent) or the persisted Enhanced state (controller, TUN,
-   Fake-IP route and Mihomo DNS healthy). Neither state writes system DNS.
+   Fake-IP route and Mihomo DNS healthy). Explicit fallback additionally
+   validates TUN DNS at `198.18.0.1:53`, applies system DNS and removes the
+   MihomoBox DoH profile. An existing fallback state survives reboot.
 7. The Swift `NSApplication` starts with accessory activation policy, compares bundled and installed
    component digests through XPC, and synchronizes signed changes when the
    daemon protocol is compatible. An older-protocol reply enters the explicit
@@ -182,7 +184,8 @@ dialog; only the explicit repair boundaries described above do.
 | Endpoint | Direction | Purpose |
 |---|---|---|
 | XPC `dev.linsheng.mihomo.daemon.control` | Desktop/CLI → daemon | authenticated control plane |
-| `127.0.0.1:9443` HTTPS | macOS → daemon | always-on split DoH with managed-Mihomo then physical-DNS fallback |
+| `127.0.0.1:443` HTTPS | macOS → daemon | independent split DoH with managed-Mihomo then physical-DNS fallback |
+| `198.18.0.1:53` UDP/TCP | macOS → TUN | Global DNS fallback; requires verified Enhanced TUN |
 | `127.0.0.53:53` UDP/TCP | legacy only | restored during protocol-3 migration; not bound in normal operation |
 | `127.0.0.1:1153` UDP/TCP | agent → Mihomo | Mihomo DNS listener |
 | `127.0.0.1:1054` UDP/TCP | Mihomo → agent | nonrecursive path to current DHCP DNS |

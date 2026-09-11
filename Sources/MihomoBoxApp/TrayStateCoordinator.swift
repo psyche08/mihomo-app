@@ -422,8 +422,12 @@ final class TrayStateCoordinator: TrayService {
   private func ensureLocalHttpDNSPrerequisite() async throws -> Bool {
     let status = await localDoH.status()
     switch status.phase {
-    case .active:
+    case .active, .globalDNSFallback, .fallbackUnavailable:
       return true
+    case .fallbackNeedsProfileRemoval:
+      try await localDoH.openDeviceManagement()
+      publishError("Remove the MihomoBox Local DoH profile to complete Global DNS fallback.")
+      return false
     case .awaitingApproval:
       try await localDoH.openDeviceManagement()
     case .off, .degraded:

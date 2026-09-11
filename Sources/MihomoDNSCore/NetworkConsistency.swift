@@ -184,14 +184,14 @@ public enum MihomoRuntimeInspector {
         let visibleRouteInterface = fakeIPRouteInterface()
         let mihomoDNSReady = dnsEndpointResponds(endpoint: configuration.mihomoDNS)
         let dnsBridgeReady = configuration.localDoH == nil && mihomoDNSReady
-            ? dnsEndpointResponds(endpoint: configuration.systemDNSListen)
+            ? dnsEndpointResponds(endpoint: configuration.managedDNSProbeEndpoint)
             : false
         let preferences: GlobalDNSPreferences
         if let globalDNS {
             preferences = globalDNS
         } else {
             preferences = GlobalDNSPreferences(
-                servers: [configuration.systemDNSListen.host],
+                servers: configuration.managedSystemDNSServers,
                 backupPath: configuration.systemDNSBackupPath
             )
         }
@@ -467,7 +467,7 @@ public enum MihomoRuntimeInspector {
     /// both DNS probes, turning a bounded DNS repair into several unrelated
     /// network operations on the consistency queue.
     static func systemDNSBridgeResponds(configuration: ProxyConfiguration) -> Bool {
-        dnsEndpointResponds(endpoint: configuration.systemDNSListen)
+        dnsEndpointResponds(endpoint: configuration.managedDNSProbeEndpoint)
     }
 
     private static func controllerConfiguration(
@@ -825,6 +825,9 @@ public final class NetworkConsistencyController: @unchecked Sendable {
         queue.sync {
             runtimeReloadInProgress = true
             safetyState.setRuntimeReady(false)
+            if configuration.usesGlobalDNSFallback {
+                restoreSafeNetwork(source: "tun_dns_reload")
+            }
             invalidateEgressMeasurement()
             healthGeneration.replace(with: generation)
             if let healthSnapshotPath {
@@ -956,7 +959,7 @@ public final class NetworkConsistencyController: @unchecked Sendable {
             preexistingFakeIPRouteInterface: preexistingFakeIPRouteInterface
         )
         let kernelReady = before.controllerReachable && before.tunEnabled && before.tunInterface != nil
-        let enhancedRuntimeReady = kernelReady && before.mihomoDNSReady
+        let enhancedRuntimeReady = kernelReady && before.fakeIPMode && before.mihomoDNSReady
             && (configuration.localDoH != nil || before.dnsBridgeReady)
         let standbyRuntimeReady = before.controllerReachable && !before.tunEnabled
             && before.mihomoDNSReady && before.networkConsistent
@@ -971,6 +974,14 @@ public final class NetworkConsistencyController: @unchecked Sendable {
         var bridgeReadyForPolicies = before.dnsBridgeReady
         var changed = false
         var action = "observe"
+        // A TUN DNS address has no independent listener to serve through a
+        // kernel outage. Restore immediately; keep recovery counters running
+        // separately so transient route changes do not cause restart storms.
+        if configuration.usesGlobalDNSFallback, !upstreamRuntimeReady, networkOwned {
+            restoreSafeNetwork(source: "tun_dns_unavailable")
+            changed = true
+            action = "restore_tun_dns"
+        }
         let acquisitionDecision = configuration.manageSystemDNS
             ? acquisitionPolicy.decide(
                 upstreamRuntimeReady: upstreamRuntimeReady,
@@ -986,7 +997,11 @@ public final class NetworkConsistencyController: @unchecked Sendable {
             do {
                 let result = try DNSAcquisitionAttempt.run(
                     reprobeBridge: acquisitionDecision == .reacquireBridge,
-                    ensureAlias: { try aliasManager.ensure() },
+                    ensureAlias: {
+                        if !configuration.usesGlobalDNSFallback {
+                            try aliasManager.ensure()
+                        }
+                    },
                     bridgeReady: {
                         MihomoRuntimeInspector.systemDNSBridgeResponds(
                             configuration: configuration
@@ -1023,10 +1038,12 @@ public final class NetworkConsistencyController: @unchecked Sendable {
                 changed = true
             }
         case .maintain:
-            do {
-                try aliasManager.ensure()
-            } catch {
-                ServiceLog.error("event=network_transition_failed action=repair_loopback_alias")
+            if !configuration.usesGlobalDNSFallback {
+                do {
+                    try aliasManager.ensure()
+                } catch {
+                    ServiceLog.error("event=network_transition_failed action=repair_loopback_alias")
+                }
             }
         }
 

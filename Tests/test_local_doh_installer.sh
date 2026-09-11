@@ -14,7 +14,7 @@ PROFILE_DOCUMENT="$ROOT/Sources/MihomoControl/LocalDoHPlanning.swift"
 /usr/bin/grep -Fq '/usr/bin/security remove-trusted-cert -d "$trust_anchor"' "$INSTALLER"
 /usr/bin/grep -Fq -- '-identifier "$LOCAL_DOH_PROFILE_IDENTIFIER" -output stdout-xml' "$INSTALLER"
 /usr/bin/grep -Fq '"$(/usr/bin/stat -f '\''%u:%g:%Lp'\'' "$LOCAL_DOH_PROFILE")" == "0:0:644"' "$INSTALLER"
-/usr/bin/grep -Fq '"$server_url" == "https://127.0.0.1:9443/dns-query"' "$INSTALLER"
+/usr/bin/grep -Fq '"$server_url" == "https://127.0.0.1/dns-query"' "$INSTALLER"
 /usr/bin/grep -Fq '/bin/rm -f "$LOCAL_DOH_PROFILE"' "$INSTALLER"
 if /usr/bin/grep -Eq -- '--install-local-doh|--remove-local-doh|add-trusted-cert' "$INSTALLER"; then
   echo "the installer must not own LocalHttpDns setup or certificate trust" >&2

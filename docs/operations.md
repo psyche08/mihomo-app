@@ -387,10 +387,16 @@ log show --last 10m --style compact \
   --predicate 'subsystem == "dev.linsheng.mihomo-app" AND eventMessage CONTAINS "event=app_startup"'
 grep 'event=daemon_startup' '/Library/Logs/Mihomo App/mihomo-daemon.log'
 grep 'event=agent_startup' '/Library/Logs/Mihomo App/mihomo-agent.log'
-dig @127.0.0.53 -p 53 example.com
+dig @198.18.0.1 -p 53 example.com
+dig @198.18.0.1 -p 53 example.com +tcp
 dig @127.0.0.1 -p 1054 example.com
 scutil --dns
 ```
+
+The `198.18.0.1` probes apply to Global DNS fallback; LocalHttpDns normally
+listens on `127.0.0.1:443`, and 9443 is no longer used. Config reports fallback
+separately from pending DoH-profile removal. A successful TUN probe alone does
+not prove that macOS has stopped using the old encrypted-DNS profile.
 
 The `--check-system-dns` command verifies the persisted CurrentSet
 PrimaryService DNS value (or the Global fallback when no primary service is

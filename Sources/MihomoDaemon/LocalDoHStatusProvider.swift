@@ -7,7 +7,8 @@ struct LocalDoHStatusProvider {
 
     static func inspectInstalledProfile() -> (
         succeeded: Bool,
-        inspection: LocalDoHProfileInspection
+        inspection: LocalDoHProfileInspection,
+        present: Bool?
     ) {
         let process = Process()
         let output = Pipe()
@@ -20,13 +21,18 @@ struct LocalDoHStatusProvider {
         ]
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
+        process.standardInput = FileHandle.nullDevice
+        var environment = ProcessInfo.processInfo.environment
+        environment["LC_ALL"] = "C"
+        environment["LANG"] = "C"
+        process.environment = environment
 
         do {
             try process.run()
             let data = output.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
             guard process.terminationStatus == 0 else {
-                return (false, .init(installed: false))
+                return (false, .init(installed: false), nil)
             }
             // `profiles` exits successfully with a short plain-text message
             // when the fixed identifier is absent. Only plist output can prove
@@ -41,9 +47,10 @@ struct LocalDoHStatusProvider {
                     expectedRootCertificate: $0
                 )
             } ?? .init(installed: false)
-            return (true, inspection)
+            let present = LocalDoHProfileInspection.presence(in: data)
+            return (present != nil, inspection, present)
         } catch {
-            return (false, .init(installed: false))
+            return (false, .init(installed: false), nil)
         }
     }
 

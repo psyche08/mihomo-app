@@ -64,6 +64,33 @@ final class TrayControlClientTests: XCTestCase {
     XCTAssertEqual(session.arguments.first?["enabled"], "false")
   }
 
+  func testDisableFallbackTUNRequiresVerifiedStoppedDNSReadback() async throws {
+    for dnsManaged in [false, true] {
+      let poll = try JSONSerialization.data(withJSONObject: [
+        "agent_running": false,
+        "snapshot": NSNull(),
+        "profiles": ["profiles": ["a.yaml"], "active_profile": "a.yaml"],
+        "health": [
+          "network_consistent": true, "tun_enabled": false,
+          "system_dns_managed": dnsManaged,
+        ],
+      ])
+      let session = QueueSession(responses: [
+        ControlResponse(success: true), ControlResponse(success: true, payload: poll),
+      ])
+      let client = TrayControlClient(makeSession: { session })
+      do {
+        let observed = try await client.disableEnhancedTUN()
+        XCTAssertFalse(dnsManaged, "stopped worker with managed DNS must be rejected")
+        XCTAssertFalse(observed.agentRunning)
+        XCTAssertFalse(observed.controllerReachable)
+      } catch let error as TrayControlError {
+        XCTAssertTrue(dnsManaged)
+        guard case .readbackMismatch = error else { return XCTFail("wrong error") }
+      }
+    }
+  }
+
   func testPassivePollRetainsLastGoodDelayByNodeAcrossDisplayGroupChanges() {
     let previous = [
       TrayProxyNode(group: "Fallback", name: "Tokyo", delayMilliseconds: 86),

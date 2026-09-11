@@ -25,7 +25,9 @@ final class LocalDoHCoordinator: DashboardLocalDoHService {
         runtimeHealthy: root.runtimeHealthy,
         systemDNSManaged: root.systemDNSManaged,
         installedDomainCount: root.installedDomainCount > 0
-          ? root.installedDomainCount : root.preparedDomainCount
+          ? root.installedDomainCount : root.preparedDomainCount,
+        globalDNSFallback: root.globalDNSFallback,
+        fallbackProfileRemovalRequired: root.fallbackProfileRemovalRequired
       )
     } catch {
       return DashboardLocalDoHStatus(

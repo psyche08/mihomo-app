@@ -51,6 +51,16 @@ final class AgentSupervisor: @unchecked Sendable {
             && configuration.enhancedTUNEnabled != nil
     }
 
+    var globalDNSFallbackConfigured: Bool {
+        guard let configuration = try? ProxyConfiguration.load(path: configPath) else {
+            return false
+        }
+        return configuration.usesGlobalDNSFallback
+            && configuration.manageSystemDNS
+            && configuration.localDoH == nil
+            && configuration.expectsEnhancedTUN
+    }
+
     var expectsEnhancedTUN: Bool {
         (try? ProxyConfiguration.load(path: configPath).expectsEnhancedTUN) ?? true
     }
