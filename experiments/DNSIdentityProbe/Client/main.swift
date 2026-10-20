@@ -14,7 +14,31 @@ func fail(_ stage: String) -> Never { finish(["mode": mode, "case": testCase, "o
 func reportDNS(_ data: Data, id: [UInt8]) {
     let b = [UInt8](data)
     guard b.count >= 12, Array(b.prefix(2)) == id, b[2] & 0x80 != 0 else { fail("invalid_response") }
-    finish(["mode": mode, "case": testCase, "ok": true, "rcode": Int(b[3] & 15), "answer_count": Int(b[6])*256+Int(b[7])])
+    var offset = 12
+    func skipName() -> Bool {
+        var labels = 0
+        while offset < b.count, labels < 128 {
+            let size = Int(b[offset]); offset += 1; labels += 1
+            if size == 0 { return true }
+            if size & 0xc0 == 0xc0 { guard offset < b.count else { return false }; offset += 1; return true }
+            guard size < 64, offset+size <= b.count else { return false }; offset += size
+        }
+        return false
+    }
+    let questions = Int(b[4])*256+Int(b[5]), answers = Int(b[6])*256+Int(b[7])
+    for _ in 0..<questions {
+        guard skipName(), offset+4 <= b.count else { fail("invalid_question") }; offset += 4
+    }
+    var fake = false
+    for _ in 0..<answers {
+        guard skipName(), offset+10 <= b.count else { fail("invalid_answer") }
+        let type = Int(b[offset])*256+Int(b[offset+1]), length = Int(b[offset+8])*256+Int(b[offset+9])
+        offset += 10
+        guard offset+length <= b.count else { fail("invalid_rdata") }
+        if type == 1, length == 4 { fake = fake || (b[offset] == 198 && (b[offset+1] == 18 || b[offset+1] == 19)) }
+        offset += length
+    }
+    finish(["mode": mode, "case": testCase, "ok": true, "rcode": Int(b[3] & 15), "answer_count": answers, "fake_ip": fake])
 }
 if mode == "helper" {
     let process = Process()

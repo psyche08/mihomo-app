@@ -56,3 +56,21 @@ proof of strict DNS routing: high-level resolution, shared caches, delegated
 processes and application-owned encrypted DNS may behave differently. Broader
 coverage (DNSService, A/AAAA/HTTPS, browser helpers, selector changes and sleep/wake)
 is required before any production claim.
+
+## First Cloud checkpoint (2026-10-20)
+
+Independent App IDs and host/extension capabilities are registered. Cloud Build
+23 (`6c799d7e`) compiled and created an archive, but its default App Store and
+Development exports failed: their provisioning profiles do not permit the
+`dns-proxy-systemextension` entitlement. Configure **Developer ID** distribution
+and the **Notarize** post-action on the `DNS Identity Probe` workflow before
+rebuilding. The public workflow API used here does not expose those UI settings.
+No probe was installed or activated, and no real-flow identity claim follows
+from this build. The existing Local DoH profile remained healthy; both unsigned
+baseline clients resolved the same fixed test name to Fake IP.
+
+After the signed bundle is verified and ordinary macOS activation is approved,
+`./run-live-checks.py RESULT.json` exercises the basic selected/control/helper
+matrix and disables the probe in `finally`. It intentionally always records
+`strict_dns_verified: false`: the aggregate observations still require analysis
+and the remaining coverage/failure tests above. Stop if rollback is not confirmed.
