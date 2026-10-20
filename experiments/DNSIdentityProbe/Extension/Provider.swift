@@ -19,8 +19,16 @@ final class DNSProbeProvider: NEDNSProxyProvider {
 
     override func startProxy(options: [String: Any]?, completionHandler: @escaping (Error?) -> Void) {
         let config = options ?? [:]
-        let deadline = config["deadline"] as? Double ?? 0
-        guard deadline > Date().timeIntervalSince1970, deadline <= Date().timeIntervalSince1970 + 660 else {
+        let now = Date().timeIntervalSince1970
+        guard let deadline = config["deadline"] as? Double else {
+            // Fixed categories only: never dump provider options or user data.
+            let reason = config["deadline"] == nil ? "missing_deadline" : "invalid_deadline_type"
+            log.error("probe_start_rejected reason=\(reason, privacy: .public) options_present=\(options != nil, privacy: .public) option_count=\(config.count, privacy: .public)")
+            completionHandler(NSError(domain: "DNSProbe", code: 1)); return
+        }
+        guard deadline.isFinite, deadline > now, deadline <= now + 660 else {
+            let reason = deadline <= now ? "expired_deadline" : "invalid_deadline_range"
+            log.error("probe_start_rejected reason=\(reason, privacy: .public)")
             completionHandler(NSError(domain: "DNSProbe", code: 1)); return
         }
         strictUnknown = config["strictUnknown"] as? Bool ?? false

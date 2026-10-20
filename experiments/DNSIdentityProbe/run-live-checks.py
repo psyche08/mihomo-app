@@ -28,7 +28,7 @@ log_lines, host_lines = [], queue.Queue()
 logger = subprocess.Popen(['/usr/bin/log', 'stream', '--style', 'compact', '--level', 'info', '--predicate', 'subsystem == "dev.linsheng.mihomo-dns-probe"'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
 def read_log():
     for line in logger.stdout:
-        if 'counter ' in line or 'probe_started' in line or 'probe_stopped' in line:
+        if any(marker in line for marker in ['counter ', 'probe_started', 'probe_stopped', 'probe_start_rejected']):
             log_lines.append(line.strip())
             if len(log_lines) > 2000: del log_lines[:1000]
 threading.Thread(target=read_log, daemon=True).start()
@@ -42,8 +42,13 @@ try:
     line = host_lines.get(timeout=20)
     if not line.startswith('dns_probe_enabled;'): raise RuntimeError('DNS manager did not enable the test session')
     deadline = time.monotonic()+15
-    while not any('probe_started' in s for s in log_lines) and time.monotonic() < deadline: time.sleep(0.25)
+    while not any('probe_started' in s or 'probe_start_rejected' in s for s in log_lines) and time.monotonic() < deadline: time.sleep(0.25)
+    if any('probe_start_rejected' in s for s in log_lines):
+        results['failure_stage'] = 'provider_rejected_start'
+        raise RuntimeError('Provider rejected the test configuration')
+    results['failure_stage'] = 'await_provider_start'
     if not any('probe_started' in s for s in log_lines): raise RuntimeError('No provider-start evidence; stop without claiming a runtime test')
+    results.pop('failure_stage', None)
     def run(client, mode, case='a'):
         exe = clients/(client+'.app')/'Contents/MacOS'/client
         try:

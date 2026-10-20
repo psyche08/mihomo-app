@@ -32,7 +32,22 @@ final class ProbeHost: NSObject, OSSystemExtensionRequestDelegate {
                 self.manager.saveToPreferences { error in
                     DispatchQueue.main.async {
                         if let error = error as NSError? { print("enable_error=\(error.domain):\(error.code)"); self.finish(1) }
-                        print("dns_probe_enabled; auto_disable_after=240s"); fflush(stdout)
+                        // Read back the persisted configuration before reporting
+                        // readiness to the test runner. Do not print its contents.
+                        self.load {
+                            let saved = self.manager.providerProtocol?.providerConfiguration
+                            let deadline = saved?["deadline"] as? Double ?? 0
+                            guard self.manager.isEnabled,
+                                  self.manager.providerProtocol?.providerBundleIdentifier == self.extensionID,
+                                  deadline > Date().timeIntervalSince1970,
+                                  deadline <= Date().timeIntervalSince1970 + 330,
+                                  saved?["strictUnknown"] as? Bool == (command == "--strict-session") else {
+                                print("configuration_readback_failed"); fflush(stdout)
+                                self.disable()
+                                return
+                            }
+                            print("dns_probe_enabled; auto_disable_after=240s"); fflush(stdout)
+                        }
                         DispatchQueue.main.asyncAfter(deadline: .now()+240) { self.load { self.disable() } }
                     }
                 }
