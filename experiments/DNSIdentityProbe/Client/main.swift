@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import Network
 
 // Fixed public test names only. Never print request/response bytes or resolved addresses.
 let arguments = Array(CommandLine.arguments.dropFirst())
@@ -11,6 +12,43 @@ func finish(_ result: [String: Any], _ code: Int32 = 0) -> Never {
     print(String(decoding: data, as: UTF8.self)); exit(code)
 }
 func fail(_ stage: String) -> Never { finish(["mode": mode, "case": testCase, "ok": false, "stage": stage], 1) }
+func connectFakeIP(_ address: Data) {
+    guard let ip = IPv4Address(address) else { fail("invalid_fake_ip") }
+    let tls = NWProtocolTLS.Options()
+    sec_protocol_options_set_tls_server_name(tls.securityProtocolOptions, name)
+    sec_protocol_options_add_tls_application_protocol(tls.securityProtocolOptions, "http/1.1")
+    let connection = NWConnection(host: .ipv4(ip), port: 443,
+                                  using: NWParameters(tls: tls, tcp: NWProtocolTCP.Options()))
+    let queue = DispatchQueue(label: "probe.native-tls")
+    var header = Data()
+    func read() {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 4096) { data, _, complete, error in
+            guard error == nil else { fail("tls_receive") }
+            if let data { header.append(data) }
+            guard header.count <= 65536 else { fail("http_header_bound") }
+            if let text = String(data: header, encoding: .utf8), text.contains("\r\n") {
+                let status = text.split(separator: "\n").first?.split(separator: " ").dropFirst().first.flatMap { Int($0) } ?? 0
+                finish(["mode": mode, "case": testCase, "ok": status == 200, "status": status, "fake_ip": true], status == 200 ? 0 : 1)
+            }
+            if complete { fail("http_incomplete") }
+            read()
+        }
+    }
+    connection.stateUpdateHandler = { state in
+        switch state {
+        case .ready:
+            let request = Data("GET / HTTP/1.1\r\nHost: \(name)\r\nConnection: close\r\n\r\n".utf8)
+            connection.send(content: request, completion: .contentProcessed { error in
+                if error != nil { fail("tls_send") }
+                read()
+            })
+        case .failed: fail("tls_connect")
+        default: break
+        }
+    }
+    queue.asyncAfter(deadline: .now()+15) { fail("tls_deadline") }
+    connection.start(queue: queue)
+}
 func reportDNS(_ data: Data, id: [UInt8]) {
     let b = [UInt8](data)
     guard b.count >= 12, Array(b.prefix(2)) == id, b[2] & 0x80 != 0 else { fail("invalid_response") }
@@ -30,13 +68,23 @@ func reportDNS(_ data: Data, id: [UInt8]) {
         guard skipName(), offset+4 <= b.count else { fail("invalid_question") }; offset += 4
     }
     var fake = false
+    var fakeAddress: Data?
     for _ in 0..<answers {
         guard skipName(), offset+10 <= b.count else { fail("invalid_answer") }
         let type = Int(b[offset])*256+Int(b[offset+1]), length = Int(b[offset+8])*256+Int(b[offset+9])
         offset += 10
         guard offset+length <= b.count else { fail("invalid_rdata") }
-        if type == 1, length == 4 { fake = fake || (b[offset] == 198 && (b[offset+1] == 18 || b[offset+1] == 19)) }
+        if type == 1, length == 4 {
+            let isFake = b[offset] == 198 && (b[offset+1] == 18 || b[offset+1] == 19)
+            fake = fake || isFake
+            if isFake { fakeAddress = Data(b[offset..<offset+4]) }
+        }
         offset += length
+    }
+    if mode == "doh-connect" {
+        guard b[3] & 15 == 0, let fakeAddress else { fail("expected_fake_ip") }
+        connectFakeIP(fakeAddress)
+        return
     }
     finish(["mode": mode, "case": testCase, "ok": true, "rcode": Int(b[3] & 15), "answer_count": answers, "fake_ip": fake])
 }
@@ -80,12 +128,12 @@ if mode == "helper" || mode == "helper-connect" || mode == "helper-https" {
         finish(["mode": mode, "case": testCase, "ok": error == nil, "status": (response as? HTTPURLResponse)?.statusCode ?? 0], error == nil ? 0 : 1)
     }.resume()
     dispatchMain()
-} else if mode == "udp" || mode == "tcp" || mode == "doh" {
+} else if mode == "udp" || mode == "tcp" || mode == "doh" || mode == "doh-connect" {
     let id = [UInt8.random(in: 0...255), UInt8.random(in: 0...255)]
     var query = Data(id+[1,0,0,1,0,0,0,0,0,0])
     for label in name.split(separator: ".") { query.append(UInt8(label.utf8.count)); query.append(contentsOf: label.utf8) }
     query.append(contentsOf: [0,0,1,0,1])
-    if mode == "doh" {
+    if mode == "doh" || mode == "doh-connect" {
         var request = URLRequest(url: URL(string: "https://127.0.0.1/dns-query")!)
         request.httpMethod = "POST"; request.httpBody = query
         request.setValue("application/dns-message", forHTTPHeaderField: "Content-Type")
