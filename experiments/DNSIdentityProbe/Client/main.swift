@@ -80,11 +80,24 @@ if mode == "helper" || mode == "helper-connect" || mode == "helper-https" {
         finish(["mode": mode, "case": testCase, "ok": error == nil, "status": (response as? HTTPURLResponse)?.statusCode ?? 0], error == nil ? 0 : 1)
     }.resume()
     dispatchMain()
-} else if mode == "udp" || mode == "tcp" {
+} else if mode == "udp" || mode == "tcp" || mode == "doh" {
     let id = [UInt8.random(in: 0...255), UInt8.random(in: 0...255)]
     var query = Data(id+[1,0,0,1,0,0,0,0,0,0])
     for label in name.split(separator: ".") { query.append(UInt8(label.utf8.count)); query.append(contentsOf: label.utf8) }
     query.append(contentsOf: [0,0,1,0,1])
+    if mode == "doh" {
+        var request = URLRequest(url: URL(string: "https://127.0.0.1/dns-query")!)
+        request.httpMethod = "POST"; request.httpBody = query
+        request.setValue("application/dns-message", forHTTPHeaderField: "Content-Type")
+        let c = URLSessionConfiguration.ephemeral
+        c.connectionProxyDictionary = [:]; c.urlCache = nil; c.timeoutIntervalForResource = 10
+        URLSession(configuration: c).dataTask(with: request) { data, response, error in
+            guard error == nil, let http = response as? HTTPURLResponse, http.statusCode == 200,
+                  http.mimeType == "application/dns-message", let data else { fail("native_doh") }
+            reportDNS(data, id: id)
+        }.resume()
+        dispatchMain()
+    }
     let fd = socket(AF_INET, mode == "udp" ? SOCK_DGRAM : SOCK_STREAM, 0)
     guard fd >= 0 else { fail("socket") }
     var timeout = timeval(tv_sec: 10, tv_usec: 0)

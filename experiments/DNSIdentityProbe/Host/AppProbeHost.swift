@@ -22,6 +22,9 @@ final class AppProbeHost {
                 }
                 guard matches.count <= 1 else { self.finish("app_ambiguous_configuration", 1) }
                 self.manager = matches.first ?? NEAppProxyProviderManager()
+                // A newly allocated manager defaults to enabled even though no
+                // configuration exists. Only saved managers represent state.
+                if matches.isEmpty { self.manager!.isEnabled = false }
                 if command == "--app-status" {
                     self.finish("app_probe_enabled=\(self.manager!.isEnabled); status=\(self.manager!.connection.status.rawValue)")
                 } else if command == "--app-disable" {
