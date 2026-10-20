@@ -344,15 +344,26 @@ profile transaction, including runtime health verification and rollback.
   Apple's MDM Per-App VPN. Choose application bundles and either proxy only the
   selected apps or bypass them. Bundle-prefix matching includes nested helpers;
   external services and processes without an identified bundle do not match.
+  **Enable per-app routing** controls the generated rules independently of the
+  selected mode. **Add Applications…** adds bundles without duplicates;
+  **Remove Selected** removes one or more highlighted rows. Each row shows the
+  application name and full path, so identically named bundles can be distinguished.
 - **Only selected apps** prepends a rule to the selected existing policy for
   each bundle, a REJECT fallback for unsupported UDP, and then `MATCH,DIRECT`.
   This explicitly makes all unmatched traffic direct. **Bypass selected apps**
   prepends DIRECT rules and leaves remaining traffic to the profile's rules.
   Both set Rule mode and process discovery to `always`. Changing mode to Global
   or Direct, or disabling process discovery later, overrides these semantics.
-- **Use profile rules** removes the generated app rules. Original profile rules
-  are retained underneath the marked block. Mode/process settings remain at
-  their last saved values; the chooser is not an undo of unrelated YAML edits.
+- Turning **Enable per-app routing** off removes the generated app rules and
+  retains the application list, chosen routing mode and policy for the next use.
+  Original profile rules are retained underneath the marked block. Mode/process
+  settings remain at their last saved values; the chooser is not an undo of
+  unrelated YAML edits. Earlier metadata without an explicit enable flag keeps
+  its original behavior (`profileRules` means off).
+- These settings control process routing. DNS still follows the current system
+  DNS configuration; the separate DNS identity probe is experimental and is
+  not enabled by this switch. **Update Draft** changes the editor; **Validate &
+  Apply** commits an active profile through the existing daemon transaction.
 
 A comment records the chooser values; YAML remains authoritative for the port
 and stack. The editor replaces its marked app-rule block on subsequent edits.

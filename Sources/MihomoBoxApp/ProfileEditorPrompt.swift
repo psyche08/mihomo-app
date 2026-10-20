@@ -367,14 +367,19 @@ private final class ProfileEditorWindowController: NSWindowController,
 /// Produces a reviewable YAML draft. Saving remains a separate, validated
 /// profile transaction; the chooser never changes the running network.
 @MainActor
-private final class ProfileNetworkSettingsForm: NSObject {
+private final class ProfileNetworkSettingsForm: NSObject, NSTableViewDataSource, NSTableViewDelegate {
   private let source: String
   private let alert = NSAlert()
   private let port = NSTextField()
   private let stack = NSPopUpButton()
   private let mode = NSPopUpButton()
   private let policy = NSTextField()
-  private let paths = NSTextView()
+  private let enabled = NSButton(checkboxWithTitle: "Enable per-app routing", target: nil, action: nil)
+  private let applications = NSTableView()
+  private var applicationPaths: [String] = []
+  private let remove = NSButton(title: "Remove Selected", target: nil, action: nil)
+  private let count = NSTextField(labelWithString: "")
+  private let routingModes: [NetworkProfileSettings.ApplicationMode] = [.selectedOnly, .bypassSelected]
   private let error = NSTextField(wrappingLabelWithString: "")
 
   init(source: String) throws {
@@ -388,33 +393,49 @@ private final class ProfileNetworkSettingsForm: NSObject {
     port.stringValue = String(settings.mixedPort)
     stack.addItems(withTitles: ["mixed", "system", "gvisor"])
     stack.selectItem(withTitle: settings.tunStack)
-    mode.addItems(withTitles: ["Use profile rules", "Only selected apps use policy; others DIRECT", "Selected apps DIRECT; others use profile rules"])
-    mode.selectItem(at: NetworkProfileSettings.ApplicationMode.allCases.firstIndex(of: settings.applicationMode) ?? 0)
+    enabled.state = settings.usesApplicationRules ? .on : .off
+    enabled.target = self
+    enabled.action = #selector(routingChanged)
+    mode.addItems(withTitles: ["Only selected apps use policy; others DIRECT", "Selected apps DIRECT; others use profile rules"])
+    mode.selectItem(at: routingModes.firstIndex(of: settings.applicationMode) ?? 0)
+    mode.target = self
+    mode.action = #selector(routingChanged)
     policy.stringValue = settings.policy
     policy.placeholderString = "Existing proxy or policy group name"
-    paths.string = settings.applicationPaths.joined(separator: "\n")
-    paths.isRichText = false
-    paths.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-    paths.isAutomaticQuoteSubstitutionEnabled = false
-    paths.isAutomaticDashSubstitutionEnabled = false
-    paths.isAutomaticTextReplacementEnabled = false
-    paths.autoresizingMask = [.width]
-    paths.textContainer?.widthTracksTextView = true
+    applicationPaths = Array(Set(settings.applicationPaths)).sorted()
+    let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("application"))
+    column.title = "Applications"
+    column.width = 530
+    applications.addTableColumn(column)
+    applications.headerView = nil
+    applications.rowHeight = 44
+    applications.usesAlternatingRowBackgroundColors = true
+    applications.allowsMultipleSelection = true
+    applications.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
+    applications.dataSource = self
+    applications.delegate = self
+    applications.setAccessibilityLabel("Per-app routing applications")
     let scroll = NSScrollView()
     scroll.hasVerticalScroller = true
     scroll.borderType = .bezelBorder
-    scroll.documentView = paths
-    let choose = NSButton(title: "Choose Applications…", target: self, action: #selector(chooseApplications))
+    scroll.documentView = applications
+    let choose = NSButton(title: "Add Applications…", target: self, action: #selector(chooseApplications))
+    remove.target = self
+    remove.action = #selector(removeApplications)
+    let actions = NSStackView(views: [choose, remove, count])
+    actions.spacing = 10
+    count.textColor = .secondaryLabelColor
+    count.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
     error.textColor = .systemRed
-    let notice = NSTextField(wrappingLabelWithString: "Use one absolute .app path per line. Only-selected mode sends unmatched traffic directly, including traffic whose process cannot be identified. Global/Direct mode overrides app rules. Custom listeners must be edited in YAML.")
+    let notice = NSTextField(wrappingLabelWithString: "Turning this off restores profile rules and keeps your application list. Only-selected mode sends unmatched or unidentified processes directly. Global/Direct mode overrides app rules. DNS follows the current system DNS configuration; this does not enable per-app DNS isolation.")
     notice.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
     notice.textColor = .secondaryLabelColor
     let content = NSStackView(views: [
       NSTextField(labelWithString: "HTTP / SOCKS5 mixed port"), port,
       NSTextField(labelWithString: "TUN stack (mixed: system TCP + gVisor UDP)"), stack,
-      NSTextField(labelWithString: "Per-app VPN routing"), mode,
+      enabled, mode,
       NSTextField(labelWithString: "Selected apps' policy"), policy,
-      choose, scroll, notice, error,
+      actions, scroll, notice, error,
     ])
     content.orientation = .vertical
     content.alignment = .leading
@@ -424,14 +445,17 @@ private final class ProfileNetworkSettingsForm: NSObject {
       content.widthAnchor.constraint(equalToConstant: 560),
       port.widthAnchor.constraint(equalTo: content.widthAnchor),
       policy.widthAnchor.constraint(equalTo: content.widthAnchor),
+      mode.widthAnchor.constraint(equalTo: content.widthAnchor),
       scroll.widthAnchor.constraint(equalTo: content.widthAnchor),
-      scroll.heightAnchor.constraint(equalToConstant: 100),
+      scroll.heightAnchor.constraint(equalToConstant: 150),
       notice.widthAnchor.constraint(equalTo: content.widthAnchor),
       error.widthAnchor.constraint(equalTo: content.widthAnchor),
     ])
     content.layoutSubtreeIfNeeded()
     content.setFrameSize(content.fittingSize)
     alert.accessoryView = content
+    refreshApplications()
+    routingChanged()
   }
 
   func run() -> String? {
@@ -440,9 +464,10 @@ private final class ProfileNetworkSettingsForm: NSObject {
         let settings = NetworkProfileSettings(
           mixedPort: Int(port.stringValue) ?? 0,
           tunStack: stack.titleOfSelectedItem ?? "mixed",
-          applicationMode: NetworkProfileSettings.ApplicationMode.allCases[max(0, mode.indexOfSelectedItem)],
-          applicationPaths: paths.string.components(separatedBy: .newlines).filter { !$0.isEmpty },
-          policy: policy.stringValue
+          applicationMode: routingModes[max(0, mode.indexOfSelectedItem)],
+          applicationPaths: applicationPaths,
+          policy: policy.stringValue,
+          applicationRoutingEnabled: enabled.state == .on
         )
         return try settings.applying(to: source)
       } catch {
@@ -460,7 +485,55 @@ private final class ProfileNetworkSettingsForm: NSObject {
     panel.canChooseFiles = true
     panel.directoryURL = URL(fileURLWithPath: "/Applications")
     guard panel.runModal() == .OK else { return }
-    let existing = paths.string.components(separatedBy: .newlines).filter { !$0.isEmpty }
-    paths.string = Array(Set(existing + panel.urls.map(\.path))).sorted().joined(separator: "\n")
+    let updated = Array(Set(applicationPaths + panel.urls.map(\.standardizedFileURL.path))).sorted()
+    guard updated.count <= 128 else {
+      error.stringValue = "Choose at most 128 application bundles."
+      return
+    }
+    applicationPaths = updated
+    refreshApplications()
+  }
+
+  @objc private func removeApplications() {
+    for index in applications.selectedRowIndexes.reversed() {
+      applicationPaths.remove(at: index)
+    }
+    refreshApplications()
+  }
+
+  @objc private func routingChanged() {
+    mode.isEnabled = enabled.state == .on
+    policy.isEnabled = enabled.state == .on && mode.indexOfSelectedItem == 0
+  }
+
+  private func refreshApplications() {
+    applications.deselectAll(nil)
+    applications.reloadData()
+    remove.isEnabled = false
+    count.stringValue = applicationPaths.isEmpty ? "No applications added" : "\(applicationPaths.count) applications"
+    error.stringValue = ""
+  }
+
+  func numberOfRows(in tableView: NSTableView) -> Int { applicationPaths.count }
+
+  func tableViewSelectionDidChange(_ notification: Notification) {
+    remove.isEnabled = !applications.selectedRowIndexes.isEmpty
+  }
+
+  func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+    let path = applicationPaths[row]
+    let title = NSTextField(labelWithString: URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent)
+    title.font = .systemFont(ofSize: NSFont.systemFontSize, weight: .medium)
+    let location = NSTextField(labelWithString: path)
+    location.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+    location.textColor = .secondaryLabelColor
+    location.lineBreakMode = .byTruncatingMiddle
+    let labels = NSStackView(views: [title, location])
+    labels.orientation = .vertical
+    labels.alignment = .leading
+    labels.spacing = 2
+    labels.toolTip = path
+    location.widthAnchor.constraint(lessThanOrEqualTo: labels.widthAnchor).isActive = true
+    return labels
   }
 }

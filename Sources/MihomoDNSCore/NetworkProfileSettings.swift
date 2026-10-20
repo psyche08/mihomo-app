@@ -11,17 +11,39 @@ public struct NetworkProfileSettings: Codable, Equatable, Sendable {
     public var mixedPort: Int
     public var tunStack: String
     public var applicationMode: ApplicationMode
+    public var applicationRoutingEnabled: Bool
     public var applicationPaths: [String]
     public var policy: String
 
     public init(mixedPort: Int = 7897, tunStack: String = "mixed",
                 applicationMode: ApplicationMode = .profileRules,
-                applicationPaths: [String] = [], policy: String = "PROXY") {
+                applicationPaths: [String] = [], policy: String = "PROXY",
+                applicationRoutingEnabled: Bool? = nil) {
         self.mixedPort = mixedPort
         self.tunStack = tunStack
         self.applicationMode = applicationMode
+        self.applicationRoutingEnabled = applicationRoutingEnabled ?? (applicationMode != .profileRules)
         self.applicationPaths = applicationPaths
         self.policy = policy
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case mixedPort, tunStack, applicationMode, applicationRoutingEnabled, applicationPaths, policy
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        mixedPort = try values.decode(Int.self, forKey: .mixedPort)
+        tunStack = try values.decode(String.self, forKey: .tunStack)
+        applicationMode = try values.decode(ApplicationMode.self, forKey: .applicationMode)
+        applicationRoutingEnabled = try values.decodeIfPresent(Bool.self, forKey: .applicationRoutingEnabled)
+            ?? (applicationMode != .profileRules)
+        applicationPaths = try values.decode([String].self, forKey: .applicationPaths)
+        policy = try values.decode(String.self, forKey: .policy)
+    }
+
+    public var usesApplicationRules: Bool {
+        applicationRoutingEnabled && applicationMode != .profileRules
     }
 
     public struct InvalidSettings: LocalizedError {
@@ -53,7 +75,7 @@ public struct NetworkProfileSettings: Codable, Equatable, Sendable {
             .first(where: { $0 > 0 }) ?? 7897
         if let range = try section(lines, key: "tun"),
            let line = lines[range].first(where: { $0.hasPrefix("  stack:") }) {
-            settings.tunStack = MihomoConfigurator.parseScalar(String(line.dropFirst("  stack:".count)))
+            settings.tunStack = MihomoConfigurator.parseScalar(String(line.dropFirst("  stack:".count))).lowercased()
         }
         return settings
     }
@@ -80,7 +102,7 @@ public struct NetworkProfileSettings: Codable, Equatable, Sendable {
             throw InvalidSettings("This profile uses custom listeners. Edit its ports in YAML instead.")
         }
         let paths = Array(Set(applicationPaths)).sorted()
-        if applicationMode != .profileRules {
+        if usesApplicationRules {
             guard !paths.isEmpty, paths.count <= 128 else {
                 throw InvalidSettings("Choose between 1 and 128 application bundles.")
             }
@@ -124,7 +146,7 @@ public struct NetworkProfileSettings: Codable, Equatable, Sendable {
         if let index = stackIndices.first { lines[index] = "  stack: \(tunStack)" }
         else { lines.insert("  stack: \(tunStack)", at: tun.lowerBound + 1) }
 
-        if applicationMode != .profileRules {
+        if usesApplicationRules {
             Self.setScalar(&lines, key: "find-process-mode", value: "always")
             Self.setScalar(&lines, key: "mode", value: "rule")
             guard let rules = try Self.section(lines, key: "rules") else {

@@ -126,6 +126,55 @@ final class NetworkProfileSettingsTests: XCTestCase {
             .replacingOccurrences(of: "mixed-port: 7897", with: "mixed-port: 8900")
         XCTAssertEqual(try NetworkProfileSettings.read(from: saved).mixedPort, 8900)
     }
+
+    func testExistingGVisorStackRemainsSelectedWhenEditingAppRouting() throws {
+        let saved = source.replacingOccurrences(of: "stack: system", with: "stack: gVisor")
+        let settings = try NetworkProfileSettings.read(from: saved)
+        XCTAssertEqual(settings.tunStack, "gvisor")
+        XCTAssertTrue(try settings.applying(to: saved).contains("stack: gvisor"))
+    }
+
+    func testSwitchOffAndOnRetainsSelectionAndRestoresIdenticalRules() throws {
+        for mode in [NetworkProfileSettings.ApplicationMode.selectedOnly, .bypassSelected] {
+            var settings = NetworkProfileSettings(applicationMode: mode,
+                applicationPaths: ["/Applications/Game.app"], policy: "PROXY")
+            let enabled = try settings.applying(to: source)
+            settings.applicationRoutingEnabled = false
+            let disabled = try settings.applying(to: enabled)
+            XCTAssertFalse(disabled.contains("PROCESS-PATH-REGEX"))
+            XCTAssertFalse(disabled.contains("MATCH,DIRECT"))
+            XCTAssertTrue(disabled.contains("DOMAIN-SUFFIX,example.test,REJECT"))
+            var restored = try NetworkProfileSettings.read(from: disabled)
+            XCTAssertFalse(restored.usesApplicationRules)
+            XCTAssertEqual(restored.applicationMode, mode)
+            XCTAssertEqual(restored.applicationPaths, settings.applicationPaths)
+            XCTAssertEqual(restored.policy, "PROXY")
+            restored.applicationRoutingEnabled = true
+            XCTAssertEqual(try restored.applying(to: disabled), enabled)
+        }
+    }
+
+    func testLegacyMetadataInfersEnablementWithoutChangingRouting() throws {
+        for mode in NetworkProfileSettings.ApplicationMode.allCases {
+            let legacy = """
+            # mihomobox-network: {"mixedPort":7897,"tunStack":"system","applicationMode":"\(mode.rawValue)","applicationPaths":["/Applications/Game.app"],"policy":"PROXY"}
+            """
+            let settings = try NetworkProfileSettings.read(from: legacy + "\n" + source)
+            XCTAssertEqual(settings.usesApplicationRules, mode != .profileRules)
+        }
+    }
+
+    func testRemovingLastApplicationRequiresDisablingRouting() throws {
+        var settings = NetworkProfileSettings(applicationMode: .selectedOnly,
+            applicationPaths: ["/Applications/Game.app"])
+        let enabled = try settings.applying(to: source)
+        settings.applicationPaths = []
+        XCTAssertThrowsError(try settings.applying(to: enabled))
+        settings.applicationRoutingEnabled = false
+        let disabled = try settings.applying(to: enabled)
+        XCTAssertFalse(disabled.contains("PROCESS-PATH-REGEX"))
+        XCTAssertTrue(try NetworkProfileSettings.read(from: disabled).applicationPaths.isEmpty)
+    }
 }
 
 /// Opt-in syntax integration against the checksummed, pinned core. This runs
