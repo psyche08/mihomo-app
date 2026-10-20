@@ -158,7 +158,8 @@ generated profile syntax.
 
 ## Strict per-application DNS: feasibility checkpoint (2026-10-20)
 
-**Decision: technically plausible; strict runtime behavior is not yet verified.**
+**Decision: the signed DNS-only prototype does not satisfy strict per-app DNS
+isolation on the tested Mac.** See the runtime counterexample below.
 The current Local DoH HTTP/AF_UNIX path transports DNS wire messages without
 original-application identity. Setting `dns.respect-rules` cannot recover that
 identity and must not break the original-DNS escape through TCP `1054`.
@@ -182,7 +183,7 @@ These checks are not a DNS provider runtime test: no provider is installed or
 activated, no preferences are saved, and the cache model is not a resolver.
 No packets, domains, raw tokens or credentials are logged.
 
-Deployment observations on this machine:
+Initial deployment observations, before the signed runtime experiment:
 
 - The installed Cloud Build 22 App has no Network Extension entitlements.
 - A read-only Apple API query found only `IN_APP_PURCHASE` on the existing
@@ -195,7 +196,7 @@ Deployment observations on this machine:
   that flow. It is **not** a safe observation-only pass-through mechanism.
   A live prototype must implement forwarding and rollback before activation.
 
-A signed runtime experiment remains necessary before promising strictness:
+The runtime acceptance checklist for any proposed strict implementation is:
 
 1. Use a separate probe host/extension identity, valid Network Extension
    entitlements and provisioning, and the project's Xcode Cloud-only signing
@@ -234,3 +235,36 @@ Sources: [Apple DNS Proxy deployment](https://developer.apple.com/documentation/
 [App Proxy DNS handling](https://developer.apple.com/documentation/networkextension/neappproxyprovider),
 and the independent [DNSMonitor source](https://github.com/objective-see/DNSMonitor/blob/main/Extension/DNSProxyProvider.m)
 (the latter was inspected as a reference, not copied or installed).
+
+### Signed runtime counterexample
+
+Cloud Build 28 (`1947b1d3`) was Developer ID signed, notarized, ticket-verified
+and activated on the test Mac. Build 26 had established that the saved provider
+configuration was absent from the top-level startup options. Build 28 accepted
+the single dictionary envelope while preserving the validated deadline and
+strict-mode flag, and reached `startProxy` successfully.
+
+With Enhanced TUN and the existing Local DoH profile enabled:
+
+- Selected, signature-verified test clients received real DNS answers through
+  proxied DoH for both UDP and TCP. Mihomo's connection readback identified the
+  extension process, its explicit Proxy rule and Proxy chain without DIRECT.
+- `getaddrinfo` did not preserve the per-app answer separation. For case A,
+  selected-first resolution returned public answers and the subsequent control
+  query also returned public answers. For case B, control-first resolution
+  returned Fake IP and the subsequent selected query also returned Fake IP.
+  Simultaneous case-A queries likewise returned the same public answer category.
+  These are counterexamples to the promised separation, consistent with shared
+  macOS resolver caching; a provider-local cache partition cannot fix them.
+- The warm-cache helper call succeeded without a corresponding helper flow
+  counter. This does not establish helper DNS identity coverage.
+- Three control UDP/TCP cases failed, and other-app forwarding had numerous
+  failures. The Local DoH forwarding path also needs further diagnosis before
+  another system-wide experiment; no bypass or fallback is silently added.
+
+The probe was disabled, the original `sheng.yaml` restored, and Local DoH health
+verified after the run. No strict DNS switch is shipped in the main App. Its
+per-app switch controls Mihomo process rules only and states the DNS limitation.
+Further strict-DNS work needs a separate connection-level design and runtime
+test (for example, assessing App Proxy coverage of high-level resolution), not
+promotion of this DNS-only probe or a claim that these tests passed.

@@ -106,7 +106,7 @@ The configuration adapter accepts the documented direct dictionary or one
 dictionary envelope containing exactly the two typed test fields. It still
 rejects missing, ambiguous, expired or excessively future deadlines and invalid
 strict-mode flags. No default deadline or direct fallback is introduced.
-The envelope compatibility path must be confirmed by a signed live build.
+Cloud Build 28 confirmed the single dictionary envelope at runtime.
 Run its isolated checks without activating any extension:
 
 ```sh
@@ -118,3 +118,20 @@ swiftc experiments/DNSIdentityProbe/Extension/ProbeSessionConfiguration.swift \
 The live runner has a 180-second case budget, reports failures as a nonzero exit,
 and always attempts to disable the configuration. A passing basic matrix still
 does not imply strict isolation or satisfy the broader runtime checklist above.
+
+## Build 28 result: not eligible for production
+
+The provider started and authenticated selected/control application identities.
+Selected UDP/TCP requests returned public answers, and Mihomo connection
+readback confirmed the extension's explicit Proxy rule and chain without DIRECT.
+However, three control UDP/TCP cases failed. System resolver queries reused the
+other policy's answer category in both query orders: control reused selected
+public answers, and selected reused control Fake IP. A warm-cache helper query
+had no matching helper flow counter. Thus the matrix does **not** establish
+strict DNS isolation, even for the cases whose resolver call succeeded.
+
+The probe configuration is disabled after testing; the original profile and
+healthy Local DoH are restored. Keep this extension separate from the shipping
+App. Before any further live experiment, investigate Local DoH forwarding
+failures and require a new design for system resolver/cache separation.
+See [the architecture decision](../../docs/decisions.md#signed-runtime-counterexample).
