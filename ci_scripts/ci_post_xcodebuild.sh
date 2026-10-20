@@ -10,6 +10,10 @@ if [[ -z "$SIGNED_PATH" ]]; then
   exit 0
 fi
 
+if [[ "${CI_XCODE_SCHEME:-}" == "MihomoDNSProbe" ]]; then
+  exec "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/experiments/DNSIdentityProbe/audit-cloud-app.sh"
+fi
+
 APP="$SIGNED_PATH"
 if [[ ! -d "$APP" || "$APP" != *.app ]]; then
   APP="$(/usr/bin/find "$SIGNED_PATH" -maxdepth 4 -type d -name MihomoBox.app -print -quit)"

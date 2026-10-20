@@ -154,3 +154,83 @@ Mihomo implementation references: [process routing rules](https://wiki.metacubex
 and [TUN stacks](https://wiki.metacubex.one/config/inbound/tun/). The shipped
 `v1.19.30` binary, rather than newer online documentation alone, validates the
 generated profile syntax.
+
+
+## Strict per-application DNS: feasibility checkpoint (2026-10-20)
+
+**Decision: technically plausible; strict runtime behavior is not yet verified.**
+The current Local DoH HTTP/AF_UNIX path transports DNS wire messages without
+original-application identity. Setting `dns.respect-rules` cannot recover that
+identity and must not break the original-DNS escape through TCP `1054`.
+
+A macOS `NEDNSProxyProvider` system extension is a candidate identity-aware
+entry point. Apple's SDK exposes `NEAppProxyFlow.metaData` with a signing
+identifier and optional source-application audit token. The token can be
+resolved with `SecCodeCopyGuestWithAttributes` and checked against the dynamic
+code signature. A signing identifier alone is insufficient; selected identities
+need a validated code requirement/team and a defined helper relationship.
+Apple explicitly permits missing metadata for system processes. Unknown or
+unverifiable origins therefore cannot silently become DIRECT in a strict mode.
+
+The read-only prototype at `tools/per-app-dns-feasibility/run.sh` compiles the
+real flow-metadata adapter and performs 11 identity/policy/partition checks.
+The M4 mini verified a real audit token for the probe's own process, including
+rejection of an inconsistent claimed signing identifier. Synthetic checks cover
+unknown-origin rejection, a selected identifier from the wrong team, and
+separation of application, policy and policy-generation cache partitions.
+These checks are not a DNS provider runtime test: no provider is installed or
+activated, no preferences are saved, and the cache model is not a resolver.
+No packets, domains, raw tokens or credentials are logged.
+
+Deployment observations on this machine:
+
+- The installed Cloud Build 22 App has no Network Extension entitlements.
+- A read-only Apple API query found only `IN_APP_PURCHASE` on the existing
+  `dev.linsheng.mihomo-app` App ID. No Apple account settings were changed.
+- No MihomoBox DNS Proxy system extension is installed.
+- macOS DNS Proxy providers support Developer ID deployment as system
+  extensions from macOS 10.15; Apple's deployment table does not impose the
+  iOS supervised/managed-device restriction on macOS.
+- A native DNS Proxy provider returning `false` from `handleNewFlow` terminates
+  that flow. It is **not** a safe observation-only pass-through mechanism.
+  A live prototype must implement forwarding and rollback before activation.
+
+A signed runtime experiment remains necessary before promising strictness:
+
+1. Use a separate probe host/extension identity, valid Network Extension
+   entitlements and provisioning, and the project's Xcode Cloud-only signing
+   path. Obtain the macOS system-extension/network authorization through the
+   ordinary OS UI. Do not alter the production bundle to bypass signing.
+2. Forward accepted DNS flows with bounded concurrency and preserve TCP framing,
+   UDP responses and RCODEs. Route selected, verified identities through the
+   chosen policy; do not silently retry those requests on direct DNS. Keep the
+   existing daemon as the only owner of Mihomo and the `1054` escape.
+3. Exercise two signed apps requesting the same controlled names, first with
+   cold caches, then warm caches and simultaneous requests. Include
+   `getaddrinfo`, DNSService APIs, URLSession, browser subprocesses, embedded
+   helpers and external responsible processes. Observe identity coverage using
+   counters/test-case labels only. Do not assume system/shared caches are
+   partitioned merely because the prototype's own cache key is partitioned.
+4. Test both selected and unselected apps, A/AAAA/HTTPS records, UDP/TCP DNS,
+   missing identity, app exit/PID reuse, selector changes, proxy failure and
+   sleep/wake. Different DNS policies must not share cache or coalesced queries.
+   A selector/policy change needs generation-scoped state and cancellation rules.
+5. Verify precedence and rollback with the existing global Local DoH profile
+   and Enhanced TUN. DNS Proxy configuration is system-wide; do not assume it
+   can coexist without changing which component receives requests. App-owned
+   encrypted DNS is ordinary application traffic and requires separate coverage;
+   observing a DNS Proxy flow does not prove coverage of every name resolution.
+
+Passing the metadata compile/self-token probe is a go-ahead for that isolated
+experiment, not approval to advertise leak-free per-app DNS. Missing identities
+or shared resolver/cache behavior may require an `NEAppProxyProvider` design
+that handles selected applications' connections as well as DNS, rather than a
+DNS-only extension. Apple documents that app-proxy DNS flow handling differs
+between low-level DNS APIs and high-level URLSession connections; neither API
+surface alone proves complete coverage on the installed OS.
+
+Sources: [Apple DNS Proxy deployment](https://developer.apple.com/documentation/technotes/tn3134-network-extension-provider-deployment),
+[flow metadata](https://developer.apple.com/documentation/networkextension/neflowmetadata),
+[App Proxy DNS handling](https://developer.apple.com/documentation/networkextension/neappproxyprovider),
+and the independent [DNSMonitor source](https://github.com/objective-see/DNSMonitor/blob/main/Extension/DNSProxyProvider.m)
+(the latter was inspected as a reference, not copied or installed).
