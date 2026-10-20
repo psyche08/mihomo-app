@@ -49,10 +49,14 @@ try:
     results['failure_stage'] = 'await_provider_start'
     if not any('probe_started' in s for s in log_lines): raise RuntimeError('No provider-start evidence; stop without claiming a runtime test')
     results.pop('failure_stage', None)
+    test_deadline = time.monotonic() + 180  # Finish before the host's 240-second rollback.
     def run(client, mode, case='a'):
         exe = clients/(client+'.app')/'Contents/MacOS'/client
+        remaining = test_deadline - time.monotonic()
+        if remaining <= 0:
+            return {'client': client, 'mode': mode, 'case': case, 'failed': 'session_budget_exhausted'}
         try:
-            r = subprocess.run([str(exe), mode, case], capture_output=True, text=True, timeout=20)
+            r = subprocess.run([str(exe), mode, case], capture_output=True, text=True, timeout=min(20, remaining))
             return {'client': client, 'mode': mode, 'case': case, 'exit': r.returncode, 'result': json.loads(r.stdout)}
         except (subprocess.TimeoutExpired, ValueError):
             return {'client': client, 'mode': mode, 'case': case, 'failed': 'timeout_or_invalid_result'}
@@ -77,6 +81,11 @@ finally:
         try: logger.wait(timeout=5)
         except subprocess.TimeoutExpired: logger.kill()
         results['counters'] = log_lines
+        results['basic_cases_passed'] = len(results['tests']) == 17 and all(
+            case.get('exit') == 0 and case.get('result', {}).get('ok') is True
+            and case.get('result', {}).get('rcode', 0) == 0
+            for case in results['tests'])
         output.write_text(json.dumps(results, indent=2)+'\n')
-print(json.dumps({'cases': len(results['tests']), 'rollback': results['rollback'], 'strict_dns_verified': False}))
-if not results['rollback'] or 'experiment_error' in results: raise SystemExit(1)
+print(json.dumps({'cases': len(results['tests']), 'basic_cases_passed': results['basic_cases_passed'],
+                  'rollback': results['rollback'], 'strict_dns_verified': False}))
+if not results['rollback'] or not results['basic_cases_passed'] or 'experiment_error' in results: raise SystemExit(1)

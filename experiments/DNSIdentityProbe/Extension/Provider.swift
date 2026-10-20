@@ -18,26 +18,23 @@ final class DNSProbeProvider: NEDNSProxyProvider {
     private lazy var proxied = makeSession(proxy: true)
 
     override func startProxy(options: [String: Any]?, completionHandler: @escaping (Error?) -> Void) {
-        let config = options ?? [:]
         let now = Date().timeIntervalSince1970
-        guard let deadline = config["deadline"] as? Double else {
-            // Fixed categories only: never dump provider options or user data.
-            let reason = config["deadline"] == nil ? "missing_deadline" : "invalid_deadline_type"
-            log.error("probe_start_rejected reason=\(reason, privacy: .public) options_present=\(options != nil, privacy: .public) option_count=\(config.count, privacy: .public)")
+        let config: ProbeSessionConfiguration
+        do {
+            config = try ProbeSessionConfiguration(options: options, now: now)
+        } catch {
+            let reason = (error as? ProbeSessionConfiguration.Invalid)?.rawValue ?? "invalid_configuration"
+            let dictionaryEnvelope = options?.count == 1 && options?.values.first is [String: Any]
+            log.error("probe_start_rejected reason=\(reason, privacy: .public) dictionary_envelope=\(dictionaryEnvelope, privacy: .public)")
             completionHandler(NSError(domain: "DNSProbe", code: 1)); return
         }
-        guard deadline.isFinite, deadline > now, deadline <= now + 660 else {
-            let reason = deadline <= now ? "expired_deadline" : "invalid_deadline_range"
-            log.error("probe_start_rejected reason=\(reason, privacy: .public)")
-            completionHandler(NSError(domain: "DNSProbe", code: 1)); return
-        }
-        strictUnknown = config["strictUnknown"] as? Bool ?? false
+        strictUnknown = config.strictUnknown
         let work = DispatchWorkItem { [weak self] in
             self?.cancelProxyWithError(NSError(domain: "DNSProbe", code: 2))
         }
         expiry = work
-        queue.asyncAfter(deadline: .now() + max(1, deadline - Date().timeIntervalSince1970), execute: work)
-        log.notice("probe_started strict_unknown=\(self.strictUnknown, privacy: .public)")
+        queue.asyncAfter(deadline: .now() + max(0, config.deadline - Date().timeIntervalSince1970), execute: work)
+        log.notice("probe_started strict_unknown=\(self.strictUnknown, privacy: .public) wrapped_configuration=\(config.wrapped, privacy: .public)")
         completionHandler(nil)
     }
 

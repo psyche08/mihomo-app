@@ -90,3 +90,31 @@ value in both signed binaries and their embedded profiles; it never accepts the
 source/development variant as a distributable system extension. Builds 23/24
 exposed the mistake of using the Developer ID variant in source entitlements.
 See [Apple DTS: Exporting a Developer ID Network Extension](https://developer.apple.com/forums/thread/737894).
+
+## Runtime startup diagnosis (2026-10-20)
+
+Cloud Builds 25 and 26 were signed, notarized, verified and installed as the
+independent probe; macOS approved the extension. Build 25 reached `startProxy`
+but returned `DNSProbe` error 1 before accepting DNS traffic. Build 26 verified
+the host's saved configuration by reloading preferences, then reported
+`missing_deadline`, with one top-level option. This distinguishes a provider
+configuration-delivery problem from missing activation or missing log output.
+Both attempts disabled the probe, restored the original profile, and verified
+Local DoH health. Neither attempt established per-app DNS behavior.
+
+The configuration adapter accepts the documented direct dictionary or one
+dictionary envelope containing exactly the two typed test fields. It still
+rejects missing, ambiguous, expired or excessively future deadlines and invalid
+strict-mode flags. No default deadline or direct fallback is introduced.
+The envelope compatibility path must be confirmed by a signed live build.
+Run its isolated checks without activating any extension:
+
+```sh
+swiftc experiments/DNSIdentityProbe/Extension/ProbeSessionConfiguration.swift \
+  experiments/DNSIdentityProbe/Tests/main.swift -o /private/tmp/mihomo-probe-config-tests
+/private/tmp/mihomo-probe-config-tests
+```
+
+The live runner has a 180-second case budget, reports failures as a nonzero exit,
+and always attempts to disable the configuration. A passing basic matrix still
+does not imply strict isolation or satisfy the broader runtime checklist above.
