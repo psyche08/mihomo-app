@@ -220,7 +220,8 @@ Claude applications, their signed Mach-O helpers, native Codex/Claude CLI
 installations, Codex computer-use helpers, and Claude local remote servers.
 It prints only executable identities and paths. OpenAI and Anthropic bundles
 must validate against their observed vendor teams and Apple signing anchor.
-Each rule also pins the executable path and designated requirement. Ad-hoc
+Rules consolidate repeated signing identities and designated requirements.
+The provider separately pins each executable path and designated requirement. Ad-hoc
 Claude remote servers are pinned to their current code hash. Re-run discovery
 and enable after applications, Homebrew CLI versions or remote servers update.
 Unsigned scripts and arbitrary external MCP tools are not inferred from a
@@ -243,7 +244,7 @@ still the independent experiment, not a main-App UI or login-start integration.
 AI mode forwards general TCP names, IPv4/IPv6 destinations and ports through the
 managed core's mixed SOCKS listener at `127.0.0.1:7897`. The 30-second TCP limit
 covers establishment only, allowing streaming and WebSockets after connection.
-TCP loopback stays local for authentication callbacks and local MCP services.
+Explicit TCP/UDP loopback forwarding stays local for authentication callbacks and local MCP services.
 DNS goes through the fixed proxied DoH service. Other UDP uses SOCKS5 UDP
 ASSOCIATE with a loopback relay, rejects fragmented SOCKS datagrams, and expires
 after 180 seconds idle. Upstream UDP support remains dependent on the selected
@@ -259,3 +260,12 @@ original profile for rollback. Do not enable alongside the DNS-only probe.
 General forwarding, especially cached numeric addresses, is not proof of strict
 per-app DNS isolation. System resolver scope, arbitrary helper attribution and
 sleep/wake remain runtime acceptance items.
+
+`--app-ai-check-rules` saves and verifies rules while leaving the VPN disabled.
+`--rules apps|cli|all|all-paths` supports bounded diagnosis of rule persistence;
+`all` is the default consolidated identity set, and `all-paths` retains the
+initial per-executable NE rule form for comparison. Rule readback compares
+unordered identities and nested tool restrictions without relaxing any fields.
+The local-flow bridge explicitly opens a loopback connection: returning false
+from an App Proxy handler fails the flow, as documented in
+[Apple DTS's explanation](https://developer.apple.com/forums/thread/842052).

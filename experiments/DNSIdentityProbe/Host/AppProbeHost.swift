@@ -11,14 +11,20 @@ final class AppProbeHost {
     private var manager: NEAppProxyProviderManager?
     private var aiTargets: AIAppTargets?
     private var persistent = false
+    private var checkRulesOnly = false
 
     private func finish(_ message: String, _ code: Int32 = 0) -> Never {
         print(message); fflush(stdout); exit(code)
     }
 
     func start(_ command: String) {
-        if ["--app-ai-inventory", "--app-ai-session", "--app-ai-enable"].contains(command) {
-            do { aiTargets = try AIAppTargets() } catch { finish("app_ai_target_discovery_failed", 1) }
+        if ["--app-ai-inventory", "--app-ai-session", "--app-ai-enable", "--app-ai-check-rules"].contains(command) {
+            let args = CommandLine.arguments
+            let ruleSet: String
+            if let i = args.firstIndex(of: "--rules"), i + 1 < args.count { ruleSet = args[i+1] } else { ruleSet = "all" }
+            guard ["all", "apps", "cli", "primary", "all-paths"].contains(ruleSet) else { finish("app_invalid_rule_set", 1) }
+            checkRulesOnly = command == "--app-ai-check-rules"
+            do { aiTargets = try AIAppTargets(ruleSet: ruleSet) } catch { finish("app_ai_target_discovery_failed", 1) }
             if command == "--app-ai-inventory" {
                 let data = try! JSONSerialization.data(withJSONObject: aiTargets!.targets.map {
                     ["id": $0.id, "path": $0.path, "category": $0.category]
@@ -106,19 +112,24 @@ final class AppProbeHost {
         manager.protocolConfiguration = config
         manager.localizedDescription = aiTargets == nil ? "Mihomo App Proxy test (selected test clients only)" : "Mihomo App Proxy — ChatGPT, Codex, Claude"
         manager.appRules = rules
-        manager.isEnabled = true
+        manager.isEnabled = !checkRulesOnly
         manager.saveToPreferences { error in
             DispatchQueue.main.async {
-                guard error == nil else { self.finish("app_save_failed", 1) }
+                guard error == nil else {
+                    print("app_save_error_code=\((error as NSError?)?.code ?? 0)")
+                    self.finish("app_save_failed", 1)
+                }
                 manager.loadFromPreferences { error in
                     DispatchQueue.main.async {
-                        guard error == nil, manager.isEnabled,
+                        guard error == nil, manager.isEnabled == !self.checkRulesOnly,
                               manager.routingMethod == .sourceApplication,
                               self.sameRules(manager.appRules, rules),
                               (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == self.extensionID,
                               NSDictionary(dictionary: (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration ?? [:]).isEqual(to: config.providerConfiguration ?? [:]) else {
+                            print("app_readback_rules_actual=\(manager.appRules.count); expected=\(rules.count); enabled=\(manager.isEnabled)")
                             print("app_readback_failed"); self.disable(); return
                         }
+                        if self.checkRulesOnly { self.finish("app_ai_rules_verified; count=\(rules.count); enabled=false") }
                         do {
                             try manager.connection.startVPNTunnel()
                             print("app_probe_start_requested; persistent=\(self.persistent)"); fflush(stdout)
@@ -145,12 +156,16 @@ final class AppProbeHost {
 
     private func sameRules(_ actual: [NEAppRule], _ expected: [NEAppRule]) -> Bool {
         guard actual.count == expected.count else { return false }
-        for (a, b) in zip(actual, expected) {
-            guard a.matchSigningIdentifier == b.matchSigningIdentifier else { return false }
-            guard a.matchDesignatedRequirement == b.matchDesignatedRequirement else { return false }
-            guard a.matchPath == b.matchPath else { return false }
-            guard NSArray(array: a.matchDomains ?? []).isEqual(to: b.matchDomains ?? []) else { return false }
-            guard sameRules(a.matchTools ?? [], b.matchTools ?? []) else { return false }
+        var remaining = expected
+        for a in actual {
+            guard let index = remaining.firstIndex(where: { b in
+                guard a.matchSigningIdentifier == b.matchSigningIdentifier else { return false }
+                guard a.matchDesignatedRequirement == b.matchDesignatedRequirement else { return false }
+                guard a.matchPath == b.matchPath else { return false }
+                guard NSArray(array: a.matchDomains ?? []).isEqual(to: b.matchDomains ?? []) else { return false }
+                return sameRules(a.matchTools ?? [], b.matchTools ?? [])
+            }) else { return false }
+            remaining.remove(at: index)
         }
         return true
     }

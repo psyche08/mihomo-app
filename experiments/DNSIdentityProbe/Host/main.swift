@@ -85,7 +85,7 @@ let host = ProbeHost()
 let appHost = AppProbeHost()
 DispatchQueue.main.async {
     let command = CommandLine.arguments.dropFirst().first ?? "--help"
-    if ["--app-session", "--app-status", "--app-disable", "--app-ai-inventory", "--app-ai-session", "--app-ai-enable"].contains(command) {
+    if ["--app-session", "--app-status", "--app-disable", "--app-ai-inventory", "--app-ai-session", "--app-ai-enable", "--app-ai-check-rules"].contains(command) {
         appHost.start(command)
     } else { host.start(command) }
 }

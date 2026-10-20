@@ -11,6 +11,7 @@ final class AppProxyUDPBridge {
     private let finished: () -> Void
     private let control = NWConnection(host: "127.0.0.1", port: 7897, using: .tcp)
     private var relay: NWConnection?
+    private var localConnections: [String: NWConnection] = [:]
     private var closed = false
     private var timer: DispatchWorkItem?
     init(flow: NEAppProxyUDPFlow, queue: DispatchQueue,
@@ -96,6 +97,25 @@ final class AppProxyUDPBridge {
                     }
                 }
             }
+        } else if AppProbeProvider.isLoopback(endpoint.hostname) {
+            let key = endpoint.hostname + ":" + endpoint.port
+            let connection: NWConnection
+            if let existing = localConnections[key] { connection = existing }
+            else {
+                guard localConnections.count < 32, let port = Network.NWEndpoint.Port(rawValue: port) else { close(); return }
+                connection = NWConnection(host: Network.NWEndpoint.Host(endpoint.hostname), port: port, using: .udp)
+                localConnections[key] = connection
+                connection.stateUpdateHandler = { state in
+                    if case .failed = state { self.close() }
+                }
+                connection.start(queue: queue)
+                readLocal(connection, endpoint: endpoint)
+            }
+            connection.send(content: data[index], completion: .contentProcessed { error in
+                if error != nil { self.close() } else {
+                    self.count("local_udp_sent"); self.sendBatch(data, endpoints, index: index + 1)
+                }
+            })
         } else {
             guard let packet = SOCKSDatagram.encode(host: endpoint.hostname, port: port, payload: data[index]) else { close(); return }
             relay.send(content: packet, completion: .contentProcessed { error in
@@ -103,6 +123,20 @@ final class AppProxyUDPBridge {
                     self.count("udp_sent"); self.sendBatch(data, endpoints, index: index + 1)
                 }
             })
+        }
+    }
+    private func readLocal(_ connection: NWConnection, endpoint: NWHostEndpoint) {
+        guard !closed else { return }
+        connection.receiveMessage { data, _, _, error in
+            guard !self.closed, error == nil, let data else { self.close(); return }
+            self.armTimer(180)
+            self.flow.writeDatagrams([data], sentBy: [endpoint]) { error in
+                self.queue.async {
+                    if error != nil { self.close() } else {
+                        self.count("local_udp_received"); self.readLocal(connection, endpoint: endpoint)
+                    }
+                }
+            }
         }
     }
     private func readRelay() {
@@ -138,6 +172,8 @@ final class AppProxyUDPBridge {
     func close() {
         guard !closed else { return }
         closed = true; timer?.cancel(); control.cancel(); relay?.cancel()
+        for connection in localConnections.values { connection.cancel() }
+        localConnections.removeAll()
         let error = NSError(domain: "AppProxyUDP", code: 1)
         flow.closeReadWithError(error); flow.closeWriteWithError(error); finished()
     }

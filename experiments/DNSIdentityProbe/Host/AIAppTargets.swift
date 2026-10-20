@@ -22,7 +22,7 @@ struct AIAppTargets {
     let targets: [Target]
     let rules: [NEAppRule]
 
-    init() throws {
+    init(ruleSet: String = "all") throws {
         let fm = FileManager.default
         let home = fm.homeDirectoryForCurrentUser
         var found: [String: Target] = [:]
@@ -73,7 +73,23 @@ struct AIAppTargets {
         guard found.values.contains(where: { $0.category == "chatgpt" }),
               found.values.contains(where: { $0.category == "claude" }),
               Set(tools.map(\.category)) == ["codex_cli", "claude_cli"] else { throw Failure.missingTarget }
-        var rules = found.values.sorted { $0.path < $1.path }.map(\.rule)
+        // NE treats application rules as identity records. Consolidate repeated
+        // identities (multiple renderers, versions and remote servers) and keep
+        // executable-path validation inside the provider.
+        var roots = Array(found.values)
+        if ruleSet == "apps" {
+            roots = roots.filter { ["com.openai.codex", "com.openai.chat", "com.anthropic.claudefordesktop"].contains($0.id) }
+        } else if ruleSet == "primary" {
+            roots = roots.filter { ["com.openai.codex", "com.openai.chat", "com.anthropic.claudefordesktop"].contains($0.id) || ["codex_cli", "claude_cli"].contains($0.category) }
+        } else if ruleSet == "cli" { roots = tools }
+        var rules: [NEAppRule]
+        if ruleSet == "all-paths" { rules = roots.sorted { $0.path < $1.path }.map(\.rule) }
+        else {
+            rules = Dictionary(grouping: roots, by: \.id).sorted { $0.key < $1.key }.map { id, items in
+                let requirements = Set(items.map(\.requirement)).sorted().map { "(" + $0 + ")" }.joined(separator: " or ")
+                return NEAppRule(signingIdentifier: id, designatedRequirement: requirements)
+            }
+        }
         // The responsible application can be the terminal/editor. Restrict
         // those rules to the verified tools; never select the whole terminal.
         for path in ["/System/Applications/Utilities/Terminal.app", "/Applications/iTerm.app",
@@ -81,9 +97,9 @@ struct AIAppTargets {
                      "/Applications/Alacritty.app", "/Applications/Visual Studio Code.app"] {
             guard let executable = Bundle(url: URL(fileURLWithPath: path))?.executableURL,
                   let terminal = Self.inspect(executable.resolvingSymlinksInPath(), category: "cli_host", team: nil) else { continue }
-            let rule = terminal.rule
-            rule.matchTools = tools.map(\.rule)
-            rules.append(rule)
+            let rule = NEAppRule(signingIdentifier: terminal.id, designatedRequirement: terminal.requirement)
+            rule.matchTools = tools.map { NEAppRule(signingIdentifier: $0.id, designatedRequirement: $0.requirement) }
+            if ruleSet != "apps" { rules.append(rule) }
             found[terminal.path] = terminal
         }
         guard found.count <= 512 else { throw Failure.tooManyTargets }

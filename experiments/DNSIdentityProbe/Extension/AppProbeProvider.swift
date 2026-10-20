@@ -72,11 +72,6 @@ final class AppProbeProvider: NEAppProxyProvider {
 
     override func handleNewFlow(_ flow: NEAppProxyFlow) -> Bool {
         let identity = aiConfiguration?.classify(flow.metaData) ?? (aiConfiguration == nil ? classifyProbeIdentity(flow.metaData) : "unknown")
-        // Authentication callbacks and local MCP services must remain local.
-        // This is an explicit loopback exception, not an upstream fallback.
-        if aiConfiguration != nil, identity != "unknown", let tcp = flow as? NEAppProxyTCPFlow,
-           let endpoint = tcp.remoteEndpoint as? NWHostEndpoint,
-           Self.isLoopback(endpoint.hostname) { return false }
         queue.async {
             guard self.active, (self.aiConfiguration != nil ? identity != "unknown" : ["selected", "helper"].contains(identity)), self.closers.count < (self.aiConfiguration == nil ? 128 : 1024) else {
                 self.count("rejected_identity_or_capacity")
@@ -92,14 +87,15 @@ final class AppProbeProvider: NEAppProxyProvider {
                 } else {
                     // Prefer metadata's original name; retain numeric destinations
                     // when low-level clients have already resolved them.
-                    let candidate = (flow.remoteHostname.flatMap { $0.isEmpty ? nil : $0 } ?? endpoint.hostname).lowercased()
+                    let local = self.aiConfiguration != nil && Self.isLoopback(endpoint.hostname)
+                    let candidate = local ? endpoint.hostname : (flow.remoteHostname.flatMap { $0.isEmpty ? nil : $0 } ?? endpoint.hostname).lowercased()
                     guard let port = UInt16(endpoint.port), port > 0,
                           SOCKSConnect.request(host: candidate, port: port) != nil,
                           self.aiConfiguration != nil || (["example.com", "example.org"].contains(candidate) && port == 443) else {
                         self.count("rejected_missing_or_unexpected_hostname"); self.reject(flow); return
                     }
                     self.count("hostname_tcp_" + identity)
-                    let bridge = AppProbeTCPBridge(flow: tcp, host: candidate, port: port, queue: self.queue,
+                    let bridge = AppProbeTCPBridge(flow: tcp, host: candidate, port: port, local: local, queue: self.queue,
                                                    count: self.count, finished: finished)
                     self.closers[id] = { bridge.close() }; bridge.start()
                 }
@@ -116,12 +112,18 @@ final class AppProbeProvider: NEAppProxyProvider {
         return true
     }
 
-    private static func isLoopback(_ host: String) -> Bool {
+    static func isLoopback(_ host: String) -> Bool {
         var address = in_addr()
         if host.withCString({ inet_pton(AF_INET, $0, &address) }) == 1 {
             return UInt32(bigEndian: address.s_addr) >> 24 == 127
         }
-        return host == "::1" || host.lowercased() == "localhost"
+        var v6 = in6_addr()
+        if host.withCString({ inet_pton(AF_INET6, $0, &v6) }) == 1 {
+            let bytes = withUnsafeBytes(of: &v6) { Array($0) }
+            if bytes.prefix(15).allSatisfy({ $0 == 0 }), bytes[15] == 1 { return true }
+            if bytes.prefix(10).allSatisfy({ $0 == 0 }), bytes[10] == 255, bytes[11] == 255, bytes[12] == 127 { return true }
+        }
+        return host.lowercased() == "localhost"
     }
 
     private func startDNS(_ flow: NEAppProxyFlow, id: UUID, identity: String, finished: @escaping () -> Void) {
@@ -159,7 +161,7 @@ final class AppProbeProvider: NEAppProxyProvider {
     private func count(_ key: String) {
         counts[key, default: 0] += 1
         let value = counts[key]!
-        if ["udp_sent", "udp_received"].contains(key), value > 8, value & (value - 1) != 0 { return }
+        if ["udp_sent", "udp_received", "local_udp_sent", "local_udp_received"].contains(key), value > 8, value & (value - 1) != 0 { return }
         appLog.notice("app_counter \(key, privacy: .public)=\(self.counts[key]!, privacy: .public)")
     }
 }
@@ -176,14 +178,18 @@ private final class AppProbeTCPBridge {
     let queue: DispatchQueue
     let count: (String) -> Void
     let finished: () -> Void
-    let connection = NWConnection(host: "127.0.0.1", port: 7897, using: .tcp)
+    let connection: NWConnection
+    let local: Bool
     var closed = false
     var clientEOF = false
     var remoteEOF = false
     var timer: DispatchWorkItem?
 
-    init(flow: NEAppProxyTCPFlow, host: String, port: UInt16, queue: DispatchQueue,
+    init(flow: NEAppProxyTCPFlow, host: String, port: UInt16, local: Bool, queue: DispatchQueue,
          count: @escaping (String) -> Void, finished: @escaping () -> Void) {
+        self.local = local
+        self.connection = local ? NWConnection(host: Network.NWEndpoint.Host(host), port: Network.NWEndpoint.Port(rawValue: port)!, using: .tcp)
+                                : NWConnection(host: "127.0.0.1", port: 7897, using: .tcp)
         self.flow = flow; self.host = host; self.port = port; self.queue = queue; self.count = count; self.finished = finished
     }
     func start() {
@@ -193,6 +199,7 @@ private final class AppProbeTCPBridge {
             switch state {
             case .ready:
                 self.connection.stateUpdateHandler = nil
+                if self.local { self.open(); return }
                 self.send(Data([5, 1, 0])) {
                     self.readExact(2) { data in
                         guard data == Data([5, 0]), let request = SOCKSConnect.request(host: self.host, port: self.port) else {
@@ -240,7 +247,7 @@ private final class AppProbeTCPBridge {
                 self.timer?.cancel()
                 // The 30-second deadline covers setup only. Streaming responses
                 // and WebSockets live until EOF, error or provider shutdown.
-                self.count("socks_connected"); self.readClient(); self.readRemote()
+                self.count(self.local ? "local_tcp_connected" : "socks_connected"); self.readClient(); self.readRemote()
             }
         }
     }
