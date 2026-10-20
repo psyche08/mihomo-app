@@ -62,9 +62,15 @@ is required before any production claim.
 Independent App IDs and host/extension capabilities are registered. Cloud Build
 23 (`6c799d7e`) compiled and created an archive, but its default App Store and
 Development exports failed: their provisioning profiles do not permit the
-`dns-proxy-systemextension` entitlement. Configure **Developer ID** distribution
-and the **Notarize** post-action on the `DNS Identity Probe` workflow before
-rebuilding. The public workflow API used here does not expose those UI settings.
+`dns-proxy-systemextension` entitlement. Keep Archive's **Distribution
+Preparation** set to **None** and add a **Notarize** post-action to the
+`DNS Identity Probe` workflow before rebuilding. Developer ID is not an option
+in that Cloud dropdown (it is a local Xcode export option). Apple's Cloud
+workflow supports notarization through the post-action; the public workflow
+API used here does not expose that post-action configuration. The next build
+must still verify the exported entitlements and provisioning profiles; adding
+Notarize alone is not evidence that the signing mismatch is resolved.
+See [Apple's Cloud notarization demonstration](https://developer.apple.com/videos/play/wwdc2023/10224/?time=807).
 No probe was installed or activated, and no real-flow identity claim follows
 from this build. The existing Local DoH profile remained healthy; both unsigned
 baseline clients resolved the same fixed test name to Fake IP.
