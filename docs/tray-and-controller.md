@@ -324,3 +324,39 @@ root-owned; Desktop and CLI receive typed state/results rather than the secret.
 - `Exit`: cancel user-process tasks, tear down the SwiftUI host, remove the
   status item, then terminate only the Swift user process;
   launchd keeps networking alive.
+
+## Profile network settings
+
+Use **Profiles › Edit Profile › Network Settings…** to update the YAML draft,
+then **Validate & Apply** (active profile) or **Validate & Save** (inactive).
+The native editor uses the existing bundled-core validation and authenticated
+profile transaction, including runtime health verification and rollback.
+
+- **Mixed port** gives HTTP and SOCKS5 the same listener; separate `port` and
+  `socks-port` listeners are disabled with `0`. Existing mixed/HTTP/SOCKS ports
+  seed the field, in that order, with `7897` used only for a new listener. The
+  Config dashboard displays actual controller ports and uses the mixed listener
+  as both protocol endpoints. Missing/disabled ports display **Off**.
+- **TUN stack** supports `mixed`, `system`, and `gvisor`. Mixed uses system TCP
+  and gVisor UDP. Editing the stack does not enable Enhanced TUN or change its
+  Local DoH approval prerequisites.
+- **Per-app VPN routing** is process-based routing inside Mihomo's TUN, not
+  Apple's MDM Per-App VPN. Choose application bundles and either proxy only the
+  selected apps or bypass them. Bundle-prefix matching includes nested helpers;
+  external services and processes without an identified bundle do not match.
+- **Only selected apps** prepends a rule to the selected existing policy for
+  each bundle, a REJECT fallback for unsupported UDP, and then `MATCH,DIRECT`.
+  This explicitly makes all unmatched traffic direct. **Bypass selected apps**
+  prepends DIRECT rules and leaves remaining traffic to the profile's rules.
+  Both set Rule mode and process discovery to `always`. Changing mode to Global
+  or Direct, or disabling process discovery later, overrides these semantics.
+- **Use profile rules** removes the generated app rules. Original profile rules
+  are retained underneath the marked block. Mode/process settings remain at
+  their last saved values; the chooser is not an undo of unrelated YAML edits.
+
+A comment records the chooser values; YAML remains authoritative for the port
+and stack. The editor replaces its marked app-rule block on subsequent edits.
+Custom listeners, merged mappings and ambiguous/duplicate managed keys require
+manual YAML editing rather than guessing how to rewrite them. Arbitrary policy
+names still have to pass the bundled core's validator before saving. No new
+controller mutation, privileged shell command, or GUI-owned core is introduced.

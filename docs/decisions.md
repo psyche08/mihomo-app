@@ -108,3 +108,49 @@ always-on HTTPS resolver.
 
 DNS messages do not carry source-process identity. A single listener cannot
 reliably distinguish macOS from Mihomo and would permit recursive forwarding.
+
+## 2026-10-20: per-app routing, mixed ports, and Surge comparison
+
+The per-app UI compiles explicit bundle selections into Mihomo process rules in
+the source profile. This reuses the existing validated profile activation and
+rollback path instead of adding a second policy store or a generic privileged
+controller patch. The original rules remain intact below a replaceable marked
+block. HTTP and SOCKS5 share `mixed-port`; dashboard endpoints come from actual
+controller readback rather than example port numbers.
+
+Research sources: [Surge Mac release notes](https://nssurge.com/support/mac/release-notes/)
+and the [official stable appcast](https://www.nssurge.com/mac/latest/appcast-signed.xml)
+used by that JavaScript page. At review time the feed begins with 6.10.0; this is
+not a claim about beta releases. The following are recommendations, not shipped
+features:
+
+| Candidate | Surge reference | Fit for MihomoBox |
+|---|---|---|
+| Effective-profile diff | 6.9 CLI `profile diff` | High: compare source and daemon-normalized settings, redact credentials before returning anything over XPC. |
+| Rule explanation | 6.9 CLI `rule match` / `rule explain` | High: first explain the already-reported connection rule and chain. Offline simulation needs a core API to avoid approximating rule semantics. |
+| Persistent event timeline | 6.6 Logbook | High: bounded lifecycle events for profile apply/rollback, DNS mode and wake recovery. Keep DNS names, subscription URLs and credentials out. |
+| UDP diagnostics | 6.10 test diagnostics | High: distinguish unsupported UDP, no egress and timeout; the existing HTTP latency probe cannot establish UDP capability. |
+| Aggregated metrics | 6.9 `/metrics` | Medium: expose counters through authenticated XPC first; a new HTTP endpoint would require a separate access-control design. |
+| Rich profile diagnostics | 6.10 language support | Medium: retain the pinned-core validator; add policy-reference diagnostics and line locations without logging profile contents. |
+
+### UDP Fast Path boundary
+
+[Surge's VM UDP Fast Path](https://kb.nssurge.com/surge-knowledge-base/technotes/udp-fast-path)
+is a Gateway VM mechanism, not a macOS Enhanced-mode switch. It changes a
+high-connection client's UDP from per-flow L4 proxying to direct L3 forwarding.
+It protects destination ports below 1024 and Fake-IP destinations and supports a
+per-device opt-out. It bypasses proxy rules; a `NETWORK,udp,DIRECT` rule is not an
+equivalent implementation and does not eliminate Mihomo's flow-management cost.
+
+MihomoBox currently supervises an upstream checksummed binary and has no Gateway
+VM data plane. A genuine equivalent needs a separately designed and benchmarked
+core/gateway path, including source-client isolation, Fake-IP and IPv6 handling,
+flow lifecycle, network changes, and explicit rule-bypass behavior. This change
+adds no automatic UDP bypass and makes no Fast Path throughput claim. A narrower
+opt-in per-app UDP DIRECT policy is feasible, but should be presented as direct
+routing and selected explicitly rather than labelled as L3 acceleration.
+
+Mihomo implementation references: [process routing rules](https://wiki.metacubex.one/config/rules/)
+and [TUN stacks](https://wiki.metacubex.one/config/inbound/tun/). The shipped
+`v1.19.30` binary, rather than newer online documentation alone, validates the
+generated profile syntax.

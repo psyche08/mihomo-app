@@ -6,6 +6,18 @@ import XCTest
 final class ControllerModelsTests: XCTestCase {
   private let decoder = JSONDecoder()
 
+  func testProxyEndpointsUseTheKernelMixedPortWithoutInventedDefaults() {
+    XCTAssertEqual(DashboardConfiguration().httpProxyPort, 0)
+    XCTAssertEqual(DashboardConfiguration().socksProxyPort, 0)
+    let mixed = DashboardConfiguration(mixedPort: 7897, httpPort: 7890, socksPort: 7891)
+    XCTAssertEqual(mixed.httpProxyPort, 7897)
+    XCTAssertEqual(mixed.socksProxyPort, 7897)
+    let separate = DashboardConfiguration(mixedPort: 0, httpPort: 8080, socksPort: 1080)
+    XCTAssertEqual(separate.httpProxyPort, 8080)
+    XCTAssertEqual(separate.socksProxyPort, 1080)
+  }
+
+
   func testVersionDefaultsMissingFieldsAndIgnoresUnknownFields() throws {
     let version = try decode(
       ControllerVersion.self,

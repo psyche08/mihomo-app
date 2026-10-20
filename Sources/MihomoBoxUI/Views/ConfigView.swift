@@ -216,13 +216,17 @@ public struct ConfigView: View {
         .fixedSize(horizontal: false, vertical: true)
         .padding(.horizontal, 8)
 
-        sectionDivider("PORTS")
+        sectionDivider("PROXY PORTS")
 
         HStack(spacing: 10) {
-          portField("Mixed Port", value: store.configuration.mixedPort)
-          portField("HTTP Port", value: store.configuration.httpPort)
-          portField("SOCKS Port", value: store.configuration.socksPort)
+          portField("Mixed Listener", value: store.configuration.mixedPort)
+          portField("HTTP Endpoint", value: store.configuration.httpProxyPort)
+          portField("SOCKS5 Endpoint", value: store.configuration.socksProxyPort)
         }
+        Text("Ports are read from Mihomo. Configure a shared HTTP/SOCKS5 port and per-app routing in Profiles › Edit Profile › Network Settings.")
+          .font(.system(size: 10))
+          .foregroundStyle(DashboardTheme.muted)
+          .fixedSize(horizontal: false, vertical: true)
       }
     }
   }
@@ -654,7 +658,7 @@ public struct ConfigView: View {
         .font(.system(size: 9, weight: .medium))
         .foregroundStyle(DashboardTheme.muted.opacity(0.68))
       HStack(spacing: 6) {
-        Text(value.formatted(.number.grouping(.never)))
+        Text(value > 0 ? value.formatted(.number.grouping(.never)) : "Off")
           .font(.system(size: 11, weight: .medium, design: .monospaced))
           .monospacedDigit()
         Spacer(minLength: 0)

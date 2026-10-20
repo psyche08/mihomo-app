@@ -477,6 +477,10 @@ public struct DashboardConfiguration: Equatable, Sendable {
   public var httpPort: Int
   public var socksPort: Int
 
+  /// Prefer the shared listener; never invent an endpoint before readback.
+  public var httpProxyPort: Int { mixedPort > 0 ? mixedPort : httpPort }
+  public var socksProxyPort: Int { mixedPort > 0 ? mixedPort : socksPort }
+
   public init(
     mode: DashboardProxyMode = .rule,
     enhancedTUNEnabled: Bool = true,
@@ -488,9 +492,9 @@ public struct DashboardConfiguration: Equatable, Sendable {
     findProcessMode: ControllerFindProcessMode = .strict,
     tunStack: DashboardTUNStack = .mixed,
     networkInterface: String = "Automatic",
-    mixedPort: Int = 7890,
-    httpPort: Int = 7891,
-    socksPort: Int = 7892
+    mixedPort: Int = 0,
+    httpPort: Int = 0,
+    socksPort: Int = 0
   ) {
     self.mode = mode
     self.enhancedTUNEnabled = enhancedTUNEnabled

@@ -1,5 +1,7 @@
 import AppKit
 import Foundation
+import MihomoDNSCore
+import UniformTypeIdentifiers
 
 @MainActor
 enum ProfileEditorPrompt {
@@ -50,6 +52,7 @@ private final class ProfileEditorWindowController: NSWindowController,
   private let detailLabel = NSTextField(labelWithString: "")
   private let managedFieldsLabel = NSTextField(wrappingLabelWithString: "")
   private let saveButton = NSButton(title: "Validate & Save", target: nil, action: nil)
+  private let networkButton = NSButton(title: "Network Settings…", target: nil, action: nil)
   private let cancelButton = NSButton(title: "Cancel", target: nil, action: nil)
   private var finished = false
   private var applyingHighlight = false
@@ -136,6 +139,8 @@ private final class ProfileEditorWindowController: NSWindowController,
     errorLabel.maximumNumberOfLines = 3
     errorLabel.isHidden = true
 
+    networkButton.target = self
+    networkButton.action = #selector(editNetworkSettings)
     cancelButton.target = self
     cancelButton.action = #selector(cancel)
     cancelButton.keyEquivalent = "\u{1b}"
@@ -146,7 +151,7 @@ private final class ProfileEditorWindowController: NSWindowController,
     saveButton.keyEquivalentModifierMask = [.command]
 
     for view in [
-      title, detailLabel, managedFieldsLabel, scroll, errorLabel, cancelButton, saveButton,
+      title, detailLabel, managedFieldsLabel, networkButton, scroll, errorLabel, cancelButton, saveButton,
     ] {
       view.translatesAutoresizingMaskIntoConstraints = false
       contentView.addSubview(view)
@@ -163,7 +168,9 @@ private final class ProfileEditorWindowController: NSWindowController,
       managedFieldsLabel.topAnchor.constraint(equalTo: detailLabel.bottomAnchor, constant: 6),
       scroll.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16),
       scroll.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
-      scroll.topAnchor.constraint(equalTo: managedFieldsLabel.bottomAnchor, constant: 10),
+      networkButton.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+      networkButton.topAnchor.constraint(equalTo: managedFieldsLabel.bottomAnchor, constant: 8),
+      scroll.topAnchor.constraint(equalTo: networkButton.bottomAnchor, constant: 8),
       scroll.bottomAnchor.constraint(equalTo: errorLabel.topAnchor, constant: -10),
       errorLabel.leadingAnchor.constraint(equalTo: scroll.leadingAnchor),
       errorLabel.trailingAnchor.constraint(
@@ -211,11 +218,30 @@ private final class ProfileEditorWindowController: NSWindowController,
     window?.close()
   }
 
+  @objc private func editNetworkSettings() {
+    guard !saving else { return }
+    do {
+      let form = try ProfileNetworkSettingsForm(source: textView.string)
+      guard let updated = form.run() else { return }
+      let range = NSRange(location: 0, length: (textView.string as NSString).length)
+      if textView.shouldChangeText(in: range, replacementString: updated) {
+        textView.replaceCharacters(in: range, with: updated)
+        textView.didChangeText()
+        applyHighlighting()
+      }
+    } catch {
+      errorLabel.stringValue = error.localizedDescription
+      errorLabel.textColor = .systemRed
+      errorLabel.isHidden = false
+    }
+  }
+
   @objc private func save() {
     guard !saving else { return }
     pendingHighlight?.cancel()
     saving = true
     saveButton.isEnabled = false
+    networkButton.isEnabled = false
     cancelButton.isEnabled = false
     errorLabel.stringValue = "Validating with Mihomo…"
     errorLabel.textColor = .secondaryLabelColor
@@ -226,6 +252,7 @@ private final class ProfileEditorWindowController: NSWindowController,
       if let message = await saveOperation(contents) {
         saving = false
         saveButton.isEnabled = true
+        networkButton.isEnabled = true
         cancelButton.isEnabled = true
         errorLabel.stringValue = message
         errorLabel.textColor = .systemRed
@@ -333,5 +360,107 @@ private final class ProfileEditorWindowController: NSWindowController,
       }
       offset = NSMaxRange(line)
     }
+  }
+}
+
+
+/// Produces a reviewable YAML draft. Saving remains a separate, validated
+/// profile transaction; the chooser never changes the running network.
+@MainActor
+private final class ProfileNetworkSettingsForm: NSObject {
+  private let source: String
+  private let alert = NSAlert()
+  private let port = NSTextField()
+  private let stack = NSPopUpButton()
+  private let mode = NSPopUpButton()
+  private let policy = NSTextField()
+  private let paths = NSTextView()
+  private let error = NSTextField(wrappingLabelWithString: "")
+
+  init(source: String) throws {
+    self.source = source
+    let settings = try NetworkProfileSettings.read(from: source)
+    super.init()
+    alert.messageText = "Profile Network Settings"
+    alert.informativeText = "HTTP and SOCKS5 share one mixed port. Per-app routing requires Enhanced TUN and Rule mode; it includes helper processes inside each selected app. Changes below update the YAML draft."
+    alert.addButton(withTitle: "Update Draft")
+    alert.addButton(withTitle: "Cancel")
+    port.stringValue = String(settings.mixedPort)
+    stack.addItems(withTitles: ["mixed", "system", "gvisor"])
+    stack.selectItem(withTitle: settings.tunStack)
+    mode.addItems(withTitles: ["Use profile rules", "Only selected apps use policy; others DIRECT", "Selected apps DIRECT; others use profile rules"])
+    mode.selectItem(at: NetworkProfileSettings.ApplicationMode.allCases.firstIndex(of: settings.applicationMode) ?? 0)
+    policy.stringValue = settings.policy
+    policy.placeholderString = "Existing proxy or policy group name"
+    paths.string = settings.applicationPaths.joined(separator: "\n")
+    paths.isRichText = false
+    paths.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+    paths.isAutomaticQuoteSubstitutionEnabled = false
+    paths.isAutomaticDashSubstitutionEnabled = false
+    paths.isAutomaticTextReplacementEnabled = false
+    paths.autoresizingMask = [.width]
+    paths.textContainer?.widthTracksTextView = true
+    let scroll = NSScrollView()
+    scroll.hasVerticalScroller = true
+    scroll.borderType = .bezelBorder
+    scroll.documentView = paths
+    let choose = NSButton(title: "Choose Applications…", target: self, action: #selector(chooseApplications))
+    error.textColor = .systemRed
+    let notice = NSTextField(wrappingLabelWithString: "Use one absolute .app path per line. Only-selected mode sends unmatched traffic directly, including traffic whose process cannot be identified. Global/Direct mode overrides app rules. Custom listeners must be edited in YAML.")
+    notice.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+    notice.textColor = .secondaryLabelColor
+    let content = NSStackView(views: [
+      NSTextField(labelWithString: "HTTP / SOCKS5 mixed port"), port,
+      NSTextField(labelWithString: "TUN stack (mixed: system TCP + gVisor UDP)"), stack,
+      NSTextField(labelWithString: "Per-app VPN routing"), mode,
+      NSTextField(labelWithString: "Selected apps' policy"), policy,
+      choose, scroll, notice, error,
+    ])
+    content.orientation = .vertical
+    content.alignment = .leading
+    content.spacing = 6
+    content.translatesAutoresizingMaskIntoConstraints = false
+    NSLayoutConstraint.activate([
+      content.widthAnchor.constraint(equalToConstant: 560),
+      port.widthAnchor.constraint(equalTo: content.widthAnchor),
+      policy.widthAnchor.constraint(equalTo: content.widthAnchor),
+      scroll.widthAnchor.constraint(equalTo: content.widthAnchor),
+      scroll.heightAnchor.constraint(equalToConstant: 100),
+      notice.widthAnchor.constraint(equalTo: content.widthAnchor),
+      error.widthAnchor.constraint(equalTo: content.widthAnchor),
+    ])
+    content.layoutSubtreeIfNeeded()
+    content.setFrameSize(content.fittingSize)
+    alert.accessoryView = content
+  }
+
+  func run() -> String? {
+    while alert.runModal() == .alertFirstButtonReturn {
+      do {
+        let settings = NetworkProfileSettings(
+          mixedPort: Int(port.stringValue) ?? 0,
+          tunStack: stack.titleOfSelectedItem ?? "mixed",
+          applicationMode: NetworkProfileSettings.ApplicationMode.allCases[max(0, mode.indexOfSelectedItem)],
+          applicationPaths: paths.string.components(separatedBy: .newlines).filter { !$0.isEmpty },
+          policy: policy.stringValue
+        )
+        return try settings.applying(to: source)
+      } catch {
+        self.error.stringValue = error.localizedDescription
+      }
+    }
+    return nil
+  }
+
+  @objc private func chooseApplications() {
+    let panel = NSOpenPanel()
+    panel.allowedContentTypes = [.applicationBundle]
+    panel.allowsMultipleSelection = true
+    panel.canChooseDirectories = false
+    panel.canChooseFiles = true
+    panel.directoryURL = URL(fileURLWithPath: "/Applications")
+    guard panel.runModal() == .OK else { return }
+    let existing = paths.string.components(separatedBy: .newlines).filter { !$0.isEmpty }
+    paths.string = Array(Set(existing + panel.urls.map(\.path))).sorted().joined(separator: "\n")
   }
 }
