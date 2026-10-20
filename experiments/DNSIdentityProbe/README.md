@@ -80,3 +80,13 @@ After the signed bundle is verified and ordinary macOS activation is approved,
 matrix and disables the probe in `finally`. It intentionally always records
 `strict_dns_verified: false`: the aggregate observations still require analysis
 and the remaining coverage/failure tests above. Stop if rollback is not confirmed.
+
+## Archive and export entitlement variants
+
+Source entitlements use `dns-proxy`, as required for development/App Store
+archives. Cloud uses Xcode 27, whose Developer ID exporter supports conversion
+to `dns-proxy-systemextension`. The export audit still requires the suffixed
+value in both signed binaries and their embedded profiles; it never accepts the
+source/development variant as a distributable system extension. Builds 23/24
+exposed the mistake of using the Developer ID variant in source entitlements.
+See [Apple DTS: Exporting a Developer ID Network Extension](https://developer.apple.com/forums/thread/737894).
