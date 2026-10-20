@@ -3,18 +3,30 @@ import NetworkExtension
 import Security
 
 // A separate VPN configuration in the existing independent test host.
-// Only the controlled selected client and its signed helper are captured.
+// Controlled tests and explicit installed-AI-app sessions use separate rule sets.
 final class AppProbeHost {
     private let extensionID = "dev.linsheng.mihomo-dns-probe.extension"
     private let identifiers = ["dev.linsheng.mihomo-dns-probe.selected",
                                "dev.linsheng.mihomo-dns-probe.selected.helper"]
     private var manager: NEAppProxyProviderManager?
+    private var aiTargets: AIAppTargets?
+    private var persistent = false
 
     private func finish(_ message: String, _ code: Int32 = 0) -> Never {
         print(message); fflush(stdout); exit(code)
     }
 
     func start(_ command: String) {
+        if ["--app-ai-inventory", "--app-ai-session", "--app-ai-enable"].contains(command) {
+            do { aiTargets = try AIAppTargets() } catch { finish("app_ai_target_discovery_failed", 1) }
+            if command == "--app-ai-inventory" {
+                let data = try! JSONSerialization.data(withJSONObject: aiTargets!.targets.map {
+                    ["id": $0.id, "path": $0.path, "category": $0.category]
+                }, options: [.prettyPrinted, .sortedKeys])
+                finish(String(decoding: data, as: UTF8.self))
+            }
+            persistent = command == "--app-ai-enable"
+        }
         NEAppProxyProviderManager.loadAllFromPreferences { managers, error in
             DispatchQueue.main.async {
                 guard error == nil else { self.finish("app_preferences_error", 1) }
@@ -80,14 +92,19 @@ final class AppProbeHost {
         }
         let selected = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/Clients/MihomoDNSSelected.app")
         let paths = [selected, selected.appendingPathComponent("Contents/Library/LoginItems/MihomoDNSHelper.app")]
-        let rules = zip(identifiers, paths).compactMap { rule(identifier: $0, path: $1) }
-        guard rules.count == identifiers.count else { finish("app_client_signature_invalid", 1) }
+        let rules = aiTargets?.rules ?? zip(identifiers, paths).compactMap { rule(identifier: $0, path: $1) }
+        guard aiTargets != nil || rules.count == identifiers.count else { finish("app_client_signature_invalid", 1) }
         let config = NETunnelProviderProtocol()
         config.providerBundleIdentifier = extensionID
         config.serverAddress = "Independent bounded App Proxy experiment"
-        config.providerConfiguration = ["deadline": Date().timeIntervalSince1970 + 300, "strictUnknown": true]
+        if let aiTargets {
+            config.providerConfiguration = ["mode": "ai", "targets": aiTargets.targets.map(\.record),
+                                            "deadline": persistent ? 0 : Date().timeIntervalSince1970 + 300]
+        } else {
+            config.providerConfiguration = ["deadline": Date().timeIntervalSince1970 + 300, "strictUnknown": true]
+        }
         manager.protocolConfiguration = config
-        manager.localizedDescription = "Mihomo App Proxy test (selected test clients only)"
+        manager.localizedDescription = aiTargets == nil ? "Mihomo App Proxy test (selected test clients only)" : "Mihomo App Proxy — ChatGPT, Codex, Claude"
         manager.appRules = rules
         manager.isEnabled = true
         manager.saveToPreferences { error in
@@ -97,14 +114,17 @@ final class AppProbeHost {
                     DispatchQueue.main.async {
                         guard error == nil, manager.isEnabled,
                               manager.routingMethod == .sourceApplication,
-                              Set(manager.appRules.map(\.matchSigningIdentifier)) == Set(self.identifiers),
-                              (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == self.extensionID else {
+                              self.sameRules(manager.appRules, rules),
+                              (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == self.extensionID,
+                              NSDictionary(dictionary: (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration ?? [:]).isEqual(to: config.providerConfiguration ?? [:]) else {
                             print("app_readback_failed"); self.disable(); return
                         }
                         do {
                             try manager.connection.startVPNTunnel()
-                            print("app_probe_start_requested; auto_disable_after=240s"); fflush(stdout)
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 240) { self.disable() }
+                            print("app_probe_start_requested; persistent=\(self.persistent)"); fflush(stdout)
+                            if self.persistent { self.confirmPersistentConnection(remaining: 30) } else {
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 240) { self.disable() }
+                            }
                         } catch {
                             print("app_start_failed"); self.disable()
                         }
@@ -112,6 +132,27 @@ final class AppProbeHost {
                 }
             }
         }
+    }
+
+    private func confirmPersistentConnection(remaining: Int) {
+        guard let manager else { finish("app_manager_missing", 1) }
+        if manager.connection.status == .connected { finish("app_ai_enabled; connected=true") }
+        guard remaining > 0 else { print("app_ai_connect_timeout"); disable(); return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            self.confirmPersistentConnection(remaining: remaining - 1)
+        }
+    }
+
+    private func sameRules(_ actual: [NEAppRule], _ expected: [NEAppRule]) -> Bool {
+        guard actual.count == expected.count else { return false }
+        for (a, b) in zip(actual, expected) {
+            guard a.matchSigningIdentifier == b.matchSigningIdentifier else { return false }
+            guard a.matchDesignatedRequirement == b.matchDesignatedRequirement else { return false }
+            guard a.matchPath == b.matchPath else { return false }
+            guard NSArray(array: a.matchDomains ?? []).isEqual(to: b.matchDomains ?? []) else { return false }
+            guard sameRules(a.matchTools ?? [], b.matchTools ?? []) else { return false }
+        }
+        return true
     }
 
     private func disable() {

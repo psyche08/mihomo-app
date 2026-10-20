@@ -154,7 +154,7 @@ Selected DNS flows go to proxied DoH without direct fallback. Selected TCP
 connections to the two fixed public HTTPS test names use SOCKS domain-address
 requests through the existing managed Mihomo mixed listener. A missing or
 unexpected hostname is rejected; numeric cached answers are not assumed to
-prove DNS isolation. Non-DNS UDP is unsupported and rejected. Each flow has a
+prove DNS isolation. Non-DNS UDP is unsupported and rejected. TCP establishment and DNS flows have a
 30-second bound, the session allows at most 128 flows, and only counters are
 logged. No second Mihomo process or production daemon change is introduced.
 
@@ -168,6 +168,7 @@ Additional offline framing checks:
 
 ```sh
 swiftc experiments/DNSIdentityProbe/Extension/SOCKSConnect.swift \
+  experiments/DNSIdentityProbe/Extension/SOCKSDatagram.swift \
   experiments/DNSIdentityProbe/SOCKSTests/main.swift -o /private/tmp/mihomo-app-proxy-socks-tests
 /private/tmp/mihomo-app-proxy-socks-tests
 ```
@@ -211,3 +212,50 @@ DNS support remains unverified: helper requests were observed under the selected
 category rather than independently as `helper`, and the control's answer category
 changed when the session enabled. Resolver scope/coexistence, IPv6, browser
 helpers, application-owned DoH and sleep/wake still require acceptance tests.
+
+## Installed ChatGPT / Codex / Claude routing
+
+The separate `--app-ai-inventory` command discovers installed ChatGPT/Codex and
+Claude applications, their signed Mach-O helpers, native Codex/Claude CLI
+installations, Codex computer-use helpers, and Claude local remote servers.
+It prints only executable identities and paths. OpenAI and Anthropic bundles
+must validate against their observed vendor teams and Apple signing anchor.
+Each rule also pins the executable path and designated requirement. Ad-hoc
+Claude remote servers are pinned to their current code hash. Re-run discovery
+and enable after applications, Homebrew CLI versions or remote servers update.
+Unsigned scripts and arbitrary external MCP tools are not inferred from a
+process-name prefix. Helpers attributed by macOS to their selected parent app
+are covered by that app's rule; independent processes require their own identity.
+
+Terminal and installed supported editor rules use `matchTools` restricted to the
+verified Codex/Claude native CLI executables. They do not select all terminal or
+editor traffic. Current hosts are Terminal, iTerm, Warp, Ghostty, kitty,
+Alacritty and Visual Studio Code. CLI attribution from other launchers still
+requires runtime verification. The extension validates each delivered source
+audit token, designated requirement and executable path before accepting it.
+
+`--app-ai-session` enables this set for a 240-second test (provider deadline
+300 seconds); `--app-ai-enable` explicitly saves a persistent configuration and
+returns only after it is connected. `--app-disable` stops and disables either
+mode. Only the latter command intentionally has no session deadline. This is
+still the independent experiment, not a main-App UI or login-start integration.
+
+AI mode forwards general TCP names, IPv4/IPv6 destinations and ports through the
+managed core's mixed SOCKS listener at `127.0.0.1:7897`. The 30-second TCP limit
+covers establishment only, allowing streaming and WebSockets after connection.
+TCP loopback stays local for authentication callbacks and local MCP services.
+DNS goes through the fixed proxied DoH service. Other UDP uses SOCKS5 UDP
+ASSOCIATE with a loopback relay, rejects fragmented SOCKS datagrams, and expires
+after 180 seconds idle. Upstream UDP support remains dependent on the selected
+node. The provider caps AI mode at 1024 flows. Failure closes the affected flow;
+there is no automatic direct fallback for remote destinations.
+
+Before enabling, use the signed typed profile interface to place
+`PROCESS-NAME,MihomoDNSProbeExtension,Proxy` ahead of other rules in a separate
+profile copied from the user's active profile. Verify Rule mode, port 7897 and
+the expected Proxy selector. The extension no longer exposes each original app
+identity to Mihomo, so this explicit extension rule is required. Preserve the
+original profile for rollback. Do not enable alongside the DNS-only probe.
+General forwarding, especially cached numeric addresses, is not proof of strict
+per-app DNS isolation. System resolver scope, arbitrary helper attribution and
+sleep/wake remain runtime acceptance items.

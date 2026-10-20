@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import Network
 import NetworkExtension
 import os
@@ -11,6 +12,7 @@ final class AppProbeProvider: NEAppProxyProvider {
     private var counts: [String: Int] = [:]
     private var expiry: DispatchWorkItem?
     private var active = false
+    private var aiConfiguration: AIProxyConfiguration?
     private lazy var session: URLSession = {
         let c = URLSessionConfiguration.ephemeral
         c.urlCache = nil; c.httpCookieStorage = nil
@@ -21,10 +23,20 @@ final class AppProbeProvider: NEAppProxyProvider {
     }()
 
     override func startProxy(options: [String: Any]?, completionHandler: @escaping (Error?) -> Void) {
-        guard let raw = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration,
-              let config = try? ProbeSessionConfiguration(options: raw, now: Date().timeIntervalSince1970),
-              config.strictUnknown else {
+        guard let raw = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration else {
             completionHandler(NSError(domain: "AppProbe", code: 1)); return
+        }
+        let deadline: TimeInterval?
+        if raw["mode"] as? String == "ai" {
+            guard let config = try? AIProxyConfiguration(raw, now: Date().timeIntervalSince1970) else {
+                completionHandler(NSError(domain: "AppProbe", code: 1)); return
+            }
+            aiConfiguration = config; deadline = config.deadline
+        } else {
+            guard let config = try? ProbeSessionConfiguration(options: raw, now: Date().timeIntervalSince1970), config.strictUnknown else {
+                completionHandler(NSError(domain: "AppProbe", code: 1)); return
+            }
+            deadline = config.deadline
         }
         let settings = NETunnelNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
         let dns = NEDNSSettings(servers: ["1.1.1.1"])
@@ -34,12 +46,14 @@ final class AppProbeProvider: NEAppProxyProvider {
             self.queue.async {
                 guard error == nil else { completionHandler(error); return }
                 self.active = true
+                if let deadline {
                 let expiry = DispatchWorkItem { [weak provider = self] in
                     provider?.active = false
                     provider?.cancelProxyWithError(NSError(domain: "AppProbe", code: 2))
                 }
                 self.expiry = expiry
-                self.queue.asyncAfter(deadline: .now() + max(0, config.deadline - Date().timeIntervalSince1970), execute: expiry)
+                self.queue.asyncAfter(deadline: .now() + max(0, deadline - Date().timeIntervalSince1970), execute: expiry)
+                }
                 appLog.notice("app_probe_started")
                 completionHandler(nil)
             }
@@ -57,9 +71,14 @@ final class AppProbeProvider: NEAppProxyProvider {
     }
 
     override func handleNewFlow(_ flow: NEAppProxyFlow) -> Bool {
-        let identity = classifyProbeIdentity(flow.metaData)
+        let identity = aiConfiguration?.classify(flow.metaData) ?? (aiConfiguration == nil ? classifyProbeIdentity(flow.metaData) : "unknown")
+        // Authentication callbacks and local MCP services must remain local.
+        // This is an explicit loopback exception, not an upstream fallback.
+        if aiConfiguration != nil, identity != "unknown", let tcp = flow as? NEAppProxyTCPFlow,
+           let endpoint = tcp.remoteEndpoint as? NWHostEndpoint,
+           Self.isLoopback(endpoint.hostname) { return false }
         queue.async {
-            guard self.active, ["selected", "helper"].contains(identity), self.closers.count < 128 else {
+            guard self.active, (self.aiConfiguration != nil ? identity != "unknown" : ["selected", "helper"].contains(identity)), self.closers.count < (self.aiConfiguration == nil ? 128 : 1024) else {
                 self.count("rejected_identity_or_capacity")
                 self.reject(flow); return
             }
@@ -71,23 +90,38 @@ final class AppProbeProvider: NEAppProxyProvider {
                 if endpoint.port == "53" {
                     self.startDNS(flow, id: id, identity: identity, finished: finished)
                 } else {
-                    // Fixed allowlist keeps this prototype from becoming a general proxy.
-                    // Never reinterpret a cached real/Fake IP as an independently resolved hostname.
-                    let candidate = (flow.remoteHostname ?? endpoint.hostname).lowercased()
-                    guard ["example.com", "example.org"].contains(candidate), endpoint.port == "443" else {
+                    // Prefer metadata's original name; retain numeric destinations
+                    // when low-level clients have already resolved them.
+                    let candidate = (flow.remoteHostname.flatMap { $0.isEmpty ? nil : $0 } ?? endpoint.hostname).lowercased()
+                    guard let port = UInt16(endpoint.port), port > 0,
+                          SOCKSConnect.request(host: candidate, port: port) != nil,
+                          self.aiConfiguration != nil || (["example.com", "example.org"].contains(candidate) && port == 443) else {
                         self.count("rejected_missing_or_unexpected_hostname"); self.reject(flow); return
                     }
                     self.count("hostname_tcp_" + identity)
-                    let bridge = AppProbeTCPBridge(flow: tcp, host: candidate, queue: self.queue,
+                    let bridge = AppProbeTCPBridge(flow: tcp, host: candidate, port: port, queue: self.queue,
                                                    count: self.count, finished: finished)
                     self.closers[id] = { bridge.close() }; bridge.start()
                 }
-            } else if flow is NEAppProxyUDPFlow {
-                self.startDNS(flow, id: id, identity: identity, finished: finished)
+            } else if let udp = flow as? NEAppProxyUDPFlow {
+                if self.aiConfiguration != nil {
+                    let bridge = AppProxyUDPBridge(flow: udp, queue: self.queue, forwardDNS: { query, reply in
+                        self.forwardDNS(query, identity: identity, reply: reply)
+                    }, count: self.count, finished: finished)
+                    self.closers[id] = { bridge.close() }; bridge.start()
+                } else { self.startDNS(flow, id: id, identity: identity, finished: finished) }
             } else { self.count("rejected_flow_type"); self.reject(flow) }
         }
         // Accepted flows are always either forwarded or explicitly closed; no bypass.
         return true
+    }
+
+    private static func isLoopback(_ host: String) -> Bool {
+        var address = in_addr()
+        if host.withCString({ inet_pton(AF_INET, $0, &address) }) == 1 {
+            return UInt32(bigEndian: address.s_addr) >> 24 == 127
+        }
+        return host == "::1" || host.lowercased() == "localhost"
     }
 
     private func startDNS(_ flow: NEAppProxyFlow, id: UUID, identity: String, finished: @escaping () -> Void) {
@@ -124,6 +158,8 @@ final class AppProbeProvider: NEAppProxyProvider {
 
     private func count(_ key: String) {
         counts[key, default: 0] += 1
+        let value = counts[key]!
+        if ["udp_sent", "udp_received"].contains(key), value > 8, value & (value - 1) != 0 { return }
         appLog.notice("app_counter \(key, privacy: .public)=\(self.counts[key]!, privacy: .public)")
     }
 }
@@ -136,6 +172,7 @@ private final class AppProbeNoRedirects: NSObject, URLSessionTaskDelegate {
 private final class AppProbeTCPBridge {
     let flow: NEAppProxyTCPFlow
     let host: String
+    let port: UInt16
     let queue: DispatchQueue
     let count: (String) -> Void
     let finished: () -> Void
@@ -145,9 +182,9 @@ private final class AppProbeTCPBridge {
     var remoteEOF = false
     var timer: DispatchWorkItem?
 
-    init(flow: NEAppProxyTCPFlow, host: String, queue: DispatchQueue,
+    init(flow: NEAppProxyTCPFlow, host: String, port: UInt16, queue: DispatchQueue,
          count: @escaping (String) -> Void, finished: @escaping () -> Void) {
-        self.flow = flow; self.host = host; self.queue = queue; self.count = count; self.finished = finished
+        self.flow = flow; self.host = host; self.port = port; self.queue = queue; self.count = count; self.finished = finished
     }
     func start() {
         let timer = DispatchWorkItem { [weak self] in self?.close() }
@@ -158,7 +195,7 @@ private final class AppProbeTCPBridge {
                 self.connection.stateUpdateHandler = nil
                 self.send(Data([5, 1, 0])) {
                     self.readExact(2) { data in
-                        guard data == Data([5, 0]), let request = SOCKSConnect.request(host: self.host, port: 443) else {
+                        guard data == Data([5, 0]), let request = SOCKSConnect.request(host: self.host, port: self.port) else {
                             self.close(); return
                         }
                         self.send(request) {
@@ -200,6 +237,9 @@ private final class AppProbeTCPBridge {
         flow.open(withLocalEndpoint: nil) { error in
             self.queue.async {
                 guard !self.closed, error == nil else { self.close(); return }
+                self.timer?.cancel()
+                // The 30-second deadline covers setup only. Streaming responses
+                // and WebSockets live until EOF, error or provider shutdown.
                 self.count("socks_connected"); self.readClient(); self.readRemote()
             }
         }

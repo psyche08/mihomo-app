@@ -14,7 +14,7 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "528EC85F44E34C82351635A3"
+               BlueprintIdentifier = "AA04EEBBB636286130786A8D"
                BuildableName = "MihomoDNSProbe.app"
                BlueprintName = "MihomoDNSProbe"
                ReferencedContainer = "container:DNSIdentityProbe.xcodeproj">
