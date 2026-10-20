@@ -135,3 +135,39 @@ healthy Local DoH are restored. Keep this extension separate from the shipping
 App. Before any further live experiment, investigate Local DoH forwarding
 failures and require a new design for system resolver/cache separation.
 See [the architecture decision](../../docs/decisions.md#signed-runtime-counterexample).
+
+## Connection-level App Proxy experiment
+
+The same independent host now also embeds an App Proxy provider. Source
+entitlements include `app-proxy-provider`; the Cloud export audit requires its
+`app-proxy-provider-systemextension` counterpart in both signed code and profiles.
+The old DNS-only experiment stays disabled. This is not a production feature.
+
+`--app-session` saves a separate `NEAppProxyProviderManager` configuration with
+signed app rules for the selected test client and its helper only. It requests
+the normal macOS VPN authorization. `--app-status` reads its state and
+`--app-disable` stops and disables it, with preference readback. The host disables
+after 240 seconds; the provider independently expires after 300 seconds.
+Never run the DNS-only and App Proxy sessions together.
+
+Selected DNS flows go to proxied DoH without direct fallback. Selected TCP
+connections to the two fixed public HTTPS test names use SOCKS domain-address
+requests through the existing managed Mihomo mixed listener. A missing or
+unexpected hostname is rejected; numeric cached answers are not assumed to
+prove DNS isolation. Non-DNS UDP is unsupported and rejected. Each flow has a
+30-second bound, the session allows at most 128 flows, and only counters are
+logged. No second Mihomo process or production daemon change is introduced.
+
+Client `connect` resolves through `getaddrinfo`, opens TCP, and holds for three
+seconds for route observation; `helper-connect` and `helper-https` exercise
+the signed helper. Existing `system`, `udp`, `tcp`, and `https` modes remain.
+The provider deliberately handles only two test names for TCP. Successful
+compilation or connection forwarding is not proof of arbitrary-app DNS isolation.
+
+Additional offline framing checks:
+
+```sh
+swiftc experiments/DNSIdentityProbe/Extension/SOCKSConnect.swift \
+  experiments/DNSIdentityProbe/SOCKSTests/main.swift -o /private/tmp/mihomo-app-proxy-socks-tests
+/private/tmp/mihomo-app-proxy-socks-tests
+```

@@ -51,7 +51,7 @@ final class DNSProbeProvider: NEDNSProxyProvider {
 
     override func handleNewFlow(_ flow: NEAppProxyFlow) -> Bool {
         guard flow is NEAppProxyUDPFlow || flow is NEAppProxyTCPFlow else { return false }
-        let identity = classify(flow.metaData)
+        let identity = classifyProbeIdentity(flow.metaData)
         let id = UUID()
         let handler = FlowHandler(flow: flow, queue: queue, forward: { [weak self] query, reply in
             self?.forward(query, identity: identity, reply: reply)
@@ -67,24 +67,6 @@ final class DNSProbeProvider: NEDNSProxyProvider {
         return true
     }
 
-    private func classify(_ metadata: NEFlowMetaData) -> String {
-        let claimed = metadata.sourceAppSigningIdentifier
-        guard let token = metadata.sourceAppAuditToken, token.count == 32, !claimed.isEmpty else { return "unknown" }
-        var code: SecCode?
-        guard SecCodeCopyGuestWithAttributes(nil, [kSecGuestAttributeAudit as String: token] as CFDictionary, [], &code) == errSecSuccess,
-              let code, SecCodeCheckValidity(code, [], nil) == errSecSuccess else { return "unknown" }
-        var staticCode: SecStaticCode?
-        guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode else { return "unknown" }
-        var info: CFDictionary?
-        guard SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
-              let values = info as? [String: Any], values[kSecCodeInfoIdentifier as String] as? String == claimed else { return "unknown" }
-        if selectedIDs.contains(claimed) || claimed == controlID {
-            guard values[kSecCodeInfoTeamIdentifier as String] as? String == probeTeam else { return "mismatch" }
-            if claimed == controlID { return "control" }
-            return claimed.hasSuffix(".helper") ? "helper" : "selected"
-        }
-        return "other"
-    }
 
     private func count(_ key: String) {
         counts[key, default: 0] += 1
@@ -135,17 +117,21 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
                     newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
 }
 
-private final class FlowHandler {
+final class FlowHandler {
     let flow: NEAppProxyFlow
     let queue: DispatchQueue
     let forward: (Data, @escaping (Data?) -> Void) -> Void
     let finished: () -> Void
+    let acceptsEndpoint: (NWEndpoint) -> Bool
     var buffer = Data()
     var closed = false
     var timer: DispatchWorkItem?
     init(flow: NEAppProxyFlow, queue: DispatchQueue,
-         forward: @escaping (Data, @escaping (Data?) -> Void) -> Void, finished: @escaping () -> Void) {
-        self.flow = flow; self.queue = queue; self.forward = forward; self.finished = finished
+         forward: @escaping (Data, @escaping (Data?) -> Void) -> Void,
+         acceptsEndpoint: @escaping (NWEndpoint) -> Bool = { _ in true },
+         finished: @escaping () -> Void) {
+        self.flow = flow; self.queue = queue; self.forward = forward
+        self.acceptsEndpoint = acceptsEndpoint; self.finished = finished
     }
     func start() {
         let timer = DispatchWorkItem { [weak self] in self?.close() }; self.timer = timer
@@ -164,7 +150,8 @@ private final class FlowHandler {
             udp.readDatagrams { datagrams, endpoints, error in
                 self.queue.async {
                     guard error == nil, let datagrams, let endpoints, datagrams.count == endpoints.count,
-                          !datagrams.isEmpty, datagrams.count <= 32 else { self.close(); return }
+                          !datagrams.isEmpty, datagrams.count <= 32,
+                          endpoints.allSatisfy(self.acceptsEndpoint) else { self.close(); return }
                     self.forwardUDP(datagrams, endpoints, index: 0, udp: udp)
                 }
             }
@@ -209,4 +196,23 @@ private final class FlowHandler {
             }
         }
     }
+}
+
+func classifyProbeIdentity(_ metadata: NEFlowMetaData) -> String {
+    let claimed = metadata.sourceAppSigningIdentifier
+    guard let token = metadata.sourceAppAuditToken, token.count == 32, !claimed.isEmpty else { return "unknown" }
+    var code: SecCode?
+    guard SecCodeCopyGuestWithAttributes(nil, [kSecGuestAttributeAudit as String: token] as CFDictionary, [], &code) == errSecSuccess,
+          let code, SecCodeCheckValidity(code, [], nil) == errSecSuccess else { return "unknown" }
+    var staticCode: SecStaticCode?
+    guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode else { return "unknown" }
+    var info: CFDictionary?
+    guard SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
+          let values = info as? [String: Any], values[kSecCodeInfoIdentifier as String] as? String == claimed else { return "unknown" }
+    if selectedIDs.contains(claimed) || claimed == controlID {
+        guard values[kSecCodeInfoTeamIdentifier as String] as? String == probeTeam else { return "mismatch" }
+        if claimed == controlID { return "control" }
+        return claimed.hasSuffix(".helper") ? "helper" : "selected"
+    }
+    return "other"
 }

@@ -26,6 +26,8 @@
 	<dict>
 		<key>NEProviderClasses</key>
 		<dict>
+			<key>com.apple.networkextension.app-proxy</key>
+			<string>$(PRODUCT_MODULE_NAME).AppProbeProvider</string>
 			<key>com.apple.networkextension.dns-proxy</key>
 			<string>$(PRODUCT_MODULE_NAME).DNSProbeProvider</string>
 		</dict>

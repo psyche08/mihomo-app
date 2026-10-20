@@ -82,6 +82,12 @@ final class ProbeHost: NSObject, OSSystemExtensionRequestDelegate {
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 let host = ProbeHost()
-DispatchQueue.main.async { host.start(CommandLine.arguments.dropFirst().first ?? "--help") }
+let appHost = AppProbeHost()
+DispatchQueue.main.async {
+    let command = CommandLine.arguments.dropFirst().first ?? "--help"
+    if ["--app-session", "--app-status", "--app-disable"].contains(command) {
+        appHost.start(command)
+    } else { host.start(command) }
+}
 app.run()
 withExtendedLifetime(host) {}

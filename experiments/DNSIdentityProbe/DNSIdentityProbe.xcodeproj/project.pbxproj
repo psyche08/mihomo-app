@@ -7,96 +7,99 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		06A5CC505CEAD18FE2615476 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 20278CE7B83856A69D2EBACD /* Cocoa.framework */; };
-		0E9DD853B2FDAA86DB9EA056 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFE7FAFC0CAAD9281DF678FA /* main.swift */; };
-		0F038523B6FC5256BC883A87 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = A054D09BA1DE4C0B796477CE /* main.swift */; };
-		2672340C89C0341B520AAE68 /* MihomoDNSControl.app in Embed MihomoDNSControl */ = {isa = PBXBuildFile; fileRef = 9704CA126D813D4EF0A115F0 /* MihomoDNSControl.app */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
-		34C703B20E6BBB4ECB4BA92C /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 20278CE7B83856A69D2EBACD /* Cocoa.framework */; };
-		375F50A09C0226F55B8FB55F /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 20278CE7B83856A69D2EBACD /* Cocoa.framework */; };
+		00934BF226EDCC8D018DEFE3 /* MihomoDNSControl.app in Embed MihomoDNSControl */ = {isa = PBXBuildFile; fileRef = C931C9E8461E1917E6690180 /* MihomoDNSControl.app */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		034E08DD2679D63B6EB8A83B /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 20278CE7B83856A69D2EBACD /* Cocoa.framework */; };
+		0F038523B6FC5256BC883A87 /* Provider.swift in Sources */ = {isa = PBXBuildFile; fileRef = A054D09BA1DE4C0B796477CE /* Provider.swift */; };
+		129890E9C6B98DD69D1EAD08 /* dev.linsheng.mihomo-dns-probe.extension.systemextension in Embed MihomoDNSProbeExtension */ = {isa = PBXBuildFile; fileRef = 08CBCA5A3C9C5F58273A18B2 /* dev.linsheng.mihomo-dns-probe.extension.systemextension */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		1435D5E00B28599948228FDD /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 20278CE7B83856A69D2EBACD /* Cocoa.framework */; };
 		3CEC26BEEFB106C43A381B7B /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 20278CE7B83856A69D2EBACD /* Cocoa.framework */; };
-		5E42BC3DBF58B1510C5C89CC /* MihomoDNSSelected.app in Embed MihomoDNSSelected */ = {isa = PBXBuildFile; fileRef = 3C6562EE6A810F514092D54A /* MihomoDNSSelected.app */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
-		7ADA029D1B966B5095435A6F /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90CF34C6A77D719E346F2011 /* main.swift */; };
-		921CC2027237E6C838303D58 /* ProbeSessionConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 945C2E59FEA4BFF062C190AD /* ProbeSessionConfiguration.swift */; };
-		96A95A61430E61ACBF0BA174 /* MihomoDNSHelper.app in Embed MihomoDNSHelper */ = {isa = PBXBuildFile; fileRef = 6E564A421DDC16541CACAD24 /* MihomoDNSHelper.app */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
-		A755EA978A53515173368691 /* dev.linsheng.mihomo-dns-probe.extension.systemextension in Embed MihomoDNSProbeExtension */ = {isa = PBXBuildFile; fileRef = 08CBCA5A3C9C5F58273A18B2 /* dev.linsheng.mihomo-dns-probe.extension.systemextension */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
-		BE596CE3B70EB54A5C338A1A /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00D83DB44B2A8709BA5603A /* main.swift */; };
-		C931C9E8461E1917E6690180 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 20278CE7B83856A69D2EBACD /* Cocoa.framework */; };
-		DCC4B829BA072431796F3DF5 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA04EEBBB636286130786A8D /* main.swift */; };
-		FCA3A9081FAADB500BC84F68 /* Provider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59A7F3A0934A4E6188E8A98B /* Provider.swift */; };
+		4163BAB9D696BE1600A30884 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 20278CE7B83856A69D2EBACD /* Cocoa.framework */; };
+		5AF8386730975DC3DF52CC2C /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 154B222E808014A8A577054C /* main.swift */; };
+		7043D86287BBAFE26A8F1C7B /* SOCKSConnect.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80E6ED177D03B5428F0F0313 /* SOCKSConnect.swift */; };
+		7A76E234B50C7ECCD34D06EF /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 20278CE7B83856A69D2EBACD /* Cocoa.framework */; };
+		7C91B8124A1D6E6C4CF3367C /* MihomoDNSSelected.app in Embed MihomoDNSSelected */ = {isa = PBXBuildFile; fileRef = 34C703B20E6BBB4ECB4BA92C /* MihomoDNSSelected.app */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		8B79C1538586A9702776548E /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7EB9BCBA26A0E031957A05E /* main.swift */; };
+		921CC2027237E6C838303D58 /* AppProbeProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 945C2E59FEA4BFF062C190AD /* AppProbeProvider.swift */; };
+		96A95A61430E61ACBF0BA174 /* AppProbeHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25BFED3C14E4A4A14707F886 /* AppProbeHost.swift */; };
+		9F22044C3A2F5DFE6927FCAF /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA03F941E862764AD689785C /* main.swift */; };
+		9F36A9EBDFCFB9BC41D92294 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDC979C4EDFB7944D4C9CFAB /* main.swift */; };
+		CBD786EECD5EB89EF0450CD7 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2110F43A2796A36EB5232B62 /* main.swift */; };
+		CF0848782996C66A79350F67 /* MihomoDNSHelper.app in Embed MihomoDNSHelper */ = {isa = PBXBuildFile; fileRef = 06A5CC505CEAD18FE2615476 /* MihomoDNSHelper.app */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		FCA3A9081FAADB500BC84F68 /* ProbeSessionConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59A7F3A0934A4E6188E8A98B /* ProbeSessionConfiguration.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
-		7A76E234B50C7ECCD34D06EF /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 0CAFFFA273B33A669DC8D5BE /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = 80E6ED177D03B5428F0F0313;
-			remoteInfo = MihomoDNSHelper;
-		};
-		AF73E8DE2B2C4DE327C49A41 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 0CAFFFA273B33A669DC8D5BE /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = 1435D5E00B28599948228FDD;
-			remoteInfo = MihomoDNSSelected;
-		};
-		DDC979C4EDFB7944D4C9CFAB /* PBXContainerItemProxy */ = {
+		A5AEE8ACC467951CD5D81770 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 0CAFFFA273B33A669DC8D5BE /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = 3E2CABFCD17E919A9C745C07;
 			remoteInfo = MihomoDNSProbeExtension;
 		};
-		ECFA5D959DF9409B08E94103 /* PBXContainerItemProxy */ = {
+		B6129D4F25A671A33F218151 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 0CAFFFA273B33A669DC8D5BE /* Project object */;
 			proxyType = 1;
-			remoteGlobalIDString = 034E08DD2679D63B6EB8A83B;
+			remoteGlobalIDString = 3C6562EE6A810F514092D54A;
+			remoteInfo = MihomoDNSSelected;
+		};
+		D43F9911C21AEF2D48F3571E /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 0CAFFFA273B33A669DC8D5BE /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 9704CA126D813D4EF0A115F0;
 			remoteInfo = MihomoDNSControl;
+		};
+		EC9508C1C6244CBF5499B913 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 0CAFFFA273B33A669DC8D5BE /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 6E564A421DDC16541CACAD24;
+			remoteInfo = MihomoDNSHelper;
 		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
-		25BFED3C14E4A4A14707F886 /* Embed MihomoDNSHelper */ = {
+		4191F33DA6E2B7C1C10E83B0 /* Embed MihomoDNSControl */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = Contents/Resources/Clients;
+			dstSubfolderSpec = 1;
+			files = (
+				00934BF226EDCC8D018DEFE3 /* MihomoDNSControl.app in Embed MihomoDNSControl */,
+			);
+			name = "Embed MihomoDNSControl";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		79782A897906F234A129253F /* Embed MihomoDNSSelected */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = Contents/Resources/Clients;
+			dstSubfolderSpec = 1;
+			files = (
+				7C91B8124A1D6E6C4CF3367C /* MihomoDNSSelected.app in Embed MihomoDNSSelected */,
+			);
+			name = "Embed MihomoDNSSelected";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AF73E8DE2B2C4DE327C49A41 /* Embed MihomoDNSHelper */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
 			dstPath = Contents/Library/LoginItems;
 			dstSubfolderSpec = 1;
 			files = (
-				96A95A61430E61ACBF0BA174 /* MihomoDNSHelper.app in Embed MihomoDNSHelper */,
+				CF0848782996C66A79350F67 /* MihomoDNSHelper.app in Embed MihomoDNSHelper */,
 			);
 			name = "Embed MihomoDNSHelper";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		A5AEE8ACC467951CD5D81770 /* Embed MihomoDNSSelected */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = Contents/Resources/Clients;
-			dstSubfolderSpec = 1;
-			files = (
-				5E42BC3DBF58B1510C5C89CC /* MihomoDNSSelected.app in Embed MihomoDNSSelected */,
-			);
-			name = "Embed MihomoDNSSelected";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		B6129D4F25A671A33F218151 /* Embed MihomoDNSControl */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = Contents/Resources/Clients;
-			dstSubfolderSpec = 1;
-			files = (
-				2672340C89C0341B520AAE68 /* MihomoDNSControl.app in Embed MihomoDNSControl */,
-			);
-			name = "Embed MihomoDNSControl";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		EC9508C1C6244CBF5499B913 /* Embed MihomoDNSProbeExtension */ = {
+		ECFA5D959DF9409B08E94103 /* Embed MihomoDNSProbeExtension */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
 			dstPath = Contents/Library/SystemExtensions;
 			dstSubfolderSpec = 1;
 			files = (
-				A755EA978A53515173368691 /* dev.linsheng.mihomo-dns-probe.extension.systemextension in Embed MihomoDNSProbeExtension */,
+				129890E9C6B98DD69D1EAD08 /* dev.linsheng.mihomo-dns-probe.extension.systemextension in Embed MihomoDNSProbeExtension */,
 			);
 			name = "Embed MihomoDNSProbeExtension";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -104,38 +107,25 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		06A5CC505CEAD18FE2615476 /* MihomoDNSHelper.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MihomoDNSHelper.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		08CBCA5A3C9C5F58273A18B2 /* dev.linsheng.mihomo-dns-probe.extension.systemextension */ = {isa = PBXFileReference; explicitFileType = "wrapper.system-extension"; includeInIndex = 0; path = "dev.linsheng.mihomo-dns-probe.extension.systemextension"; sourceTree = BUILT_PRODUCTS_DIR; };
+		154B222E808014A8A577054C /* main.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		20278CE7B83856A69D2EBACD /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
-		3C6562EE6A810F514092D54A /* MihomoDNSSelected.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MihomoDNSSelected.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		528EC85F44E34C82351635A3 /* MihomoDNSProbe.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MihomoDNSProbe.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		59A7F3A0934A4E6188E8A98B /* Provider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Provider.swift; sourceTree = "<group>"; };
-		6E564A421DDC16541CACAD24 /* MihomoDNSHelper.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MihomoDNSHelper.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		90CF34C6A77D719E346F2011 /* main.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
-		945C2E59FEA4BFF062C190AD /* ProbeSessionConfiguration.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ProbeSessionConfiguration.swift; sourceTree = "<group>"; };
-		9704CA126D813D4EF0A115F0 /* MihomoDNSControl.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MihomoDNSControl.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		A054D09BA1DE4C0B796477CE /* main.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
-		AA04EEBBB636286130786A8D /* main.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
-		BFE7FAFC0CAAD9281DF678FA /* main.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
-		E00D83DB44B2A8709BA5603A /* main.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		2110F43A2796A36EB5232B62 /* main.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		25BFED3C14E4A4A14707F886 /* AppProbeHost.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppProbeHost.swift; sourceTree = "<group>"; };
+		34C703B20E6BBB4ECB4BA92C /* MihomoDNSSelected.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MihomoDNSSelected.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		375F50A09C0226F55B8FB55F /* MihomoDNSProbe.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MihomoDNSProbe.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		59A7F3A0934A4E6188E8A98B /* ProbeSessionConfiguration.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ProbeSessionConfiguration.swift; sourceTree = "<group>"; };
+		80E6ED177D03B5428F0F0313 /* SOCKSConnect.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SOCKSConnect.swift; sourceTree = "<group>"; };
+		945C2E59FEA4BFF062C190AD /* AppProbeProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppProbeProvider.swift; sourceTree = "<group>"; };
+		A054D09BA1DE4C0B796477CE /* Provider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Provider.swift; sourceTree = "<group>"; };
+		C7EB9BCBA26A0E031957A05E /* main.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		C931C9E8461E1917E6690180 /* MihomoDNSControl.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MihomoDNSControl.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		DDC979C4EDFB7944D4C9CFAB /* main.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		EA03F941E862764AD689785C /* main.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		05BD75CD550A16053ABEC8F1 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				C931C9E8461E1917E6690180 /* Cocoa.framework in Frameworks */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		262AAC87D1B2A7926A0F5703 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				06A5CC505CEAD18FE2615476 /* Cocoa.framework in Frameworks */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		3E72A9E50D6A8B6AEEAA02AA /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -144,19 +134,35 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		6BAECE14EDF88562626F9C25 /* Frameworks */ = {
+		90CF34C6A77D719E346F2011 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				375F50A09C0226F55B8FB55F /* Cocoa.framework in Frameworks */,
+				034E08DD2679D63B6EB8A83B /* Cocoa.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		E299DC6DF9D43C04D955A014 /* Frameworks */ = {
+		AA04EEBBB636286130786A8D /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				34C703B20E6BBB4ECB4BA92C /* Cocoa.framework in Frameworks */,
+				7A76E234B50C7ECCD34D06EF /* Cocoa.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BFE7FAFC0CAAD9281DF678FA /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4163BAB9D696BE1600A30884 /* Cocoa.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E00D83DB44B2A8709BA5603A /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1435D5E00B28599948228FDD /* Cocoa.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -166,30 +172,14 @@
 		001D199E77D291470E9E6B97 /* MihomoDNSProbeExtension */ = {
 			isa = PBXGroup;
 			children = (
-				945C2E59FEA4BFF062C190AD /* ProbeSessionConfiguration.swift */,
-				59A7F3A0934A4E6188E8A98B /* Provider.swift */,
-				A054D09BA1DE4C0B796477CE /* main.swift */,
+				945C2E59FEA4BFF062C190AD /* AppProbeProvider.swift */,
+				59A7F3A0934A4E6188E8A98B /* ProbeSessionConfiguration.swift */,
+				A054D09BA1DE4C0B796477CE /* Provider.swift */,
+				80E6ED177D03B5428F0F0313 /* SOCKSConnect.swift */,
+				C7EB9BCBA26A0E031957A05E /* main.swift */,
 			);
 			name = MihomoDNSProbeExtension;
 			path = Extension;
-			sourceTree = "<group>";
-		};
-		068D923E130B5984E04B0EB3 /* MihomoDNSSelected */ = {
-			isa = PBXGroup;
-			children = (
-				90CF34C6A77D719E346F2011 /* main.swift */,
-			);
-			name = MihomoDNSSelected;
-			path = Client;
-			sourceTree = "<group>";
-		};
-		17D808BE02B73E004FFE366A /* MihomoDNSControl */ = {
-			isa = PBXGroup;
-			children = (
-				BFE7FAFC0CAAD9281DF678FA /* main.swift */,
-			);
-			name = MihomoDNSControl;
-			path = Client;
 			sourceTree = "<group>";
 		};
 		2BAF1C8EE66A8CAD70A572C1 /* OS X */ = {
@@ -200,10 +190,11 @@
 			name = "OS X";
 			sourceTree = "<group>";
 		};
-		4C54B085243FCCC9053F0568 /* MihomoDNSProbe */ = {
+		39FFDA375A61C382703C41A7 /* MihomoDNSProbe */ = {
 			isa = PBXGroup;
 			children = (
-				AA04EEBBB636286130786A8D /* main.swift */,
+				25BFED3C14E4A4A14707F886 /* AppProbeHost.swift */,
+				DDC979C4EDFB7944D4C9CFAB /* main.swift */,
 			);
 			name = MihomoDNSProbe;
 			path = Host;
@@ -217,23 +208,41 @@
 			name = Frameworks;
 			sourceTree = "<group>";
 		};
+		8CB846FB41774888FD8DE307 /* MihomoDNSSelected */ = {
+			isa = PBXGroup;
+			children = (
+				2110F43A2796A36EB5232B62 /* main.swift */,
+			);
+			name = MihomoDNSSelected;
+			path = Client;
+			sourceTree = "<group>";
+		};
 		A35F57A2923FEB917D546789 = {
 			isa = PBXGroup;
 			children = (
 				FDE70D7ED28386119C553A67 /* Products */,
 				7440F7FAF7E06F2F8A543CF8 /* Frameworks */,
 				001D199E77D291470E9E6B97 /* MihomoDNSProbeExtension */,
-				B9E7CEF3D75802675089EBCF /* MihomoDNSHelper */,
-				068D923E130B5984E04B0EB3 /* MihomoDNSSelected */,
-				17D808BE02B73E004FFE366A /* MihomoDNSControl */,
-				4C54B085243FCCC9053F0568 /* MihomoDNSProbe */,
+				CEF92DA083A9CFCB8F800741 /* MihomoDNSHelper */,
+				8CB846FB41774888FD8DE307 /* MihomoDNSSelected */,
+				B949B2B38CC73BA27079439E /* MihomoDNSControl */,
+				39FFDA375A61C382703C41A7 /* MihomoDNSProbe */,
 			);
 			sourceTree = "<group>";
 		};
-		B9E7CEF3D75802675089EBCF /* MihomoDNSHelper */ = {
+		B949B2B38CC73BA27079439E /* MihomoDNSControl */ = {
 			isa = PBXGroup;
 			children = (
-				E00D83DB44B2A8709BA5603A /* main.swift */,
+				154B222E808014A8A577054C /* main.swift */,
+			);
+			name = MihomoDNSControl;
+			path = Client;
+			sourceTree = "<group>";
+		};
+		CEF92DA083A9CFCB8F800741 /* MihomoDNSHelper */ = {
+			isa = PBXGroup;
+			children = (
+				EA03F941E862764AD689785C /* main.swift */,
 			);
 			name = MihomoDNSHelper;
 			path = Client;
@@ -243,10 +252,10 @@
 			isa = PBXGroup;
 			children = (
 				08CBCA5A3C9C5F58273A18B2 /* dev.linsheng.mihomo-dns-probe.extension.systemextension */,
-				6E564A421DDC16541CACAD24 /* MihomoDNSHelper.app */,
-				3C6562EE6A810F514092D54A /* MihomoDNSSelected.app */,
-				9704CA126D813D4EF0A115F0 /* MihomoDNSControl.app */,
-				528EC85F44E34C82351635A3 /* MihomoDNSProbe.app */,
+				06A5CC505CEAD18FE2615476 /* MihomoDNSHelper.app */,
+				34C703B20E6BBB4ECB4BA92C /* MihomoDNSSelected.app */,
+				C931C9E8461E1917E6690180 /* MihomoDNSControl.app */,
+				375F50A09C0226F55B8FB55F /* MihomoDNSProbe.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -254,40 +263,23 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		034E08DD2679D63B6EB8A83B /* MihomoDNSControl */ = {
+		3C6562EE6A810F514092D54A /* MihomoDNSSelected */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 8CB846FB41774888FD8DE307 /* Build configuration list for PBXNativeTarget "MihomoDNSControl" */;
+			buildConfigurationList = DDAEC5C64504D153EACF4714 /* Build configuration list for PBXNativeTarget "MihomoDNSSelected" */;
 			buildPhases = (
-				CDBD6F12DDB23CB430EEE413 /* Sources */,
-				05BD75CD550A16053ABEC8F1 /* Frameworks */,
-				5EEF7E19E6850F2EE043A8BF /* Resources */,
+				068D923E130B5984E04B0EB3 /* Sources */,
+				90CF34C6A77D719E346F2011 /* Frameworks */,
+				7ADA029D1B966B5095435A6F /* Resources */,
+				AF73E8DE2B2C4DE327C49A41 /* Embed MihomoDNSHelper */,
 			);
 			buildRules = (
 			);
 			dependencies = (
-			);
-			name = MihomoDNSControl;
-			productName = MihomoDNSControl;
-			productReference = 9704CA126D813D4EF0A115F0 /* MihomoDNSControl.app */;
-			productType = "com.apple.product-type.application";
-		};
-		1435D5E00B28599948228FDD /* MihomoDNSSelected */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = CEF92DA083A9CFCB8F800741 /* Build configuration list for PBXNativeTarget "MihomoDNSSelected" */;
-			buildPhases = (
-				DDAEC5C64504D153EACF4714 /* Sources */,
-				E299DC6DF9D43C04D955A014 /* Frameworks */,
-				E9E5983034F079ABF1E2720C /* Resources */,
-				25BFED3C14E4A4A14707F886 /* Embed MihomoDNSHelper */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-				39FFDA375A61C382703C41A7 /* PBXTargetDependency */,
+				A755EA978A53515173368691 /* PBXTargetDependency */,
 			);
 			name = MihomoDNSSelected;
 			productName = MihomoDNSSelected;
-			productReference = 3C6562EE6A810F514092D54A /* MihomoDNSSelected.app */;
+			productReference = 34C703B20E6BBB4ECB4BA92C /* MihomoDNSSelected.app */;
 			productType = "com.apple.product-type.application";
 		};
 		3E2CABFCD17E919A9C745C07 /* MihomoDNSProbeExtension */ = {
@@ -307,36 +299,36 @@
 			productReference = 08CBCA5A3C9C5F58273A18B2 /* dev.linsheng.mihomo-dns-probe.extension.systemextension */;
 			productType = "com.apple.product-type.system-extension";
 		};
-		4163BAB9D696BE1600A30884 /* MihomoDNSProbe */ = {
+		528EC85F44E34C82351635A3 /* MihomoDNSProbe */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = B949B2B38CC73BA27079439E /* Build configuration list for PBXNativeTarget "MihomoDNSProbe" */;
+			buildConfigurationList = ADAD5DD0F9F28037F7B86CEF /* Build configuration list for PBXNativeTarget "MihomoDNSProbe" */;
 			buildPhases = (
-				ADAD5DD0F9F28037F7B86CEF /* Sources */,
-				6BAECE14EDF88562626F9C25 /* Frameworks */,
-				91F6389D3810436D8D9928CF /* Resources */,
-				EC9508C1C6244CBF5499B913 /* Embed MihomoDNSProbeExtension */,
-				A5AEE8ACC467951CD5D81770 /* Embed MihomoDNSSelected */,
-				B6129D4F25A671A33F218151 /* Embed MihomoDNSControl */,
+				4C54B085243FCCC9053F0568 /* Sources */,
+				AA04EEBBB636286130786A8D /* Frameworks */,
+				DCC4B829BA072431796F3DF5 /* Resources */,
+				ECFA5D959DF9409B08E94103 /* Embed MihomoDNSProbeExtension */,
+				79782A897906F234A129253F /* Embed MihomoDNSSelected */,
+				4191F33DA6E2B7C1C10E83B0 /* Embed MihomoDNSControl */,
 			);
 			buildRules = (
 			);
 			dependencies = (
-				9F36A9EBDFCFB9BC41D92294 /* PBXTargetDependency */,
-				CF0848782996C66A79350F67 /* PBXTargetDependency */,
-				129890E9C6B98DD69D1EAD08 /* PBXTargetDependency */,
+				5E42BC3DBF58B1510C5C89CC /* PBXTargetDependency */,
+				2672340C89C0341B520AAE68 /* PBXTargetDependency */,
+				EE387AF62D06CBE9A4B24D54 /* PBXTargetDependency */,
 			);
 			name = MihomoDNSProbe;
 			productName = MihomoDNSProbe;
-			productReference = 528EC85F44E34C82351635A3 /* MihomoDNSProbe.app */;
+			productReference = 375F50A09C0226F55B8FB55F /* MihomoDNSProbe.app */;
 			productType = "com.apple.product-type.application";
 		};
-		80E6ED177D03B5428F0F0313 /* MihomoDNSHelper */ = {
+		6E564A421DDC16541CACAD24 /* MihomoDNSHelper */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 7043D86287BBAFE26A8F1C7B /* Build configuration list for PBXNativeTarget "MihomoDNSHelper" */;
+			buildConfigurationList = 050177F442C951BF7C2C33A8 /* Build configuration list for PBXNativeTarget "MihomoDNSHelper" */;
 			buildPhases = (
-				050177F442C951BF7C2C33A8 /* Sources */,
-				262AAC87D1B2A7926A0F5703 /* Frameworks */,
-				0A80ABA8B50B8AC390AE7CC7 /* Resources */,
+				B9E7CEF3D75802675089EBCF /* Sources */,
+				E00D83DB44B2A8709BA5603A /* Frameworks */,
+				BE596CE3B70EB54A5C338A1A /* Resources */,
 			);
 			buildRules = (
 			);
@@ -344,7 +336,24 @@
 			);
 			name = MihomoDNSHelper;
 			productName = MihomoDNSHelper;
-			productReference = 6E564A421DDC16541CACAD24 /* MihomoDNSHelper.app */;
+			productReference = 06A5CC505CEAD18FE2615476 /* MihomoDNSHelper.app */;
+			productType = "com.apple.product-type.application";
+		};
+		9704CA126D813D4EF0A115F0 /* MihomoDNSControl */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CDBD6F12DDB23CB430EEE413 /* Build configuration list for PBXNativeTarget "MihomoDNSControl" */;
+			buildPhases = (
+				17D808BE02B73E004FFE366A /* Sources */,
+				BFE7FAFC0CAAD9281DF678FA /* Frameworks */,
+				0E9DD853B2FDAA86DB9EA056 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MihomoDNSControl;
+			productName = MihomoDNSControl;
+			productReference = C931C9E8461E1917E6690180 /* MihomoDNSControl.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -372,16 +381,16 @@
 			projectRoot = "";
 			targets = (
 				3E2CABFCD17E919A9C745C07 /* MihomoDNSProbeExtension */,
-				80E6ED177D03B5428F0F0313 /* MihomoDNSHelper */,
-				1435D5E00B28599948228FDD /* MihomoDNSSelected */,
-				034E08DD2679D63B6EB8A83B /* MihomoDNSControl */,
-				4163BAB9D696BE1600A30884 /* MihomoDNSProbe */,
+				6E564A421DDC16541CACAD24 /* MihomoDNSHelper */,
+				3C6562EE6A810F514092D54A /* MihomoDNSSelected */,
+				9704CA126D813D4EF0A115F0 /* MihomoDNSControl */,
+				528EC85F44E34C82351635A3 /* MihomoDNSProbe */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		0A80ABA8B50B8AC390AE7CC7 /* Resources */ = {
+		0E9DD853B2FDAA86DB9EA056 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -395,21 +404,21 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		5EEF7E19E6850F2EE043A8BF /* Resources */ = {
+		7ADA029D1B966B5095435A6F /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		91F6389D3810436D8D9928CF /* Resources */ = {
+		BE596CE3B70EB54A5C338A1A /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		E9E5983034F079ABF1E2720C /* Resources */ = {
+		DCC4B829BA072431796F3DF5 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -419,11 +428,11 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		050177F442C951BF7C2C33A8 /* Sources */ = {
+		068D923E130B5984E04B0EB3 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				BE596CE3B70EB54A5C338A1A /* main.swift in Sources */,
+				CBD786EECD5EB89EF0450CD7 /* main.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -431,66 +440,127 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				921CC2027237E6C838303D58 /* ProbeSessionConfiguration.swift in Sources */,
-				FCA3A9081FAADB500BC84F68 /* Provider.swift in Sources */,
-				0F038523B6FC5256BC883A87 /* main.swift in Sources */,
+				921CC2027237E6C838303D58 /* AppProbeProvider.swift in Sources */,
+				FCA3A9081FAADB500BC84F68 /* ProbeSessionConfiguration.swift in Sources */,
+				0F038523B6FC5256BC883A87 /* Provider.swift in Sources */,
+				7043D86287BBAFE26A8F1C7B /* SOCKSConnect.swift in Sources */,
+				8B79C1538586A9702776548E /* main.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		ADAD5DD0F9F28037F7B86CEF /* Sources */ = {
+		17D808BE02B73E004FFE366A /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				DCC4B829BA072431796F3DF5 /* main.swift in Sources */,
+				5AF8386730975DC3DF52CC2C /* main.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		CDBD6F12DDB23CB430EEE413 /* Sources */ = {
+		4C54B085243FCCC9053F0568 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				0E9DD853B2FDAA86DB9EA056 /* main.swift in Sources */,
+				96A95A61430E61ACBF0BA174 /* AppProbeHost.swift in Sources */,
+				9F36A9EBDFCFB9BC41D92294 /* main.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		DDAEC5C64504D153EACF4714 /* Sources */ = {
+		B9E7CEF3D75802675089EBCF /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				7ADA029D1B966B5095435A6F /* main.swift in Sources */,
+				9F22044C3A2F5DFE6927FCAF /* main.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
-		129890E9C6B98DD69D1EAD08 /* PBXTargetDependency */ = {
+		2672340C89C0341B520AAE68 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			name = MihomoDNSControl;
-			target = 034E08DD2679D63B6EB8A83B /* MihomoDNSControl */;
-			targetProxy = ECFA5D959DF9409B08E94103 /* PBXContainerItemProxy */;
+			name = MihomoDNSSelected;
+			target = 3C6562EE6A810F514092D54A /* MihomoDNSSelected */;
+			targetProxy = B6129D4F25A671A33F218151 /* PBXContainerItemProxy */;
 		};
-		39FFDA375A61C382703C41A7 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			name = MihomoDNSHelper;
-			target = 80E6ED177D03B5428F0F0313 /* MihomoDNSHelper */;
-			targetProxy = 7A76E234B50C7ECCD34D06EF /* PBXContainerItemProxy */;
-		};
-		9F36A9EBDFCFB9BC41D92294 /* PBXTargetDependency */ = {
+		5E42BC3DBF58B1510C5C89CC /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			name = MihomoDNSProbeExtension;
 			target = 3E2CABFCD17E919A9C745C07 /* MihomoDNSProbeExtension */;
-			targetProxy = DDC979C4EDFB7944D4C9CFAB /* PBXContainerItemProxy */;
+			targetProxy = A5AEE8ACC467951CD5D81770 /* PBXContainerItemProxy */;
 		};
-		CF0848782996C66A79350F67 /* PBXTargetDependency */ = {
+		A755EA978A53515173368691 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			name = MihomoDNSSelected;
-			target = 1435D5E00B28599948228FDD /* MihomoDNSSelected */;
-			targetProxy = AF73E8DE2B2C4DE327C49A41 /* PBXContainerItemProxy */;
+			name = MihomoDNSHelper;
+			target = 6E564A421DDC16541CACAD24 /* MihomoDNSHelper */;
+			targetProxy = EC9508C1C6244CBF5499B913 /* PBXContainerItemProxy */;
+		};
+		EE387AF62D06CBE9A4B24D54 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = MihomoDNSControl;
+			target = 9704CA126D813D4EF0A115F0 /* MihomoDNSControl */;
+			targetProxy = D43F9911C21AEF2D48F3571E /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		05BD75CD550A16053ABEC8F1 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 89LGY6BD53;
+				ENABLE_HARDENED_RUNTIME = YES;
+				EXECUTABLE_NAME = MihomoDNSControl;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Config/App-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.1.0;
+				ONLY_ACTIVE_ARCH = NO;
+				PRODUCT_BUNDLE_IDENTIFIER = "dev.linsheng.mihomo-dns-probe.control";
+				PRODUCT_MODULE_NAME = MihomoDNSControl;
+				PRODUCT_NAME = MihomoDNSControl;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		0A80ABA8B50B8AC390AE7CC7 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 89LGY6BD53;
+				ENABLE_HARDENED_RUNTIME = YES;
+				EXECUTABLE_NAME = MihomoDNSHelper;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Config/App-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.1.0;
+				ONLY_ACTIVE_ARCH = NO;
+				PRODUCT_BUNDLE_IDENTIFIER = "dev.linsheng.mihomo-dns-probe.selected.helper";
+				PRODUCT_MODULE_NAME = MihomoDNSHelper;
+				PRODUCT_NAME = MihomoDNSHelper;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
 		12DF4EAE0C8BBF8C811F15F5 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -520,36 +590,6 @@
 				SWIFT_VERSION = 5.0;
 			};
 			name = Debug;
-		};
-		154B222E808014A8A577054C /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ARCHS = arm64;
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = Config/Host.entitlements;
-				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
-				CODE_SIGN_STYLE = Automatic;
-				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 89LGY6BD53;
-				ENABLE_HARDENED_RUNTIME = YES;
-				EXECUTABLE_NAME = MihomoDNSProbe;
-				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = "Config/App-Info.plist";
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.1.0;
-				ONLY_ACTIVE_ARCH = NO;
-				PRODUCT_BUNDLE_IDENTIFIER = "dev.linsheng.mihomo-dns-probe";
-				PRODUCT_MODULE_NAME = MihomoDNSProbe;
-				PRODUCT_NAME = MihomoDNSProbe;
-				SDKROOT = macosx;
-				SKIP_INSTALL = NO;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_VERSION = 5.0;
-			};
-			name = Release;
 		};
 		1651A049061880801BCE807C /* Release */ = {
 			isa = XCBuildConfiguration;
@@ -605,7 +645,7 @@
 			};
 			name = Release;
 		};
-		2110F43A2796A36EB5232B62 /* Release */ = {
+		262AAC87D1B2A7926A0F5703 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ARCHS = arm64;
@@ -617,16 +657,16 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 89LGY6BD53;
 				ENABLE_HARDENED_RUNTIME = YES;
-				EXECUTABLE_NAME = MihomoDNSControl;
+				EXECUTABLE_NAME = MihomoDNSHelper;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "Config/App-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 0.1.0;
 				ONLY_ACTIVE_ARCH = NO;
-				PRODUCT_BUNDLE_IDENTIFIER = "dev.linsheng.mihomo-dns-probe.control";
-				PRODUCT_MODULE_NAME = MihomoDNSControl;
-				PRODUCT_NAME = MihomoDNSControl;
+				PRODUCT_BUNDLE_IDENTIFIER = "dev.linsheng.mihomo-dns-probe.selected.helper";
+				PRODUCT_MODULE_NAME = MihomoDNSHelper;
+				PRODUCT_NAME = MihomoDNSHelper;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
@@ -695,7 +735,36 @@
 			};
 			name = Debug;
 		};
-		5AF8386730975DC3DF52CC2C /* Debug */ = {
+		5EEF7E19E6850F2EE043A8BF /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 89LGY6BD53;
+				ENABLE_HARDENED_RUNTIME = YES;
+				EXECUTABLE_NAME = MihomoDNSControl;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Config/App-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.1.0;
+				ONLY_ACTIVE_ARCH = NO;
+				PRODUCT_BUNDLE_IDENTIFIER = "dev.linsheng.mihomo-dns-probe.control";
+				PRODUCT_MODULE_NAME = MihomoDNSControl;
+				PRODUCT_NAME = MihomoDNSControl;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		6BAECE14EDF88562626F9C25 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ARCHS = arm64;
@@ -723,119 +792,33 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
 			};
-			name = Debug;
-		};
-		8B79C1538586A9702776548E /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ARCHS = arm64;
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
-				CODE_SIGN_STYLE = Automatic;
-				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 89LGY6BD53;
-				ENABLE_HARDENED_RUNTIME = YES;
-				EXECUTABLE_NAME = MihomoDNSHelper;
-				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = "Config/App-Info.plist";
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.1.0;
-				ONLY_ACTIVE_ARCH = NO;
-				PRODUCT_BUNDLE_IDENTIFIER = "dev.linsheng.mihomo-dns-probe.selected.helper";
-				PRODUCT_MODULE_NAME = MihomoDNSHelper;
-				PRODUCT_NAME = MihomoDNSHelper;
-				SDKROOT = macosx;
-				SKIP_INSTALL = YES;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_VERSION = 5.0;
-			};
-			name = Debug;
-		};
-		9F22044C3A2F5DFE6927FCAF /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ARCHS = arm64;
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
-				CODE_SIGN_STYLE = Automatic;
-				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 89LGY6BD53;
-				ENABLE_HARDENED_RUNTIME = YES;
-				EXECUTABLE_NAME = MihomoDNSSelected;
-				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = "Config/App-Info.plist";
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.1.0;
-				ONLY_ACTIVE_ARCH = NO;
-				PRODUCT_BUNDLE_IDENTIFIER = "dev.linsheng.mihomo-dns-probe.selected";
-				PRODUCT_MODULE_NAME = MihomoDNSSelected;
-				PRODUCT_NAME = MihomoDNSSelected;
-				SDKROOT = macosx;
-				SKIP_INSTALL = YES;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_VERSION = 5.0;
-			};
-			name = Debug;
-		};
-		C7EB9BCBA26A0E031957A05E /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ARCHS = arm64;
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
-				CODE_SIGN_STYLE = Automatic;
-				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 89LGY6BD53;
-				ENABLE_HARDENED_RUNTIME = YES;
-				EXECUTABLE_NAME = MihomoDNSHelper;
-				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = "Config/App-Info.plist";
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.1.0;
-				ONLY_ACTIVE_ARCH = NO;
-				PRODUCT_BUNDLE_IDENTIFIER = "dev.linsheng.mihomo-dns-probe.selected.helper";
-				PRODUCT_MODULE_NAME = MihomoDNSHelper;
-				PRODUCT_NAME = MihomoDNSHelper;
-				SDKROOT = macosx;
-				SKIP_INSTALL = YES;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_VERSION = 5.0;
-			};
 			name = Release;
 		};
-		CBD786EECD5EB89EF0450CD7 /* Debug */ = {
+		91F6389D3810436D8D9928CF /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Config/Host.entitlements;
 				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 89LGY6BD53;
 				ENABLE_HARDENED_RUNTIME = YES;
-				EXECUTABLE_NAME = MihomoDNSControl;
+				EXECUTABLE_NAME = MihomoDNSProbe;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "Config/App-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 0.1.0;
 				ONLY_ACTIVE_ARCH = NO;
-				PRODUCT_BUNDLE_IDENTIFIER = "dev.linsheng.mihomo-dns-probe.control";
-				PRODUCT_MODULE_NAME = MihomoDNSControl;
-				PRODUCT_NAME = MihomoDNSControl;
+				PRODUCT_BUNDLE_IDENTIFIER = "dev.linsheng.mihomo-dns-probe";
+				PRODUCT_MODULE_NAME = MihomoDNSProbe;
+				PRODUCT_NAME = MihomoDNSProbe;
 				SDKROOT = macosx;
-				SKIP_INSTALL = YES;
+				SKIP_INSTALL = NO;
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
 			};
@@ -871,7 +854,7 @@
 			};
 			name = Release;
 		};
-		EA03F941E862764AD689785C /* Release */ = {
+		E299DC6DF9D43C04D955A014 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ARCHS = arm64;
@@ -900,9 +883,47 @@
 			};
 			name = Release;
 		};
+		E9E5983034F079ABF1E2720C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 89LGY6BD53;
+				ENABLE_HARDENED_RUNTIME = YES;
+				EXECUTABLE_NAME = MihomoDNSSelected;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Config/App-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.1.0;
+				ONLY_ACTIVE_ARCH = NO;
+				PRODUCT_BUNDLE_IDENTIFIER = "dev.linsheng.mihomo-dns-probe.selected";
+				PRODUCT_MODULE_NAME = MihomoDNSSelected;
+				PRODUCT_NAME = MihomoDNSSelected;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		050177F442C951BF7C2C33A8 /* Build configuration list for PBXNativeTarget "MihomoDNSHelper" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				262AAC87D1B2A7926A0F5703 /* Release */,
+				0A80ABA8B50B8AC390AE7CC7 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		43E11171226D07A1DF43C6CF /* Build configuration list for PBXProject "DNSIdentityProbe" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -912,38 +933,29 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		7043D86287BBAFE26A8F1C7B /* Build configuration list for PBXNativeTarget "MihomoDNSHelper" */ = {
+		ADAD5DD0F9F28037F7B86CEF /* Build configuration list for PBXNativeTarget "MihomoDNSProbe" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				C7EB9BCBA26A0E031957A05E /* Release */,
-				8B79C1538586A9702776548E /* Debug */,
+				6BAECE14EDF88562626F9C25 /* Release */,
+				91F6389D3810436D8D9928CF /* Debug */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		8CB846FB41774888FD8DE307 /* Build configuration list for PBXNativeTarget "MihomoDNSControl" */ = {
+		CDBD6F12DDB23CB430EEE413 /* Build configuration list for PBXNativeTarget "MihomoDNSControl" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				2110F43A2796A36EB5232B62 /* Release */,
-				CBD786EECD5EB89EF0450CD7 /* Debug */,
+				05BD75CD550A16053ABEC8F1 /* Release */,
+				5EEF7E19E6850F2EE043A8BF /* Debug */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		B949B2B38CC73BA27079439E /* Build configuration list for PBXNativeTarget "MihomoDNSProbe" */ = {
+		DDAEC5C64504D153EACF4714 /* Build configuration list for PBXNativeTarget "MihomoDNSSelected" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				154B222E808014A8A577054C /* Release */,
-				5AF8386730975DC3DF52CC2C /* Debug */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		CEF92DA083A9CFCB8F800741 /* Build configuration list for PBXNativeTarget "MihomoDNSSelected" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				EA03F941E862764AD689785C /* Release */,
-				9F22044C3A2F5DFE6927FCAF /* Debug */,
+				E299DC6DF9D43C04D955A014 /* Release */,
+				E9E5983034F079ABF1E2720C /* Debug */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

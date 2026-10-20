@@ -21,7 +21,8 @@ import plistlib,subprocess,sys,pathlib
 app=pathlib.Path(sys.argv[1])
 for code in [app,app/'Contents/Library/SystemExtensions/dev.linsheng.mihomo-dns-probe.extension.systemextension']:
     ent=plistlib.loads(subprocess.check_output(['codesign','-d','--entitlements',':-',str(code)],stderr=subprocess.DEVNULL))
-    assert ent['com.apple.developer.networking.networkextension']==['dns-proxy-systemextension']
+    required={'dns-proxy-systemextension','app-proxy-provider-systemextension'}
+    assert set(ent['com.apple.developer.networking.networkextension'])==required
     assert not ent.get('com.apple.security.get-task-allow',False)
     if code==app: assert ent['com.apple.developer.system-extension.install'] is True
     else: assert ent['com.apple.security.app-sandbox'] is True
@@ -29,6 +30,6 @@ for code in [app,app/'Contents/Library/SystemExtensions/dev.linsheng.mihomo-dns-
     assert profile.exists(), 'missing provisioning profile'
     p=plistlib.loads(subprocess.check_output(['security','cms','-D','-i',str(profile)]))
     assert p['TeamIdentifier']==['89LGY6BD53']
-    assert 'dns-proxy-systemextension' in p['Entitlements']['com.apple.developer.networking.networkextension']
+    assert required.issubset(p['Entitlements']['com.apple.developer.networking.networkextension'])
 print('Independent DNS probe Developer ID signatures and provisioned capabilities verified')
 PY

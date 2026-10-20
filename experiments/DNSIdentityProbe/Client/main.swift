@@ -40,15 +40,15 @@ func reportDNS(_ data: Data, id: [UInt8]) {
     }
     finish(["mode": mode, "case": testCase, "ok": true, "rcode": Int(b[3] & 15), "answer_count": answers, "fake_ip": fake])
 }
-if mode == "helper" {
+if mode == "helper" || mode == "helper-connect" || mode == "helper-https" {
     let process = Process()
     process.executableURL = Bundle.main.bundleURL.appendingPathComponent("Contents/Library/LoginItems/MihomoDNSHelper.app/Contents/MacOS/MihomoDNSHelper")
-    process.arguments = ["system", testCase]
+    process.arguments = [mode == "helper-connect" ? "connect" : mode == "helper-https" ? "https" : "system", testCase]
     do { try process.run(); process.waitUntilExit(); exit(process.terminationStatus) } catch { fail("helper_launch") }
-} else if mode == "system" {
+} else if mode == "system" || mode == "connect" {
     var hints = addrinfo(); hints.ai_family = AF_INET; hints.ai_socktype = SOCK_STREAM
     var result: UnsafeMutablePointer<addrinfo>?
-    let error = getaddrinfo(name, nil, &hints, &result)
+    let error = getaddrinfo(name, mode == "connect" ? "443" : nil, &hints, &result)
     var count = 0; var fake = false; var current = result
     while let entry = current {
         count += 1
@@ -57,6 +57,18 @@ if mode == "helper" {
             fake = fake || (ip & 0xfffe0000 == 0xc6120000)
         }
         current = entry.pointee.ai_next
+    }
+    if mode == "connect" {
+        guard error == 0, let entry = result, let address = entry.pointee.ai_addr else { fail("resolve") }
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { fail("socket") }
+        var timeout = timeval(tv_sec: 8, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        let connected = connect(fd, address, entry.pointee.ai_addrlen) == 0
+        if connected { Thread.sleep(forTimeInterval: 3) } // Allow typed controller route observation.
+        close(fd); freeaddrinfo(entry)
+        finish(["mode": mode, "case": testCase, "ok": connected, "fake_ip": fake,
+                "answer_count": count], connected ? 0 : 1)
     }
     if let result { freeaddrinfo(result) }
     finish(["mode": mode, "case": testCase, "ok": error == 0, "resolver_code": Int(error), "answer_count": count, "fake_ip": fake], error == 0 ? 0 : 1)
