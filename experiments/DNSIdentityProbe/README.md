@@ -171,3 +171,43 @@ swiftc experiments/DNSIdentityProbe/Extension/SOCKSConnect.swift \
   experiments/DNSIdentityProbe/SOCKSTests/main.swift -o /private/tmp/mihomo-app-proxy-socks-tests
 /private/tmp/mihomo-app-proxy-socks-tests
 ```
+
+`doh` queries the installed Local DoH endpoint with native TLS verification.
+`doh-connect` uses that answer only if it is a Fake IP, opens TLS to it with the
+original fixed test hostname for certificate verification/SNI, and verifies an
+HTTP 200 response. It deliberately bypasses system name resolution to distinguish
+the Fake-IP connection path from system DNS integration; it is not evidence that
+macOS resolver caches are isolated.
+
+`run-mixed-cache-checks.py RESULT.json [CLIENTS_DIRECTORY]` checks selected
+Proxy/control DIRECT, selected REJECT, and swapped policies. It retains existing
+filters, prepends Fake-IP rules for the fixed test suffixes, verifies process
+rules and connection chains, and restores the original profile in `finally`.
+A separate 230-second watchdog restores only while this test's profile remains
+active. No DNS cache is flushed. Native DoH and fresh system queries are recorded
+separately, so a working connection path cannot mask a failed DNS integration.
+
+The clients must be independent applications for the positive App Proxy test:
+copy the Cloud-signed `MihomoDNSSelected.app` and `MihomoDNSControl.app` unchanged
+from the probe's `Contents/Resources/Clients` into `/Applications`, checking
+that those paths are unused first. The runner verifies signatures and identical
+executable bytes. The nested copies are retained as a negative comparison:
+even Launch Services launches of those copies did not reach App Proxy on the
+test Mac. Moving the same signed bytes to top-level application paths did.
+
+`run-app-proxy-checks.py RESULT.json --launch-services --top-level-clients` starts the signed App
+Proxy session, warms caches, exercises both query orders, raw UDP/TCP, system
+resolution, HTTPS and the helper, then rejects the extension's proxy route.
+It fails if the selected HTTPS request still succeeds during rejection or if
+the provider never observes selected hostname flows. It restores the original
+profile and disables the experiment. Omit `--launch-services` for the separate
+direct-executable launch comparison.
+
+Cloud Build 32 passed the controlled standalone-client matrix (25 cases plus
+the positive/negative proxy-failure pair), with actual selected DNS and hostname
+flow counters and a Proxy chain without DIRECT. Both cache orders and concurrent
+system lookups retained selected public/control Fake-IP separation. Broad strict
+DNS support remains unverified: helper requests were observed under the selected
+category rather than independently as `helper`, and the control's answer category
+changed when the session enabled. Resolver scope/coexistence, IPv6, browser
+helpers, application-owned DoH and sleep/wake still require acceptance tests.

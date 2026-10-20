@@ -268,3 +268,74 @@ per-app switch controls Mihomo process rules only and states the DNS limitation.
 Further strict-DNS work needs a separate connection-level design and runtime
 test (for example, assessing App Proxy coverage of high-level resolution), not
 promotion of this DNS-only probe or a claim that these tests passed.
+
+### Unified Fake-IP connection checkpoint
+
+The bounded mixed-mode experiment uses the existing managed core and typed
+profile transactions. It prepends Fake-IP rules for two fixed public test
+suffixes, leaves the original profile untouched, and never flushes macOS caches.
+Native DoH returns a Fake IP; a controlled client then opens TLS to that address
+while retaining the original hostname for SNI and certificate verification.
+
+All twelve such TLS cases behaved as expected across selected Proxy/control
+DIRECT, selected REJECT, and swapped policies. Typed connection snapshots
+confirmed process-rule matching and the expected Proxy/DIRECT chains. Rejected
+selected connections failed at TLS, while the control continued to return HTTP
+200. This establishes the tested Fake-IP **connection routing** path, including
+policy changes and rejection, not per-application system DNS isolation.
+
+System `getaddrinfo` queries in both orders and concurrently still returned
+public addresses. Fresh random labels returned no address even though the
+temporary suffix policy required Fake IP. Direct native Local DoH queries
+returned Fake IP. The installed DNS Settings payload has the correct local DoH
+URL and omits `SupplementalMatchDomains`, so its configured scope is global.
+The reason those system calls did not follow that path is not yet established;
+cache flushing cannot be accepted as the fix. Initial curl-based DoH failures
+were not reproduced with native TLS and must not be treated as server failures.
+
+The experiment restores `sheng.yaml`, verifies network consistency and native
+Local DoH health, and leaves the DNS-only extension disabled. Its scripts and
+client live under `experiments/DNSIdentityProbe`; no strict-DNS switch or daemon
+change is shipped. Repeating the matrix with Cloud-signed clients installed as
+independent `/Applications` apps and launched through Launch Services reproduced
+both the successful Fake-IP connection path and the unresolved system-resolver
+integration result.
+
+### App Proxy: controlled standalone-client success
+
+Cloud Build 32 (`4face3bd`) adds a bounded `NEAppProxyProvider` to the independent
+probe. Its App Rules use the selected client's and helper's actual designated
+requirements after validating their expected signing identifiers and team.
+The manager requires source-application routing before saving and after
+preference readback. Both ordinary `NEAppProxyProviderManager()` and
+`forPerAppVPN()` reported source-application routing in a read-only check on this
+Mac; a factory difference is **not** an established explanation for prior failure.
+
+Nested signed client apps did not reach the provider, whether launched directly
+or through Launch Services. The provider started, but had no selected flow
+counters and rejecting its upstream did not block the selected client. These
+are failed tests, not successful per-app operation.
+
+Installing the **same signed client bytes** as separate applications under
+`/Applications` and launching them through Launch Services changed the result:
+
+- All 25 basic cases passed. The 14 system/UDP/TCP DNS cases retained selected
+  public/control Fake-IP answers in both query orders and concurrent system
+  lookups, without an explicit cache flush.
+- The provider recorded 13 selected flows, 7 selected DNS queries/answers,
+  7 selected hostname TCP flows, and 7 SOCKS connections. Typed Mihomo
+  snapshots confirmed the extension's explicit Proxy rule and no DIRECT chain.
+- With only the extension's route changed to REJECT, selected HTTPS failed and
+  control HTTPS still returned 200. The App Proxy session remained connected
+  before and after this test, so provider expiration cannot explain the block.
+- The original profile and healthy network were restored; both experimental
+  configurations were disabled.
+
+This is a positive feasibility result for the tested application installation
+and traffic cases. It does not establish a universal strict-DNS guarantee.
+The helper's successful calls had no independent `helper` identity counter.
+The control's system answers changed from public before activation to Fake IP
+while the session was active; DNS-setting scope and coexistence must be resolved
+before claiming unaffected unselected applications. IPv6/AAAA/HTTPS records,
+browser helpers, application-owned encrypted DNS, network changes and sleep/wake
+also remain outside this checkpoint.

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Signed, bounded App Proxy experiment. No cache flush and no packet logging."""
 import concurrent.futures
+import hashlib
 import json
 import os
 import pathlib
@@ -13,11 +14,12 @@ import time
 
 app = pathlib.Path("/Applications/MihomoDNSProbe.app")
 host = app / "Contents/MacOS/MihomoDNSProbe"
-clients = app / "Contents/Resources/Clients"
+clients = pathlib.Path("/Applications") if "--top-level-clients" in sys.argv[2:] else app / "Contents/Resources/Clients"
 cli = "/Applications/MihomoBox.app/Contents/MacOS/mihomoboxctl"
 output = pathlib.Path(sys.argv[1])
 launch_services = "--launch-services" in sys.argv[2:]
 selected, control = "MihomoDNSSelected", "MihomoDNSControl"
+test_deadline = None
 
 
 def ctl(*args):
@@ -29,18 +31,21 @@ def ctl(*args):
 
 def run(client, mode, case="a"):
     try:
+        timeout = 20 if test_deadline is None else min(20, test_deadline - time.monotonic())
+        if timeout <= 0:
+            raise subprocess.TimeoutExpired("bounded_test_client", 0)
         client_app = clients / (client + ".app")
         if launch_services:
             with tempfile.TemporaryDirectory(prefix="app-proxy-client-") as directory:
                 result_file = pathlib.Path(directory) / "result.json"
                 r = subprocess.run(["/usr/bin/open", "-n", "-W", "-g", "-a", str(client_app),
                                     "--stdout", str(result_file), "--stderr", "/dev/null", "--args", mode, case],
-                                   capture_output=True, text=True, timeout=20)
+                                   capture_output=True, text=True, timeout=timeout)
                 d = json.loads(result_file.read_text())
                 exit_code = 0 if r.returncode == 0 and d.get("ok") else 1
         else:
             r = subprocess.run([str(client_app / "Contents/MacOS" / client), mode, case],
-                               capture_output=True, text=True, timeout=20)
+                               capture_output=True, text=True, timeout=timeout)
             d = json.loads(r.stdout)
             exit_code = r.returncode
         return {"client": "selected" if client == selected else "control", "mode": mode, "case": case,
@@ -53,6 +58,15 @@ def run(client, mode, case="a"):
 
 subprocess.run([str(pathlib.Path(__file__).with_name("audit-cloud-app.sh"))], check=True,
                env=dict(os.environ, CI_DEVELOPER_ID_SIGNED_APP_PATH=str(app)))
+if clients == pathlib.Path("/Applications"):
+    for client in [selected, control]:
+        copied = clients / (client + ".app")
+        subprocess.run(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(copied)],
+                       check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        executable = pathlib.Path("Contents/MacOS") / client
+        original = app / "Contents/Resources/Clients" / (client + ".app")
+        assert hashlib.sha256((copied / executable).read_bytes()).digest() == hashlib.sha256(
+            (original / executable).read_bytes()).digest(), "standalone_client_build_mismatch"
 before = ctl("status", "--json")
 assert before.get("active_profile") == "sheng.yaml" and before.get("health", {}).get("network_consistent") is True
 assert "dns_probe_enabled=false" in subprocess.check_output([str(host), "--status"], text=True, timeout=15)
@@ -62,8 +76,9 @@ raw = source.read_text()
 assert len(re.findall(r"^rules:\s*$", raw, re.M)) == 1
 report = {"strict_dns_verified": False, "cache_flushed": False, "tests": [], "routes": [],
           "counters": {}, "provider_started": False, "rollback": False,
-          "launch_services": launch_services}
+          "launch_services": launch_services, "top_level_clients": "--top-level-clients" in sys.argv[2:]}
 session = None
+watchdog = None
 logger = subprocess.Popen(["/usr/bin/log", "stream", "--style", "compact", "--level", "info",
                            "--predicate", 'subsystem == "dev.linsheng.mihomo-dns-probe" AND category == "app-proxy"'],
                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
@@ -98,6 +113,20 @@ observer = threading.Thread(target=observe, daemon=True)
 try:
     with tempfile.TemporaryDirectory(prefix="mihomo-app-proxy-") as folder:
         target = pathlib.Path(folder) / "app-proxy-cache-probe.yaml"
+        watchdog_code = """
+import subprocess,json,time
+time.sleep(270)
+c='/Applications/MihomoBox.app/Contents/MacOS/mihomoboxctl'
+h='/Applications/MihomoDNSProbe.app/Contents/MacOS/MihomoDNSProbe'
+try:
+ subprocess.run([h,'--app-disable'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=25)
+ d=json.loads(subprocess.check_output([c,'status','--json'],timeout=30))
+ if d.get('active_profile')=='app-proxy-cache-probe.yaml':
+  subprocess.run([c,'profile','switch','sheng.yaml'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=35)
+except Exception: pass
+"""
+        watchdog = subprocess.Popen([sys.executable, "-c", watchdog_code],
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         def apply(policy):
             content = re.sub(r"^(rules:\s*)$", lambda m: m[1] +
                              "\n  - PROCESS-NAME,MihomoDNSProbeExtension," + policy +
@@ -111,6 +140,7 @@ try:
             assert rules[0].get("proxy") == policy
         apply("Proxy")
         report["prewarmed"] = [run(control, "system", "b"), run(selected, "system", "a")]
+        test_deadline = time.monotonic() + 210
         session = subprocess.Popen([str(host), "--app-session"], stdout=subprocess.PIPE,
                                    stderr=subprocess.DEVNULL, text=True)
         def read_host():
@@ -131,7 +161,7 @@ try:
             raise TimeoutError("provider_start_not_observed")
         observer.start()
         print("app_proxy_started", flush=True)
-        budget = time.monotonic() + 150
+        budget = test_deadline
         for mode in ["system", "udp", "tcp", "connect", "https"]:
             for client, case in [(selected, "a"), (control, "a"), (control, "b"), (selected, "b")]:
                 if time.monotonic() >= budget:
@@ -142,11 +172,18 @@ try:
             report["tests"].append(run(selected, mode))
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
             report["tests"].extend(pool.map(lambda client: run(client, "system"), [selected, control]))
+        if time.monotonic() + 45 >= budget:
+            raise TimeoutError("insufficient_failure_test_budget")
+        report["connected_before_failure"] = "status=3;" in subprocess.check_output(
+            [str(host), "--app-status"], text=True, timeout=15)
         apply("REJECT")
         report["proxy_failure"] = [run(selected, "https"), run(control, "https")]
+        report["connected_after_failure"] = "status=3;" in subprocess.check_output(
+            [str(host), "--app-status"], text=True, timeout=15)
         report["proxy_failure_blocked"] = (
             report["proxy_failure"][0].get("result", {}).get("ok") is False
-            and report["proxy_failure"][1].get("result", {}).get("status") == 200)
+            and report["proxy_failure"][1].get("result", {}).get("status") == 200
+            and report["connected_before_failure"] and report["connected_after_failure"])
 except Exception as error:
     report["error"] = type(error).__name__
 finally:
@@ -162,15 +199,30 @@ finally:
         report["rollback"] = (report["app_disabled"] and after.get("active_profile") == "sheng.yaml"
                               and after.get("health", {}).get("network_consistent") is True
                               and doh.get("runtime_healthy") is True)
+        if watchdog and report["rollback"]:
+            watchdog.terminate(); watchdog.wait(timeout=5)
     finally:
         logger.terminate()
         try:
             logger.wait(timeout=5)
         except subprocess.TimeoutExpired:
             logger.kill()
+        report["basic_cases_passed"] = len(report["tests"]) == 25 and all(
+            t.get("exit") == 0 and t.get("result", {}).get("ok") is True
+            and t.get("result", {}).get("rcode", 0) == 0 for t in report["tests"])
+        report["proxy_route_observed"] = bool(report["routes"]) and all(
+            r["proxy"] and not r["direct"] and r["process_rule"] and r["rule_matches_extension"]
+            for r in report["routes"])
+        dns_tests = [t for t in report["tests"] if t["mode"] in ["system", "udp", "tcp"]]
+        report["controlled_dns_separation_observed"] = len(dns_tests) == 14 and all(
+            t.get("exit") == 0 and t.get("result", {}).get("ok") is True
+            and t.get("result", {}).get("fake_ip") is (t["client"] == "control")
+            and t.get("result", {}).get("rcode", 0) == 0 for t in dns_tests)
         output.write_text(json.dumps(report, indent=2) + "\n")
 print(json.dumps({"cases": len(report["tests"]), "provider_started": report["provider_started"],
                   "rollback": report["rollback"], "strict_dns_verified": False}))
 if (not report["rollback"] or "error" in report or not report.get("proxy_failure_blocked")
-        or not report["counters"].get("hostname_tcp_selected")):
+        or not report["counters"].get("hostname_tcp_selected")
+        or not report["basic_cases_passed"] or not report["proxy_route_observed"]
+        or not report["controlled_dns_separation_observed"]):
     raise SystemExit(1)

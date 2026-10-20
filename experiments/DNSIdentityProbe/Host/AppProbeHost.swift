@@ -48,8 +48,8 @@ final class AppProbeHost {
     private func preparePerAppManager() {
         guard let manager, !manager.isEnabled else { finish("app_already_enabled", 1) }
         if manager.routingMethod == .sourceApplication { enable(); return }
-        // Build 31 created a destination-IP manager. appRules are ignored for
-        // that routing method. Remove only our disabled experimental record.
+        // appRules are ignored for destination-IP routing. If an older test
+        // saved that kind of record, replace only our disabled configuration.
         manager.removeFromPreferences { error in
             DispatchQueue.main.async {
                 guard error == nil else { self.finish("app_legacy_configuration_remove_failed", 1) }

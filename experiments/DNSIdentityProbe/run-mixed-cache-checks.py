@@ -18,8 +18,9 @@ import time
 CLI = "/Applications/MihomoBox.app/Contents/MacOS/mihomoboxctl"
 HOST = "/Applications/MihomoDNSProbe.app/Contents/MacOS/MihomoDNSProbe"
 output = pathlib.Path(sys.argv[1])
-clients = pathlib.Path(sys.argv[2]) if len(sys.argv) > 2 else pathlib.Path(
+clients = pathlib.Path(sys.argv[2]) if len(sys.argv) > 2 and not sys.argv[2].startswith("--") else pathlib.Path(
     "/Applications/MihomoDNSProbe.app/Contents/Resources/Clients")
+launch_services = "--launch-services" in sys.argv[2:]
 selected, control = "MihomoDNSSelected", "MihomoDNSControl"
 
 
@@ -32,13 +33,24 @@ def ctl(*args):
 
 def run(client, mode, case):
     try:
-        r = subprocess.run([str(clients / (client + ".app") / "Contents/MacOS" / client), mode, case],
-                           capture_output=True, text=True, timeout=20)
-        data = json.loads(r.stdout)
+        client_app = clients / (client + ".app")
+        if launch_services:
+            with tempfile.TemporaryDirectory(prefix="mixed-probe-client-") as directory:
+                result_file = pathlib.Path(directory) / "result.json"
+                r = subprocess.run(["/usr/bin/open", "-n", "-W", "-g", "-a", str(client_app),
+                                    "--stdout", str(result_file), "--stderr", "/dev/null", "--args", mode, case],
+                                   capture_output=True, text=True, timeout=20)
+                data = json.loads(result_file.read_text())
+                exit_code = 0 if r.returncode == 0 and data.get("ok") else 1
+        else:
+            r = subprocess.run([str(client_app / "Contents/MacOS" / client), mode, case],
+                               capture_output=True, text=True, timeout=20)
+            data = json.loads(r.stdout)
+            exit_code = r.returncode
         safe = {k: data[k] for k in ["ok", "fake_ip", "status", "resolver_code", "answer_count", "stage"] if k in data}
         return {"client": "selected" if client == selected else "control", "mode": mode,
-                "case": case, "exit": r.returncode, "result": safe}
-    except (ValueError, subprocess.TimeoutExpired):
+                "case": case, "exit": exit_code, "result": safe}
+    except (OSError, ValueError, subprocess.TimeoutExpired):
         return {"client": "selected" if client == selected else "control", "mode": mode,
                 "case": case, "failed": "timeout_or_invalid_result"}
 
@@ -69,6 +81,7 @@ def local_doh_answer():
 before = ctl("status", "--json")
 assert before.get("active_profile") == "sheng.yaml" and before.get("health", {}).get("network_consistent") is True
 assert "dns_probe_enabled=false" in subprocess.check_output([HOST, "--status"], text=True, timeout=15)
+assert "app_probe_enabled=false" in subprocess.check_output([HOST, "--app-status"], text=True, timeout=15)
 source = pathlib.Path.home() / "Library/Application Support/MihomoBox/profiles/sheng.yaml"
 raw = source.read_text()
 original_digest = hashlib.sha256(source.read_bytes()).hexdigest()
@@ -76,7 +89,8 @@ assert len(re.findall(r"^rules:\s*$", raw, re.M)) == 1
 assert re.search(r"^  enhanced-mode:\s*fake-ip\s*$", raw, re.M)
 assert re.search(r"^  fake-ip-filter-mode:\s*rule\s*$", raw, re.M)
 assert len(re.findall(r"^  fake-ip-filter:\s*$", raw, re.M)) == 1
-report = {"cache_flushed": False, "strict_system_dns_isolation": False, "phases": [], "rollback": False}
+report = {"cache_flushed": False, "strict_system_dns_isolation": False, "phases": [], "rollback": False,
+          "launch_services": launch_services}
 deadline = time.monotonic() + 210
 watchdog = None
 try:
@@ -145,13 +159,18 @@ except Exception: pass
                     and r["proxy"] == (policy == "Proxy") and r["direct"] == (policy == "DIRECT")
                     for r in item["routes"])
                 for client, policy in expected.items() if policy != "REJECT")
-            item["fakeip_connections_expected"] = all(
+            item["routes_expected"] = item["routes_expected"] and all(
+                r["process_rule"] and r["rule_matches_client"]
+                and r["proxy"] == (expected[r["client"]] == "Proxy")
+                and r["direct"] == (expected[r["client"]] == "DIRECT") for r in item["routes"])
+            fakeip_tests = [t for t in item["tests"] if t["mode"] == "doh-connect"]
+            item["fakeip_connections_expected"] = len(fakeip_tests) == 4 and all(
                 (t.get("exit") != 0 and t.get("result", {}).get("ok") is False
                  and t.get("result", {}).get("stage", "").startswith("tls_"))
                 if phase == "selected_reject" and t["client"] == "selected"
                 else (t.get("exit") == 0 and t.get("result", {}).get("status") == 200
                       and t.get("result", {}).get("fake_ip") is True)
-                for t in item["tests"] if t["mode"] == "doh-connect")
+                for t in fakeip_tests)
             print(json.dumps({"phase": phase, "dns_consistent": item["dns_consistent"],
                               "connections_expected": item["connections_expected"],
                               "observed_routes": len(item["routes"])}), flush=True)
