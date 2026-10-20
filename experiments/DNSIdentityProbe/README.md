@@ -269,3 +269,29 @@ unordered identities and nested tool restrictions without relaxing any fields.
 The local-flow bridge explicitly opens a loopback connection: returning false
 from an App Proxy handler fails the flow, as documented in
 [Apple DTS's explanation](https://developer.apple.com/forums/thread/842052).
+
+Cloud Build 34 passed disabled-state rule readback for the two main real apps
+and for all 53 consolidated rules on the test Mac. Its 74 executable identities
+covered all 13 related running executable paths at the inventory checkpoint.
+`run-ai-app-checks.py RESULT.json [--rules SET]` performs the bounded real-helper
+HTTPS, UDP, local-callback and connection-rejection checks, then restores the
+original profile. It retains a resolved test address only in the helper's memory
+for the rejection/recovery pair and tests fresh DNS separately. It never sends
+chat messages. The successful run is documented in `docs/decisions.md`; a
+successful Codex read-only request and a Claude auth-status command do not by
+themselves prove separate flow attribution for every CLI/helper.
+
+The explicitly enabled persistent configuration on the test Mac uses the
+separate `ai-app-proxy.yaml` profile; `sheng.yaml` is preserved byte-for-byte.
+To stop it and restore that original profile:
+
+```sh
+/Applications/MihomoDNSProbe.app/Contents/MacOS/MihomoDNSProbe --app-disable
+/Applications/MihomoBox.app/Contents/MacOS/mihomoboxctl profile switch sheng.yaml
+```
+
+To re-enable after updating application/helper paths, first select the dedicated
+profile through the main App or the typed CLI, then run `--app-ai-enable`; that
+command re-discovers signatures and paths before saving. Do not use the original
+profile without its explicit extension Proxy rule. The full `--rules` choices
+also include `primary` (main apps, native CLIs and restricted terminal hosts).

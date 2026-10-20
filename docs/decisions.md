@@ -339,3 +339,54 @@ while the session was active; DNS-setting scope and coexistence must be resolved
 before claiming unaffected unselected applications. IPv6/AAAA/HTTPS records,
 browser helpers, application-owned encrypted DNS, network changes and sleep/wake
 also remain outside this checkpoint.
+
+### Real AI applications: signed rule set and connection forwarding
+
+Cloud Build 34 (`e8574479`) extends the independent App Proxy host to discover
+installed ChatGPT/Codex and Claude applications, native CLIs, signed bundled
+helpers, Codex auxiliary runtimes, and code-hash-pinned Claude remote servers.
+The tested Mac has 74 validated executable identities, consolidated into 53
+NE rules. Terminal/editor rules retain `matchTools` restrictions; the provider
+checks the source audit token, designated requirement and exact executable path.
+All 13 distinct related executable paths running at the inventory checkpoint
+were present. Updates that change helper/CLI paths or ad-hoc code hashes require
+re-discovery; this is not a universal promise about arbitrary future children.
+
+Cloud Build 33's initial per-executable rule configuration failed readback and
+was disabled automatically. The original two controlled rules still started
+successfully. In Build 34, both the two-real-application subset and the full
+consolidated set passed disabled-state preference readback. Cross-vendor app
+matching is therefore not itself a demonstrated barrier. The correction removes
+NE-level per-executable paths, consolidates repeated signing identities, and
+compares rule sets without relying on order; executable paths remain enforced
+inside the provider. These changes were tested together, so the individual cause
+of the original empty-rule result has not been isolated.
+
+Real-mode TCP supports hostnames, IPv4/IPv6 and general ports. UDP uses a bounded
+SOCKS5 association to the existing core; DNS uses proxied DoH. Explicit loopback
+bridges preserve local callbacks. TCP's setup timeout no longer cuts off an
+established stream. The root daemon remains the only managed core owner.
+
+A signed ChatGPT helper completed HTTPS, a public STUN UDP binding check and a
+local HTTP callback. Connection snapshots showed the extension's explicit
+ProcessName Proxy rule, with no DIRECT chain. Codex CLI completed a read-only
+cloud request. Claude CLI's authentication-status command exited nonzero and
+cannot establish its network behavior; no chat prompts or account contents were
+sent or retained. The observed flow counters were attributed to ChatGPT, so
+independent runtime coverage of every Claude/CLI identity is still pending.
+
+The first failure/recovery run used a new helper for each request and failed to
+establish immediate recovery; its coarse timeout/invalid-output diagnostic does
+not prove a DNS-cache cause. A subsequent test kept the helper alive and retained
+one DNS answer only in memory. With the extension route changed to REJECT, the
+same helper's HTTPS connection failed with ECONNRESET; restoring Proxy let it
+connect again. A fresh DNS/HTTPS request also succeeded, and the session was
+connected throughout. No DNS cache was flushed. This establishes tested
+connection failure/recovery, not strict per-application DNS isolation.
+
+After the bounded session restored the original profile, an explicit persistent
+session was enabled with a separate `ai-app-proxy.yaml` copy containing the
+extension's Proxy rule first. Readback, HTTPS, TUN, Local DoH, original source
+integrity and network consistency passed. The main App and daemon were not
+replaced and no release was published. The experiment has no main-App UI,
+login-start integration or guaranteed reconnect after an extension crash.

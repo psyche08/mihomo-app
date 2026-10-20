@@ -6,6 +6,7 @@ import json
 import os
 import pathlib
 import re
+import selectors
 import subprocess
 import sys
 import tempfile
@@ -54,9 +55,38 @@ def node(code):
         env = {k:v for k,v in os.environ.items() if k.lower() not in ['http_proxy','https_proxy','all_proxy','no_proxy','node_options']}
         env['NODE_USE_ENV_PROXY'] = '0'
         r = subprocess.run([NODE, '-e', code], capture_output=True, text=True, timeout=16, env=env)
-        return {'ok': json.loads(r.stdout).get('ok') is True, 'exit': r.returncode}
-    except (subprocess.TimeoutExpired, ValueError):
-        return {'ok': False, 'timeout_or_invalid_result': True}
+        try:
+            return {'ok': json.loads(r.stdout).get('ok') is True, 'exit': r.returncode}
+        except ValueError:
+            return {'ok': False, 'invalid_result': True, 'exit': r.returncode,
+                    'stderr_codes': sorted(set(re.findall(r'\bE[A-Z_]{2,25}\b', r.stderr)))}
+    except subprocess.TimeoutExpired:
+        return {'ok': False, 'timeout': True}
+
+# Keep the selected helper alive and retain one resolved address only in memory.
+# This separates connection rejection/recovery from resolver failure caching.
+DRIVER = """
+const dns=require('dns'),https=require('https'),readline=require('readline');let address;
+dns.lookup('example.com',{family:4},(e,a)=>{if(e){console.log(JSON.stringify({ready:false}));return;}address=a;console.log(JSON.stringify({ready:true}));});
+readline.createInterface({input:process.stdin}).on('line',()=>{
+ if(!address){console.log(JSON.stringify({ok:false}));return;}
+ let done=false;const timer=setTimeout(()=>finish(false,'TIMEOUT'),12000);
+ function finish(ok,error){if(done)return;done=true;clearTimeout(timer);console.log(JSON.stringify({ok,error}));}
+ const req=https.get('https://example.com/',{agent:false,lookup:(h,o,cb)=>o.all?cb(null,[{address,family:4}]):cb(null,address,4)},r=>{r.resume();r.on('end',()=>finish(r.statusCode===200));});
+ req.on('error',e=>finish(false,/^E[A-Z_]+$/.test(e.code||'')?e.code:'ERROR'));
+});
+"""
+driver = None
+selector = None
+def driver_read():
+    if not selector.select(timeout=18): return {'ok':False,'timeout':True,'exit':driver.poll()}
+    line = driver.stdout.readline()
+    try: return json.loads(line)
+    except ValueError: return {'ok':False,'invalid_result':True,'exit':driver.poll()}
+def driver_request():
+    if driver.poll() is not None: return {'ok':False,'exit':driver.returncode}
+    driver.stdin.write('https\n');driver.stdin.flush()
+    return driver_read()
 
 before = ctl('status', '--json')
 original = before.get('active_profile')
@@ -136,6 +166,12 @@ try:
         print('ai_app_proxy_connected',flush=True)
         report['tests']['selected_loopback'] = node(LOOPBACK)
         report['tests']['selected_https'] = node(HTTPS)
+        env = {k:v for k,v in os.environ.items() if k.lower() not in ['http_proxy','https_proxy','all_proxy','no_proxy','node_options']}
+        env['NODE_USE_ENV_PROXY'] = '0'
+        driver = subprocess.Popen([NODE,'-e',DRIVER],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True,env=env)
+        selector = selectors.DefaultSelector();selector.register(driver.stdout,selectors.EVENT_READ)
+        assert driver_read().get('ready') is True, 'driver_not_ready'
+        report['tests']['selected_retained_address'] = driver_request()
         report['tests']['selected_udp_stun'] = node(STUN)
         # Read-only CLI requests; output is discarded to avoid recording task or account data.
         try:
@@ -152,15 +188,19 @@ try:
         time.sleep(8)
         observe_positive = False
         apply('REJECT')
-        report['tests']['selected_reject'] = node(HTTPS)
+        report['tests']['selected_reject'] = driver_request()
         report['connected_during_reject'] = 'status=3;' in state()
         apply('Proxy')
-        report['tests']['selected_recovered'] = node(HTTPS)
+        report['tests']['selected_recovered'] = driver_request()
+        report['connected_after_recovery'] = 'status=3;' in state()
+        report['tests']['fresh_dns_recovered'] = node(HTTPS.replace('example.com','example.org'))
 except Exception as error:
     report['error'] = type(error).__name__
     if str(error) in ['host_exited','typed_action_failed','not_connected']: report['reason'] = str(error)
 finally:
     observing = False
+    if driver and driver.poll() is None: driver.terminate();driver.wait(timeout=5)
+    if selector: selector.close()
     try:
         r = subprocess.run([HOST,'--app-disable'],capture_output=True,text=True,timeout=25)
         report['disabled'] = r.returncode == 0 and 'app_probe_disabled' in r.stdout
@@ -177,7 +217,7 @@ finally:
         report['tcp_verified'] = (report['tests'].get('selected_https',{}).get('ok') is True
             and report['tests'].get('selected_reject',{}).get('ok') is False
             and report['tests'].get('selected_recovered',{}).get('ok') is True
-            and report.get('connected_during_reject') is True
+            and report.get('connected_during_reject') is True and report.get('connected_after_recovery') is True
             and report['counters'].get('hostname_tcp_chatgpt',0)>0
             and bool(report['routes']) and all(x['proxy'] and not x['direct'] and x['extension_rule'] for x in report['routes']))
         output.write_text(json.dumps(report,indent=2)+'\n')
