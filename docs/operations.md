@@ -1,5 +1,27 @@
 # Operations
 
+## Per-application proxy settings
+
+Open **App Proxy** in the sidebar (Command-8). Use **Add App or CLI…** to select
+a signed application bundle or executable. Embedded signed helpers follow the
+application's route. Expand **Signed executables** to inspect the discovered
+paths, Signing IDs, Team IDs and designated requirements; Refresh re-scans disk.
+Unsigned files and duplicate executable ownership are rejected.
+
+Choose a node or proxy group for every entry, then **Apply Routes** and
+**Enable App Proxy…**. A LoadBalance group is accepted only when every candidate
+resolves to a remote proxy. macOS may require Network Extension and VPN approval.
+Disable App Proxy before adding or removing entries. Removing an entry only
+removes its proxy routing, never the installed application. Apply saves these
+changes; Restore Default Apps brings back the four initial categories.
+For authenticated remote diagnosis, `mihomoboxctl app-proxy status` reads the
+saved list and `mihomoboxctl app-proxy set-all Proxy` transactionally assigns
+the existing entries to a group through the same typed XPC validation. Neither
+command changes macOS extension approval or adds application identities.
+
+This page does not prepare or enable Local DoH. A fresh CLI installation keeps
+Local DoH unprepared until the operator explicitly invokes Prepare & Trust.
+
 ## Uninstalling the Privileged Helper
 
 Use **Tools › Uninstall Helper…** in the menu-bar App. The action is separate

@@ -21,11 +21,33 @@ public enum AppProxyApplication: String, Codable, CaseIterable, Sendable, Identi
     }
 }
 
+public struct AppProxyEntry: Codable, Equatable, Sendable, Identifiable {
+    public var id: String
+    public var title: String
+    public var path: String?
+    public var port: UInt16
+    public init(id: String, title: String, path: String? = nil, port: UInt16) {
+        self.id = id; self.title = title; self.path = path; self.port = port
+    }
+    public static var defaults: [Self] {
+        AppProxyApplication.allCases.map { .init(id: $0.rawValue, title: $0.title, port: $0.port) }
+    }
+}
+
 /// Empty routes means unconfigured. A configured set is complete, so an
 /// unidentified/missing category can never fall back to a shared proxy.
 public struct AppProxySettings: Codable, Equatable, Sendable {
     public var routes: [String: String]
-    public init(routes: [String: String] = [:]) { self.routes = routes }
+    public var applications: [AppProxyEntry]
+    public init(routes: [String: String] = [:], applications: [AppProxyEntry] = AppProxyEntry.defaults) {
+        self.routes = routes; self.applications = applications
+    }
+    private enum CodingKeys: String, CodingKey { case routes, applications }
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        routes = try values.decode([String: String].self, forKey: .routes)
+        applications = try values.decodeIfPresent([AppProxyEntry].self, forKey: .applications) ?? AppProxyEntry.defaults
+    }
     public func validateRoutes(in snapshot: ControllerRouteSnapshot) throws {
         try validate()
         guard routes.values.allSatisfy({ snapshot.routesThroughRemoteProxy($0) }) else {
@@ -33,7 +55,23 @@ public struct AppProxySettings: Codable, Equatable, Sendable {
         }
     }
     public func validate() throws {
-        guard routes.isEmpty || Set(routes.keys) == Set(AppProxyApplication.allCases.map(\.rawValue)),
+        guard applications.count <= 32,
+              Set(applications.map(\.id)).count == applications.count,
+              Set(applications.map(\.port)).count == applications.count,
+              applications.allSatisfy({ entry in
+                  guard !entry.title.isEmpty, entry.title.utf8.count <= 256,
+                        !entry.title.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else { return false }
+                  if let builtin = AppProxyApplication(rawValue: entry.id) {
+                      return entry.path == nil && entry.port == builtin.port
+                  }
+                  guard entry.id.hasPrefix("app_"), UUID(uuidString: String(entry.id.dropFirst(4))) != nil,
+                        (17975...18002).contains(entry.port), let path = entry.path,
+                        path.hasPrefix("/"), path.utf8.count <= 4096,
+                        !path.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains),
+                        URL(fileURLWithPath: path).standardizedFileURL.path == path else { return false }
+                  return true
+              }),
+              routes.isEmpty || Set(routes.keys) == Set(applications.map(\.id)),
               routes.values.allSatisfy({ value in
                   !value.isEmpty && value.utf8.count <= 1024
                     && value == value.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -49,7 +87,7 @@ public enum AppProxySettingsError: LocalizedError {
         switch self {
         case .unavailableNode: "An App Proxy target is missing or does not currently resolve to a remote proxy. Refresh the node list and choose another target."
         case .invalidRoutes: "Choose a proxy node or proxy group for each application."
-        case .unsupportedProfile: "App Proxy requires a single block-style profile without custom listeners or conflicting ports (17971–17974)."
+        case .unsupportedProfile: "App Proxy requires a single block-style profile without custom listeners or conflicting application listener ports."
         case .staleState: "The active profile or App Proxy settings changed. Refresh before applying."
         }
     }

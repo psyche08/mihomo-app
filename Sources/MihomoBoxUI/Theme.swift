@@ -6,6 +6,7 @@ import SwiftUI
 public enum DashboardPage: String, CaseIterable, Identifiable, Sendable {
   case overview
   case proxies
+  case appProxy
   case rules
   case connections
   case usage
@@ -18,6 +19,7 @@ public enum DashboardPage: String, CaseIterable, Identifiable, Sendable {
     switch self {
     case .overview: "Overview"
     case .proxies: "Proxies"
+    case .appProxy: "App Proxy"
     case .rules: "Rules"
     case .connections: "Connections"
     case .usage: "Data Usage"
@@ -30,6 +32,7 @@ public enum DashboardPage: String, CaseIterable, Identifiable, Sendable {
     switch self {
     case .overview: "house"
     case .proxies: "globe"
+    case .appProxy: "app.connected.to.app.below.fill"
     case .rules: "ruler"
     case .connections: "network"
     case .usage: "chart.xyaxis.line"
@@ -47,6 +50,7 @@ public enum DashboardPage: String, CaseIterable, Identifiable, Sendable {
     case .usage: "5"
     case .logs: "6"
     case .config: "7"
+    case .appProxy: "8"
     }
   }
 
@@ -59,6 +63,7 @@ public enum DashboardPage: String, CaseIterable, Identifiable, Sendable {
     case .usage: "5"
     case .logs: "6"
     case .config: "7"
+    case .appProxy: "8"
     }
   }
 }

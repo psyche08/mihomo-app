@@ -633,6 +633,8 @@ public final class DashboardStore: ObservableObject {
       updateStreamBackedState(for: .usage)
     case .logs:
       break
+    case .appProxy:
+      await appProxy.refresh()
     case .config:
       await refreshLocalDoHStatus()
       await load(page: page) {
@@ -1213,7 +1215,7 @@ public final class DashboardStore: ObservableObject {
     case .connections: [.connections]
     case .usage: [.connections, .traffic]
     case .logs: [.logs]
-    case .proxies, .rules, .config: []
+    case .proxies, .rules, .config, .appProxy: []
     }
   }
 
@@ -1243,6 +1245,7 @@ public final class DashboardStore: ObservableObject {
     case .usage: usageState
     case .logs: logsState
     case .config: configState
+    case .appProxy: .loaded
     }
   }
 
@@ -1255,6 +1258,7 @@ public final class DashboardStore: ObservableObject {
     case .usage: usageState = state
     case .logs: logsState = state
     case .config: configState = state
+    case .appProxy: break
     }
   }
 

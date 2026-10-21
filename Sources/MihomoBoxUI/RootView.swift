@@ -153,6 +153,8 @@ public struct RootView: View {
       OverviewView(store: store)
     case .proxies:
       ProxiesView(store: store)
+    case .appProxy:
+      AppProxyView(dashboard: store, model: store.appProxy)
     case .rules:
       RulesView(store: store)
     case .connections:

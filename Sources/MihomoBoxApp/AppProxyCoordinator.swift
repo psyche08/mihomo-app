@@ -3,6 +3,7 @@ import NetworkExtension
 import SystemExtensions
 import Security
 import MihomoBoxUI
+import MihomoControl
 
 /// User-scoped NetworkExtension preferences. Privileged core/profile changes
 /// remain typed XPC actions handled by the root daemon.
@@ -28,16 +29,32 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
     private func failure(_ message: String) -> NSError {
         NSError(domain: "MihomoBox.AppProxy", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
     }
-    func status() async throws -> AppProxyExtensionStatus {
-        guard available else { return .init(available: false) }
-        let manager = try await load()
-        if let targets = try? await Task.detached(operation: { try AIAppTargets(requireAll: false) }).value {
-            counts = Dictionary(grouping: targets.targets, by: \.category).mapValues(\.count)
-        }
-        return .init(available: true, enabled: manager?.isEnabled == true,
-                     connected: manager?.connection.status == .connected, targetCounts: counts)
+    func status(applications: [AppProxyEntry]) async throws -> AppProxyExtensionStatus {
+        let manager = available ? try await load() : nil
+        let targets = try await Task.detached { try AIAppTargets(requireAll: false, applications: applications) }.value
+        counts = Dictionary(grouping: targets.targets, by: \.category).mapValues(\.count)
+        return .init(available: available, enabled: manager?.isEnabled == true,
+                     connected: manager?.connection.status == .connected, targetCounts: counts,
+                     executables: targets.targets.filter { $0.category != "cli_host" }.map {
+                         .init(applicationID: $0.category, path: $0.path, signingIdentifier: $0.id,
+                               teamIdentifier: $0.team, requirement: $0.requirement)
+                     })
     }
-    func setEnabled(_ enabled: Bool) async throws {
+    func chooseApplication(port: UInt16) async throws -> AppProxyEntry? {
+        let panel = NSOpenPanel()
+        panel.title = "Add application or CLI executable"
+        panel.message = "Choose a signed .app or CLI executable. Signed helpers inside an app are included."
+        panel.canChooseFiles = true; panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false; panel.treatsFilePackagesAsDirectories = false
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        guard await panel.begin() == .OK, let selected = panel.url else { return nil }
+        let url = selected.resolvingSymlinksInPath().standardizedFileURL
+        let title = selected.pathExtension == "app" ? selected.deletingPathExtension().lastPathComponent : selected.lastPathComponent
+        let entry = AppProxyEntry(id: "app_" + UUID().uuidString.lowercased(), title: title, path: url.path, port: port)
+        _ = try await Task.detached { try AIAppTargets(requireAll: false, applications: [entry]) }.value
+        return entry
+    }
+    func setEnabled(_ enabled: Bool, settings: AppProxySettings) async throws {
         guard !busy, available else { throw failure("The bundled App Proxy extension is unavailable or busy.") }
         busy = true; defer { busy = false }
         let existing = try await load()
@@ -46,7 +63,10 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
             return
         }
         guard existing?.isEnabled != true else { throw failure("Disable App Proxy before refreshing application identities.") }
-        let targets = try await Task.detached { try AIAppTargets(requireAll: false) }.value
+        try settings.validate()
+        guard !settings.routes.isEmpty else { throw failure("Choose at least one application and proxy route.") }
+        let targets = try await Task.detached { try AIAppTargets(requireAll: false, applications: settings.applications) }.value
+        guard targets.targets.contains(where: { $0.category != "cli_host" }) else { throw failure("No signed executables are available.") }
         try await activate()
         try await removeLegacyPacketConfigurations()
         let manager = existing ?? Self.makeManager()
@@ -55,7 +75,8 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         config.providerBundleIdentifier = extensionID
         config.serverAddress = "MihomoBox App Proxy"
         config.providerConfiguration = ["mode": "ai", "targets": targets.targets.map(\.record),
-                                        "deadline": 0, "routing": "per-application-v1"]
+                                        "deadline": 0, "routing": "per-application-v2",
+                                        "ports": Dictionary(uniqueKeysWithValues: settings.applications.map { ($0.id, Int($0.port)) })]
         manager.protocolConfiguration = config
         manager.localizedDescription = "MihomoBox App Proxy"
         manager.appRules = targets.rules

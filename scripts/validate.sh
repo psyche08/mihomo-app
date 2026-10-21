@@ -52,6 +52,7 @@ env \
 /bin/bash Tests/test_installer_protocol_migration.sh
 /bin/bash Tests/test_installer_rollback.sh
 /bin/bash Tests/test_local_doh_installer.sh
+/bin/bash Tests/test_app_proxy_configuration.sh
 /bin/bash Tests/test_release_product.sh
 /bin/bash -n scripts/*.sh Tests/e2e.sh
 /bin/zsh -n scripts/*.zsh

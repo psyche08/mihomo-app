@@ -17,6 +17,33 @@ final class AppProxyProfileTests: XCTestCase {
         XCTAssertFalse(rendered.contains("0.0.0.0"))
         XCTAssertEqual(try AppProxyProfile.applying(.init(), to: source), source)
     }
+    func testLegacySettingsMigrateAndExplicitEmptyApplicationListStaysEmpty() throws {
+        let legacy = try JSONDecoder().decode(AppProxySettings.self, from: Data(#"{"routes":{}}"#.utf8))
+        XCTAssertEqual(legacy.applications, AppProxyEntry.defaults)
+        let empty = AppProxySettings(applications: [])
+        let restored = try JSONDecoder().decode(AppProxySettings.self, from: JSONEncoder().encode(empty))
+        XCTAssertEqual(restored, empty)
+        XCTAssertNoThrow(try restored.validate())
+    }
+
+    func testCustomApplicationProducesOnlyItsOwnBoundedListener() throws {
+        let entry = AppProxyEntry(id: "app_00000000-0000-0000-0000-000000000001", title: "Browser", path: "/Applications/Browser.app", port: 17975)
+        let custom = AppProxySettings(routes: [entry.id: "remote"], applications: [entry])
+        let output = try AppProxyProfile.applying(custom, to: "rules: []\n")
+        XCTAssertTrue(output.contains("port: 17975"))
+        XCTAssertFalse(output.contains("port: 17971"))
+        XCTAssertThrowsError(try AppProxyProfile.applying(custom, to: "mixed-port: 17975\n"))
+        for invalidPort in [UInt16(22), 7897, 17971, 18003] {
+            var invalid = custom; invalid.applications[0].port = invalidPort
+            XCTAssertThrowsError(try invalid.validate())
+        }
+        var invalid = custom; invalid.applications.append(entry)
+        XCTAssertThrowsError(try invalid.validate())
+        invalid = custom; invalid.applications[0].path = "/Applications/../Browser.app"
+        XCTAssertThrowsError(try invalid.validate())
+        invalid = custom; invalid.applications[0].id = "injected:\nlisteners"
+        XCTAssertThrowsError(try invalid.validate())
+    }
     func testRejectsAmbiguousProfilesAndPortConflicts() {
         for source in ["listeners: []", "'listeners': []", "<<: *base", "---\n---\n", "...", "mixed-port: 17971", "socks-port: '17974'"] {
             XCTAssertThrowsError(try AppProxyProfile.applying(settings, to: source), source)
@@ -71,5 +98,50 @@ final class AppProxyProfileTests: XCTestCase {
             routes = settings; routes.routes["chatgpt"] = target
             XCTAssertThrowsError(try routes.validate())
         }
+    }
+
+    func testLoadBalancedAppRoutesDoNotRequireCurrentSelection() throws {
+        // Match the pinned core's /proxies response: LoadBalance has `all`
+        // but no `now`, unlike a Selector or URLTest group.
+        let snapshot = try ControllerRouteSnapshot(
+            configsData: Data(#"{"mode":"rule"}"#.utf8),
+            proxiesData: Data(#"""
+            {"proxies":{
+              "Proxy":{"name":"Proxy","type":"LoadBalance","all":["direct-node","via-us","via-jp"]},
+              "direct-node":{"name":"direct-node","type":"Trojan"},
+              "via-us":{"name":"via-us","type":"Vmess"},
+              "via-jp":{"name":"via-jp","type":"Trojan"}
+            }}
+            """#.utf8)
+        )
+        let routes = AppProxySettings(routes: Dictionary(uniqueKeysWithValues:
+            AppProxyApplication.allCases.map { ($0.rawValue, "Proxy") }))
+        XCTAssertNoThrow(try routes.validateRoutes(in: snapshot))
+    }
+
+    func testLoadBalancedRoutesValidateEveryBranchAndRejectCycles() {
+        var snapshot = ControllerRouteSnapshot(mode: "rule", proxies: [
+            "Proxy": .init(name: "Proxy", type: "LoadBalance", all: ["Node", "Nested"]),
+            "Nested": .init(name: "Nested", type: "LoadBalance", all: ["Auto", "Node"]),
+            "Auto": .init(name: "Auto", type: "Selector", now: "Node", all: ["Node", "DIRECT"]),
+            "Node": .init(name: "Node", type: "Trojan"),
+            "DIRECT": .init(name: "DIRECT", type: "Direct"),
+            "Unknown": .init(name: "Unknown", type: "FutureProtocol"),
+            "RenamedDirect": .init(name: "RenamedDirect", type: "Direct"),
+        ])
+        XCTAssertTrue(snapshot.routesThroughRemoteProxy("Proxy"))
+        for members in [[String](), ["DIRECT"], ["Node", "DIRECT"], ["Node", "REJECT"],
+                        ["Node", "Missing"], ["Node", "Unknown"], ["Node", "RenamedDirect"],
+                        ["Node", "Proxy"], ["Node", "Nested"]] {
+            snapshot.proxies["Nested"]?.all = members
+            XCTAssertFalse(snapshot.routesThroughRemoteProxy("Proxy"), "members=\(members)")
+        }
+        snapshot.proxies["Nested"]?.all = ["Auto"]
+        snapshot.proxies["Auto"]?.now = "Proxy"
+        XCTAssertFalse(snapshot.routesThroughRemoteProxy("Proxy"))
+        snapshot.proxies["Auto"]?.now = "DIRECT"
+        XCTAssertFalse(snapshot.routesThroughRemoteProxy("Proxy"))
+        snapshot.proxies["Auto"]?.now = ""
+        XCTAssertFalse(snapshot.routesThroughRemoteProxy("Proxy"))
     }
 }

@@ -206,7 +206,19 @@ additional Mihomo process participates in this control path.
 The extension reuses the audited experiment's flow handling and signature
 inspection, but `MAIN_APP_PROXY` requires the per-application routing schema
 and rejects legacy test sessions. Its only remote forwarding paths are the
-four fixed root-core loopback listeners. Unknown identities and unattributable
+validated root-core loopback listeners: 17971–17974 for the default applications,
+and 17975–18002 for user-selected signed apps and CLI executables. The root
+settings schema bounds and validates application IDs, ports and route names;
+the extension independently validates the same port mapping. Application paths
+are discovery metadata, never root-side filesystem instructions. Unknown identities and unattributable
 CLI hosts fail closed. DNS HTTPS sessions are isolated by application listener;
 loopback application callbacks remain explicit local bridges. No controller
 credentials, arbitrary remote endpoints, or packet logs are added to the UI.
+
+The independent App Proxy page owns the editable application list. Default
+entries migrate from the original four-route settings without losing choices.
+Changing the list requires disabling the extension first; node-only changes
+retain stable ports. The App re-discovers signatures before enabling and rejects
+executables assigned to more than one entry. Expand an entry to inspect paths,
+signing identifiers, Team IDs and designated requirements. LoadBalance groups
+have no current selection; route validation checks every member recursively.

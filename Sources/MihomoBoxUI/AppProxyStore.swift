@@ -1,20 +1,36 @@
 import Foundation
 import MihomoControl
 
+public struct AppProxyExecutable: Equatable, Sendable, Identifiable {
+    public var id: String { path }
+    public let applicationID: String
+    public let path: String
+    public let signingIdentifier: String
+    public let teamIdentifier: String?
+    public let requirement: String
+    public init(applicationID: String, path: String, signingIdentifier: String, teamIdentifier: String?, requirement: String) {
+        self.applicationID = applicationID; self.path = path; self.signingIdentifier = signingIdentifier
+        self.teamIdentifier = teamIdentifier; self.requirement = requirement
+    }
+}
+
 public struct AppProxyExtensionStatus: Equatable, Sendable {
     public var available: Bool
     public var enabled: Bool
     public var connected: Bool
     public var targetCounts: [String: Int]
-    public init(available: Bool, enabled: Bool = false, connected: Bool = false, targetCounts: [String: Int] = [:]) {
+    public var executables: [AppProxyExecutable]
+    public init(available: Bool, enabled: Bool = false, connected: Bool = false, targetCounts: [String: Int] = [:], executables: [AppProxyExecutable] = []) {
         self.available = available; self.enabled = enabled; self.connected = connected; self.targetCounts = targetCounts
+        self.executables = executables
     }
 }
 
 @MainActor
 public protocol DashboardAppProxyService: AnyObject {
-    func status() async throws -> AppProxyExtensionStatus
-    func setEnabled(_ enabled: Bool) async throws
+    func status(applications: [AppProxyEntry]) async throws -> AppProxyExtensionStatus
+    func setEnabled(_ enabled: Bool, settings: AppProxySettings) async throws
+    func chooseApplication(port: UInt16) async throws -> AppProxyEntry?
 }
 
 protocol AppProxyRoutingGateway: Sendable {
@@ -41,7 +57,7 @@ public final class AppProxyStore: ObservableObject {
 
     public var dirty: Bool { draft != routing?.settings }
     public var valid: Bool {
-        !draft.routes.isEmpty && (try? draft.validate()) != nil
+        (draft.applications.isEmpty || !draft.routes.isEmpty) && (try? draft.validate()) != nil
           && draft.routes.values.allSatisfy { nodes.contains($0) || groups.contains($0) }
     }
     public func configure(_ service: any DashboardAppProxyService) { self.service = service }
@@ -64,8 +80,6 @@ public final class AppProxyStore: ObservableObject {
         refreshing = true; defer { refreshing = false }
         error = nil
         do {
-            let status = try await service?.status() ?? AppProxyExtensionStatus(available: false)
-            extensionStatus = status
             let state = try await gateway.fetchAppProxyRouting()
             let catalog = try await gateway.fetchProxies()
             let allowed = catalog.proxies.filter { key, value in
@@ -75,9 +89,40 @@ public final class AppProxyStore: ObservableObject {
             nodes = allowed.filter { $0.value.all.isEmpty }.keys.sorted()
             groups = allowed.filter { !$0.value.all.isEmpty }.keys.sorted()
             routing = state; draft = state.settings
+            do { extensionStatus = try await service?.status(applications: draft.applications) ?? .init(available: false) }
+            catch { self.error = error.localizedDescription }
         } catch {
             routing = nil; nodes = []; groups = []
             self.error = error.localizedDescription
+        }
+    }
+
+    public func addApplication() async {
+        guard !extensionStatus.enabled, let service,
+              let port = (UInt16(17975)...UInt16(18002)).first(where: { value in !draft.applications.contains { $0.port == value } }),
+              draft.applications.count < 32 else { return }
+        refreshing = true; defer { refreshing = false }
+        do {
+            guard let entry = try await service.chooseApplication(port: port) else { return }
+            var candidate = draft
+            candidate.applications.append(entry)
+            // Discover before accepting: overlapping signed executables cannot
+            // silently inherit one of two conflicting application routes.
+            let status = try await service.status(applications: candidate.applications)
+            draft = candidate; extensionStatus = status; error = nil
+        } catch { self.error = error.localizedDescription }
+    }
+
+    public func removeApplication(_ id: String) {
+        guard !extensionStatus.enabled else { return }
+        draft.applications.removeAll { $0.id == id }; draft.routes.removeValue(forKey: id)
+    }
+
+    public func restoreDefaults() {
+        guard !extensionStatus.enabled else { return }
+        for entry in AppProxyEntry.defaults where !draft.applications.contains(where: { $0.id == entry.id }) {
+            guard draft.applications.count < 32 else { break }
+            draft.applications.append(entry)
         }
     }
 
@@ -95,7 +140,11 @@ public final class AppProxyStore: ObservableObject {
     public func apply() async throws {
         guard !preview else { return }
         guard let routing, valid else { throw AppProxySettingsError.invalidRoutes }
+        guard !extensionStatus.enabled || routing.settings.applications == draft.applications else { throw AppProxySettingsError.staleState }
         do {
+            if routing.settings.applications != draft.applications {
+                extensionStatus = try await service?.status(applications: draft.applications) ?? .init(available: false)
+            }
             let result = try await gateway.setAppProxyRouting(.init(settings: draft, expectedRevision: routing.revision))
             self.routing = result; draft = result.settings; error = nil
         } catch {
@@ -110,15 +159,15 @@ public final class AppProxyStore: ObservableObject {
         guard !preview else { return }
         guard let service else { throw AppProxySettingsError.invalidRoutes }
         if enabled {
-            guard let routing, !dirty, valid,
+            guard let routing, !draft.routes.isEmpty, !dirty, valid,
                   try await gateway.fetchAppProxyRouting() == routing else { throw AppProxySettingsError.staleState }
         }
         do {
-            try await service.setEnabled(enabled)
-            extensionStatus = try await service.status()
+            try await service.setEnabled(enabled, settings: routing?.settings ?? draft)
+            extensionStatus = try await service.status(applications: draft.applications)
             error = nil
         } catch {
-            if let status = try? await service.status() { extensionStatus = status }
+            if let status = try? await service.status(applications: draft.applications) { extensionStatus = status }
             self.error = error.localizedDescription
             throw error
         }

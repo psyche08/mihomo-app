@@ -112,8 +112,8 @@ public struct ControllerRouteSnapshot: Equatable, Sendable {
     proxies["GLOBAL"].map { ("GLOBAL", $0) }
   }
 
-  /// Resolves the controller's current selector chain and accepts only a
-  /// concrete remote proxy leaf. Unknown targets, cycles and DIRECT-like
+  /// Resolves selector chains and every possible load-balancer member to
+  /// concrete remote proxy leaves. Unknown targets, cycles and DIRECT-like
   /// pseudo-proxies fail closed.
   public func routesThroughRemoteProxy(_ target: String) -> Bool {
     targetRoutesThroughProxy(target, visited: [])
@@ -126,12 +126,21 @@ public struct ControllerRouteSnapshot: Equatable, Sendable {
     guard !builtins.contains(target.uppercased()), let proxy = proxies[target] else {
       return false
     }
+    guard !visited.contains(target) else { return false }
+    var nextVisited = visited
+    nextVisited.insert(target)
+    // Mihomo LoadBalance groups choose per connection and intentionally omit
+    // `now`. Every candidate must resolve remotely; accepting just one could
+    // admit a DIRECT/reject member or a cyclic group on another connection.
+    if proxy.type.caseInsensitiveCompare("LoadBalance") == .orderedSame {
+      return !proxy.all.isEmpty && proxy.all.allSatisfy {
+        targetRoutesThroughProxy($0, visited: nextVisited)
+      }
+    }
     guard !proxy.all.isEmpty else {
       return Self.isRemoteProxyType(proxy.type)
     }
-    guard !visited.contains(proxy.name), !proxy.now.isEmpty else { return false }
-    var nextVisited = visited
-    nextVisited.insert(proxy.name)
+    guard !proxy.now.isEmpty else { return false }
     return targetRoutesThroughProxy(proxy.now, visited: nextVisited)
   }
 

@@ -929,6 +929,8 @@ private func usage() {
       local-doh status               Show authenticated LocalHttpDns status
       local-doh prepare              Prepare certificate/profile through XPC;
                                       finish profile approval in System Settings
+      app-proxy status               Show saved applications and routes
+      app-proxy set-all PROXY         Route all saved apps through one node/group
       profile list [--json]           List imported local YAML profiles
       profile import PATH [--activate]
                                       Validate and import a local YAML profile
@@ -1055,6 +1057,26 @@ private func main() throws -> Int32 {
             try writePayload(try sendControl(.installLocalDoH))
         default:
             throw CLIError(message: "usage: mihomoboxctl local-doh status|prepare")
+        }
+        return 0
+    case "app-proxy":
+        if arguments == ["status"] {
+            try writePayload(try sendControl(.appProxyStatus))
+        } else if arguments.count == 2, arguments[0] == "set-all" {
+            guard let data = try sendControl(.appProxyStatus) else {
+                throw CLIError(message: "missing App Proxy state")
+            }
+            let state = try JSONDecoder().decode(AppProxyRoutingState.self, from: data)
+            guard !state.settings.applications.isEmpty else {
+                throw CLIError(message: "Add an application in the App Proxy page first.")
+            }
+            var settings = state.settings
+            settings.routes = Dictionary(uniqueKeysWithValues: settings.applications.map { ($0.id, arguments[1]) })
+            try settings.validate()
+            let update = AppProxyRoutingUpdate(settings: settings, expectedRevision: state.revision)
+            try writePayload(try sendControl(.setAppProxyRouting, payload: JSONEncoder().encode(update)))
+        } else {
+            throw CLIError(message: "usage: mihomoboxctl app-proxy status|set-all PROXY")
         }
         return 0
     case "profiles":

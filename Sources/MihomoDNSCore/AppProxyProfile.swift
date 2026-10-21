@@ -18,12 +18,12 @@ public enum AppProxyProfile {
               // validator remains authoritative for the complete YAML.
               !lines.contains(where: { line in
                   !line.trimmingCharacters(in: .whitespaces).hasPrefix("#")
-                    && line.contains("port") && AppProxyApplication.allCases.contains { line.contains(String($0.port)) }
+                    && line.contains("port") && settings.applications.contains { line.contains(String($0.port)) }
               }) else { throw AppProxySettingsError.unsupportedProfile }
         var result = source + "\n# MihomoBox App Proxy runtime overlay\nlisteners:\n"
-        for app in AppProxyApplication.allCases {
-            let quoted = String(decoding: try JSONEncoder().encode(settings.routes[app.rawValue]!), as: UTF8.self)
-            result += "  - name: mihomobox-app-\(app.rawValue)\n    type: mixed\n    listen: 127.0.0.1\n    port: \(app.port)\n    udp: true\n    proxy: \(quoted)\n"
+        for app in settings.applications {
+            let quoted = String(decoding: try JSONEncoder().encode(settings.routes[app.id]!), as: UTF8.self)
+            result += "  - name: mihomobox-app-\(app.id)\n    type: mixed\n    listen: 127.0.0.1\n    port: \(app.port)\n    udp: true\n    proxy: \(quoted)\n"
         }
         return result
     }

@@ -14,7 +14,6 @@ public struct ConfigView: View {
         configHeader
         localDoHPanel
         applicationUpdatePanel
-        AppProxyView(dashboard: store, model: store.appProxy)
 
         switch store.configState {
         case .loaded:
