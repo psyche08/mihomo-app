@@ -23,6 +23,10 @@ This page does not prepare or enable Local DoH. A fresh CLI installation keeps
 Local DoH unprepared until the operator explicitly invokes Prepare & Trust.
 App Proxy forwards captured DNS queries over TCP to the existing Mihomo DNS
 listener at `127.0.0.1:1153`, sharing the TUN resolver and its Fake-IP policy.
+Its per-app resolver advertises the managed TUN DNS address `198.18.0.1`,
+not `127.0.0.1:53` where no DNS service is bound. Low-level resolver calls
+must be tested with App Proxy enabled: successful hostname/SOCKS forwarding
+alone does not establish that system name resolution works.
 It does not publish a supplemental default DNS resolver or use a separate
 public DoH service. DNS follows the core's shared configuration; each app's
 selected node still controls its proxied connections. With TUN off, the core's

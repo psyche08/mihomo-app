@@ -36,9 +36,10 @@ final class AppProbeProvider: NEAppProxyProvider {
             #endif
         }
         let settings = NETunnelNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
-        // Selected DNS flows are forwarded to the core's loopback TCP 1153
-        // listener below; NEDNSSettings only accepts server IPs, not ports.
-        let dns = NEDNSSettings(servers: ["127.0.0.1"])
+        // Advertise the managed TUN DNS address, not loopback port 53: macOS
+        // can resolve selected apps outside handleNewFlow for loopback DNS,
+        // where nothing listens. Captured DNS still goes to shared TCP 1153.
+        let dns = NEDNSSettings(servers: ["198.18.0.1"])
         // App rules scope this resolver to selected applications. An empty
         // match domain publishes a supplemental default resolver and can send
         // unselected system lookups to a resolver outside their normal scope.
