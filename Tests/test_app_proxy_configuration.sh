@@ -8,3 +8,8 @@ cp "$ROOT/Tests/Fixtures/app-proxy-configuration.swift" "$STAGE/main.swift"
   "$ROOT/experiments/DNSIdentityProbe/Extension/AIProxyConfiguration.swift" \
   "$STAGE/main.swift" -o "$STAGE/config-test"
 "$STAGE/config-test"
+cp "$ROOT/Tests/Fixtures/app-proxy-dns.swift" "$STAGE/main.swift"
+/usr/bin/swiftc \
+  "$ROOT/experiments/DNSIdentityProbe/Extension/AppProxyDNSRequest.swift" \
+  "$STAGE/main.swift" -o "$STAGE/dns-test"
+"$STAGE/dns-test"

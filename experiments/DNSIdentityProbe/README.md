@@ -150,7 +150,8 @@ the normal macOS VPN authorization. `--app-status` reads its state and
 after 240 seconds; the provider independently expires after 300 seconds.
 Never run the DNS-only and App Proxy sessions together.
 
-Selected DNS flows go to proxied DoH without direct fallback. Selected TCP
+Selected DNS flows now use the existing Mihomo resolver on loopback TCP 1153,
+sharing TUN DNS policy without a public fallback or global DNS override. Selected TCP
 connections to the two fixed public HTTPS test names use SOCKS domain-address
 requests through the existing managed Mihomo mixed listener. A missing or
 unexpected hostname is rejected; numeric cached answers are not assumed to
@@ -245,7 +246,7 @@ AI mode forwards general TCP names, IPv4/IPv6 destinations and ports through the
 managed core's mixed SOCKS listener at `127.0.0.1:7897`. The 30-second TCP limit
 covers establishment only, allowing streaming and WebSockets after connection.
 Explicit TCP/UDP loopback forwarding stays local for authentication callbacks and local MCP services.
-DNS goes through the fixed proxied DoH service. Other UDP uses SOCKS5 UDP
+DNS now goes through the shared Mihomo resolver on TCP 1153. Other UDP uses SOCKS5 UDP
 ASSOCIATE with a loopback relay, rejects fragmented SOCKS datagrams, and expires
 after 180 seconds idle. Upstream UDP support remains dependent on the selected
 node. The provider caps AI mode at 1024 flows. Failure closes the affected flow;

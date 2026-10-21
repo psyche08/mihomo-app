@@ -29,6 +29,7 @@
 		CF0848782996C66A79350F67 /* AppProbeHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF73E8DE2B2C4DE327C49A41 /* AppProbeHost.swift */; };
 		E299DC6DF9D43C04D955A014 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 20278CE7B83856A69D2EBACD /* Cocoa.framework */; };
 		EC9508C1C6244CBF5499B913 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 20278CE7B83856A69D2EBACD /* Cocoa.framework */; };
+		F842152344F9191074979963 /* AppProxyDNSRequest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57E3B7B702FF4AA9E8EFC440 /* AppProxyDNSRequest.swift */; };
 		FCA3A9081FAADB500BC84F68 /* AppProbeProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59A7F3A0934A4E6188E8A98B /* AppProbeProvider.swift */; };
 /* End PBXBuildFile section */
 
@@ -120,6 +121,7 @@
 		262AAC87D1B2A7926A0F5703 /* SOCKSDatagram.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SOCKSDatagram.swift; sourceTree = "<group>"; };
 		34C703B20E6BBB4ECB4BA92C /* main.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		375F50A09C0226F55B8FB55F /* main.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		57E3B7B702FF4AA9E8EFC440 /* AppProxyDNSRequest.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppProxyDNSRequest.swift; sourceTree = "<group>"; };
 		59A7F3A0934A4E6188E8A98B /* AppProbeProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppProbeProvider.swift; sourceTree = "<group>"; };
 		6E564A421DDC16541CACAD24 /* SOCKSConnect.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SOCKSConnect.swift; sourceTree = "<group>"; };
 		80E6ED177D03B5428F0F0313 /* ProbeSessionConfiguration.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ProbeSessionConfiguration.swift; sourceTree = "<group>"; };
@@ -188,6 +190,7 @@
 				6E564A421DDC16541CACAD24 /* SOCKSConnect.swift */,
 				262AAC87D1B2A7926A0F5703 /* SOCKSDatagram.swift */,
 				06A5CC505CEAD18FE2615476 /* main.swift */,
+				57E3B7B702FF4AA9E8EFC440 /* AppProxyDNSRequest.swift */,
 			);
 			name = MihomoDNSProbeExtension;
 			path = Extension;
@@ -452,6 +455,7 @@
 				050177F442C951BF7C2C33A8 /* SOCKSConnect.swift in Sources */,
 				0A80ABA8B50B8AC390AE7CC7 /* SOCKSDatagram.swift in Sources */,
 				B9E7CEF3D75802675089EBCF /* main.swift in Sources */,
+				F842152344F9191074979963 /* AppProxyDNSRequest.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

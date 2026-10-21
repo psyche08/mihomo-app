@@ -21,6 +21,12 @@ command changes macOS extension approval or adds application identities.
 
 This page does not prepare or enable Local DoH. A fresh CLI installation keeps
 Local DoH unprepared until the operator explicitly invokes Prepare & Trust.
+App Proxy forwards captured DNS queries over TCP to the existing Mihomo DNS
+listener at `127.0.0.1:1153`, sharing the TUN resolver and its Fake-IP policy.
+It does not publish a supplemental default DNS resolver or use a separate
+public DoH service. DNS follows the core's shared configuration; each app's
+selected node still controls its proxied connections. With TUN off, the core's
+standby DNS returns real addresses. A failed core DNS request fails closed.
 
 ## Uninstalling the Privileged Helper
 

@@ -13,18 +13,7 @@ final class AppProbeProvider: NEAppProxyProvider {
     private var expiry: DispatchWorkItem?
     private var active = false
     private var aiConfiguration: AIProxyConfiguration?
-    private var sessions: [UInt16: URLSession] = [:]
-    private func session(port: UInt16) -> URLSession {
-        if let existing = sessions[port] { return existing }
-        let c = URLSessionConfiguration.ephemeral
-        c.urlCache = nil; c.httpCookieStorage = nil
-        c.timeoutIntervalForRequest = 8; c.timeoutIntervalForResource = 10
-        c.connectionProxyDictionary = ["HTTPEnable": 1, "HTTPProxy": "127.0.0.1", "HTTPPort": Int(port),
-                                      "HTTPSEnable": 1, "HTTPSProxy": "127.0.0.1", "HTTPSPort": Int(port)]
-        let session = URLSession(configuration: c, delegate: AppProbeNoRedirects(), delegateQueue: nil)
-        sessions[port] = session
-        return session
-    }
+    private var dnsRequests: [UUID: AppProxyDNSRequest] = [:]
 
     override func startProxy(options: [String: Any]?, completionHandler: @escaping (Error?) -> Void) {
         guard let raw = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration else {
@@ -47,10 +36,12 @@ final class AppProbeProvider: NEAppProxyProvider {
             #endif
         }
         let settings = NETunnelNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
-        let dns = NEDNSSettings(servers: ["1.1.1.1"])
+        // Selected DNS flows are forwarded to the core's loopback TCP 1153
+        // listener below; NEDNSSettings only accepts server IPs, not ports.
+        let dns = NEDNSSettings(servers: ["127.0.0.1"])
         // App rules scope this resolver to selected applications. An empty
         // match domain publishes a supplemental default resolver and can send
-        // unselected system lookups directly to this otherwise proxied server.
+        // unselected system lookups to a resolver outside their normal scope.
         // Leave matchDomains unset, as in Apple's App Proxy sample.
         settings.dnsSettings = dns
         setTunnelNetworkSettings(settings) { error in
@@ -75,7 +66,9 @@ final class AppProbeProvider: NEAppProxyProvider {
         queue.async {
             self.active = false; self.expiry?.cancel()
             for close in Array(self.closers.values) { close() }
-            self.closers.removeAll(); self.sessions.values.forEach { $0.invalidateAndCancel() }; self.sessions.removeAll()
+            self.closers.removeAll()
+            for request in Array(self.dnsRequests.values) { request.cancel() }
+            self.dnsRequests.removeAll()
             appLog.notice("app_probe_stopped")
             completionHandler()
         }
@@ -149,23 +142,18 @@ final class AppProbeProvider: NEAppProxyProvider {
 
     private func forwardDNS(_ query: Data, identity: String, reply: @escaping (Data?) -> Void) {
         guard active, query.count >= 12, query.count <= 65535, query[2] & 0x80 == 0 else { reply(nil); return }
+        guard dnsRequests.count < 128 else { count("dns_overload"); reply(nil); return }
         count("dns_query_" + identity)
-        var request = URLRequest(url: URL(string: "https://1.1.1.1/dns-query")!)
-        request.httpMethod = "POST"; request.httpBody = query
-        request.setValue("application/dns-message", forHTTPHeaderField: "Content-Type")
-        request.setValue("application/dns-message", forHTTPHeaderField: "Accept")
-        guard let proxyPort = aiConfiguration.map({ $0.proxyPort(for: identity) }) ?? UInt16(7897) else { reply(nil); return }
-        session(port: proxyPort).dataTask(with: request) { data, response, error in
-            self.queue.async {
-                guard self.active, error == nil, let response = response as? HTTPURLResponse,
-                      response.statusCode == 200, response.mimeType == "application/dns-message",
-                      let data, data.count >= 12, data.count <= 65535,
-                      data.prefix(2) == query.prefix(2), data[2] & 0x80 != 0 else {
-                    self.count("dns_failed_" + identity); reply(nil); return
-                }
-                self.count("dns_answered_" + identity); reply(data)
+        let id = UUID()
+        let request = AppProxyDNSRequest(query: query, queue: queue) { data in
+            self.dnsRequests.removeValue(forKey: id)
+            guard self.active, let data else {
+                self.count("dns_failed_" + identity); reply(nil); return
             }
-        }.resume()
+            self.count("dns_answered_" + identity); reply(data)
+        }
+        dnsRequests[id] = request
+        request.start()
     }
 
     private func reject(_ flow: NEAppProxyFlow) {
@@ -179,11 +167,6 @@ final class AppProbeProvider: NEAppProxyProvider {
         if ["udp_sent", "udp_received", "local_udp_sent", "local_udp_received"].contains(key), value > 8, value & (value - 1) != 0 { return }
         appLog.notice("app_counter \(key, privacy: .public)=\(self.counts[key]!, privacy: .public)")
     }
-}
-
-private final class AppProbeNoRedirects: NSObject, URLSessionTaskDelegate {
-    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
-                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
 }
 
 private final class AppProbeTCPBridge {

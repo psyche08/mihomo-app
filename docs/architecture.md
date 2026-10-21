@@ -187,7 +187,7 @@ dialog; only the explicit repair boundaries described above do.
 | `127.0.0.1:443` HTTPS | macOS → daemon | independent split DoH with managed-Mihomo then physical-DNS fallback |
 | `198.18.0.1:53` UDP/TCP | macOS → TUN | Global DNS fallback; requires verified Enhanced TUN |
 | `127.0.0.53:53` UDP/TCP | legacy only | restored during protocol-3 migration; not bound in normal operation |
-| `127.0.0.1:1153` UDP/TCP | agent → Mihomo | Mihomo DNS listener |
+| `127.0.0.1:1153` UDP/TCP | agent / App Proxy → Mihomo | shared Mihomo DNS listener |
 | `127.0.0.1:1054` UDP/TCP | Mihomo → agent | nonrecursive path to current DHCP DNS |
 | `127.0.0.1:<profile port>` HTTP/WS | agent-local control path | Mihomo controller; never a Desktop/CLI control boundary |
 
@@ -211,7 +211,10 @@ and 17975–18002 for user-selected signed apps and CLI executables. The root
 settings schema bounds and validates application IDs, ports and route names;
 the extension independently validates the same port mapping. Application paths
 are discovery metadata, never root-side filesystem instructions. Unknown identities and unattributable
-CLI hosts fail closed. DNS HTTPS sessions are isolated by application listener;
+CLI hosts fail closed. Captured DNS flows share the existing Mihomo/TUN DNS
+resolver through loopback TCP `1153`, with bounded requests and no public DNS
+fallback or supplemental default resolver. App node selections govern
+connections, while DNS policy and cache remain owned by the core;
 loopback application callbacks remain explicit local bridges. No controller
 credentials, arbitrary remote endpoints, or packet logs are added to the UI.
 

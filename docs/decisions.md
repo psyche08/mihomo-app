@@ -410,8 +410,14 @@ The provider now leaves `NEDNSSettings.matchDomains` unset. Apple's
 [matchDomains documentation](https://developer.apple.com/documentation/networkextension/nednssettings/matchdomains)
 describes the empty-string entry as a default-domain override, and its
 [App Proxy sample](https://developer.apple.com/library/archive/samplecode/SimpleTunnel/Listings/AppProxy_AppProxyProvider_swift.html)
-sets resolver servers without that override. Selected DNS flows still use the
-application's proxied DoH path. This source correction needs signed runtime
+sets resolver servers without that override. At the user's request, App Proxy
+also replaces its independent Cloudflare DoH path with TCP requests to the
+same daemon-owned Mihomo resolver that serves TUN, `127.0.0.1:1153`. There is no
+public or system-resolver fallback. This shares the core's DNS policy and
+cache; per-application node selection applies to connections, not separate DNS
+upstreams. The extension retains bounded requests, cancellation, timeouts and
+response framing/transaction checks, and leaves Local DoH unprepared.
+This source correction needs signed runtime
 validation: verify unselected system DNS with App Proxy both enabled and
 disabled, and separately prove Claude and both CLIs reach their own listeners.
 Successful ChatGPT traffic or explicit listener probes cannot substitute for
