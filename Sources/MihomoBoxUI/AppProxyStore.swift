@@ -69,8 +69,8 @@ public final class AppProxyStore: ObservableObject {
             let state = try await gateway.fetchAppProxyRouting()
             let catalog = try await gateway.fetchProxies()
             let allowed = catalog.proxies.filter { key, value in
-                !["DIRECT", "REJECT", "REJECT-DROP", "PASS", "COMPATIBLE", "GLOBAL"].contains(key.uppercased())
-                  && !["direct", "reject", "pass", "compatible"].contains(value.type.lowercased())
+                !["DIRECT", "REJECT", "REJECT-DROP", "PASS", "PASS-RULE", "COMPATIBLE", "GLOBAL"].contains(key.uppercased())
+                  && !["direct", "reject", "pass", "passrule", "compatible"].contains(value.type.lowercased())
             }
             nodes = allowed.filter { $0.value.all.isEmpty }.keys.sorted()
             groups = allowed.filter { !$0.value.all.isEmpty }.keys.sorted()

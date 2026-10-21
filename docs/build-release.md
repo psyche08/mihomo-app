@@ -405,6 +405,15 @@ and live macOS approval must be verified before shipping this feature.
 class; the Cloud export gate also checks matching host/extension leaf
 certificates, entitlement presence and embedded provisioning profiles.
 
+Create native per-app configurations with `NEAppProxyProviderManager()`.
+On macOS the inherited `forPerAppVPN()` factory returns a plain
+`NETunnelProviderManager` configured as a packet tunnel, even when called on
+the App Proxy subclass. Both report source-application routing, so checking
+that property alone cannot catch the mismatch. The app regression test checks
+the actual manager class; live acceptance must also observe provider startup.
+The host removes only disabled, disconnected packet-tunnel records carrying
+its exact App Proxy extension identifier before creating a corrected record.
+
 Local `build-macos-app.sh` compiles the same provider with `MAIN_APP_PROXY` and
 includes an unsigned development extension. It cannot be activated as a
 production system extension. The top-level five executable contract remains

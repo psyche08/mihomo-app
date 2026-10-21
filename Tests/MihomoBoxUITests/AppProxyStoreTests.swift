@@ -7,7 +7,7 @@ private final class RoutingGateway: AppProxyRoutingGateway, @unchecked Sendable 
     var fail = false
     func fetchAppProxyRouting() async throws -> AppProxyRoutingState { state }
     func fetchProxies() async throws -> ControllerProxyCatalog {
-        .init(proxies: ["one": .init(name: "one", type: "Shadowsocks"), "two": .init(name: "two", type: "Trojan"), "DIRECT": .init(name: "DIRECT", type: "Direct")])
+        .init(proxies: ["one": .init(name: "one", type: "Shadowsocks"), "two": .init(name: "two", type: "Trojan"), "DIRECT": .init(name: "DIRECT", type: "Direct"), "PASS-RULE": .init(name: "PASS-RULE", type: "PassRule")])
     }
     func setAppProxyRouting(_ update: AppProxyRoutingUpdate) async throws -> AppProxyRoutingState {
         if fail { throw AppProxySettingsError.staleState }

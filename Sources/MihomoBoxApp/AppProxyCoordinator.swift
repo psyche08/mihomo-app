@@ -48,7 +48,8 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         guard existing?.isEnabled != true else { throw failure("Disable App Proxy before refreshing application identities.") }
         let targets = try await Task.detached { try AIAppTargets(requireAll: false) }.value
         try await activate()
-        let manager = existing ?? NEAppProxyProviderManager.forPerAppVPN()
+        try await removeLegacyPacketConfigurations()
+        let manager = existing ?? Self.makeManager()
         guard manager.routingMethod == .sourceApplication else { throw failure("The saved VPN is not an application routing configuration.") }
         let config = NETunnelProviderProtocol()
         config.providerBundleIdentifier = extensionID
@@ -80,6 +81,33 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
             do { try await disable(manager) }
             catch { throw failure("App Proxy failed and disabling it could not be verified. Check VPN settings in System Settings.") }
             throw original
+        }
+    }
+    static func makeManager() -> NEAppProxyProviderManager {
+        // The inherited forPerAppVPN() factory returns a packet-tunnel
+        // NETunnelProviderManager even when invoked on this subclass.
+        // App proxy managers already use source-application routing.
+        let manager = NEAppProxyProviderManager()
+        manager.isEnabled = false
+        return manager
+    }
+    private func removeLegacyPacketConfigurations() async throws {
+        let managers: [NETunnelProviderManager] = try await withCheckedThrowingContinuation { c in
+            NETunnelProviderManager.loadAllFromPreferences { values, error in
+                if let error { c.resume(throwing: error) }
+                else { c.resume(returning: values ?? []) }
+            }
+        }
+        for manager in managers where !(manager is NEAppProxyProviderManager)
+          && (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == extensionID {
+            guard !manager.isEnabled, [.disconnected, .invalid].contains(manager.connection.status) else {
+                throw failure("Disable the earlier MihomoBox App Proxy VPN configuration in System Settings before retrying.")
+            }
+            try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
+                manager.removeFromPreferences { error in
+                    if let error { c.resume(throwing: error) } else { c.resume() }
+                }
+            }
         }
     }
     private func load() async throws -> NEAppProxyProviderManager? {
