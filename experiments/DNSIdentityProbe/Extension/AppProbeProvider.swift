@@ -48,7 +48,10 @@ final class AppProbeProvider: NEAppProxyProvider {
         }
         let settings = NETunnelNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
         let dns = NEDNSSettings(servers: ["1.1.1.1"])
-        dns.matchDomains = [""]
+        // App rules scope this resolver to selected applications. An empty
+        // match domain publishes a supplemental default resolver and can send
+        // unselected system lookups directly to this otherwise proxied server.
+        // Leave matchDomains unset, as in Apple's App Proxy sample.
         settings.dnsSettings = dns
         setTunnelNetworkSettings(settings) { error in
             self.queue.async {

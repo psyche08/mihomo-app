@@ -390,3 +390,29 @@ extension's Proxy rule first. Readback, HTTPS, TUN, Local DoH, original source
 integrity and network consistency passed. The main App and daemon were not
 replaced and no release was published. The experiment has no main-App UI,
 login-start integration or guaranteed reconnect after an extension crash.
+
+### App Proxy DNS scope with Local DoH disabled
+
+On m4pro with Cloud Build 37, Local DoH unprepared and Enhanced TUN enabled,
+ChatGPT's selected flows used its configured listener and returned data, but
+Claude reported `ERR_NAME_NOT_RESOLVED`. Independent system resolver calls for
+`claude.ai`, `api.anthropic.com` and `example.com` also failed. Direct UDP DNS to
+the managed Global DNS endpoint `198.18.0.1` succeeded. The system resolver list
+contained an additional default supplemental resolver at `1.1.1.1`, published
+by App Proxy; direct DNS to that address timed out. The existing runtime health
+probe of the managed endpoint still reported healthy, so it does not establish
+that application/system resolver selection works.
+After the user disabled App Proxy while leaving TUN enabled, Claude recovered,
+the supplemental `1.1.1.1` resolver disappeared, and fresh system resolver calls
+for all three domains succeeded without flushing the DNS cache.
+
+The provider now leaves `NEDNSSettings.matchDomains` unset. Apple's
+[matchDomains documentation](https://developer.apple.com/documentation/networkextension/nednssettings/matchdomains)
+describes the empty-string entry as a default-domain override, and its
+[App Proxy sample](https://developer.apple.com/library/archive/samplecode/SimpleTunnel/Listings/AppProxy_AppProxyProvider_swift.html)
+sets resolver servers without that override. Selected DNS flows still use the
+application's proxied DoH path. This source correction needs signed runtime
+validation: verify unselected system DNS with App Proxy both enabled and
+disabled, and separately prove Claude and both CLIs reach their own listeners.
+Successful ChatGPT traffic or explicit listener probes cannot substitute for
+those checks. No DNS cache flush was used for this diagnosis.
