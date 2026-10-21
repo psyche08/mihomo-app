@@ -122,6 +122,9 @@ trap cleanup EXIT
   "$STAGING_APP/Contents/Resources/daemon" \
   "$STAGING_APP/Contents/Resources/licenses"
 
+"$ROOT/scripts/build-app-proxy-extension.sh" \
+  "$STAGING_APP/Contents/Library/SystemExtensions/dev.linsheng.mihomo-app.app-proxy.systemextension" "$SWIFT_BUILD_ARCH"
+
 /usr/bin/install -m 0755 "$BIN_DIR/mihomo-app" "$STAGING_APP/Contents/MacOS/mihomo-app"
 /usr/bin/install -m 0755 "$MIHOMO_BINARY" "$STAGING_APP/Contents/MacOS/mihomo"
 /usr/bin/install -m 0755 "$BIN_DIR/mihomo-daemon" "$STAGING_APP/Contents/MacOS/mihomo-daemon"

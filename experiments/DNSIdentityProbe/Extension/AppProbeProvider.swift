@@ -13,14 +13,18 @@ final class AppProbeProvider: NEAppProxyProvider {
     private var expiry: DispatchWorkItem?
     private var active = false
     private var aiConfiguration: AIProxyConfiguration?
-    private lazy var session: URLSession = {
+    private var sessions: [UInt16: URLSession] = [:]
+    private func session(port: UInt16) -> URLSession {
+        if let existing = sessions[port] { return existing }
         let c = URLSessionConfiguration.ephemeral
         c.urlCache = nil; c.httpCookieStorage = nil
         c.timeoutIntervalForRequest = 8; c.timeoutIntervalForResource = 10
-        c.connectionProxyDictionary = ["HTTPEnable": 1, "HTTPProxy": "127.0.0.1", "HTTPPort": 7897,
-                                      "HTTPSEnable": 1, "HTTPSProxy": "127.0.0.1", "HTTPSPort": 7897]
-        return URLSession(configuration: c, delegate: AppProbeNoRedirects(), delegateQueue: nil)
-    }()
+        c.connectionProxyDictionary = ["HTTPEnable": 1, "HTTPProxy": "127.0.0.1", "HTTPPort": Int(port),
+                                      "HTTPSEnable": 1, "HTTPSProxy": "127.0.0.1", "HTTPSPort": Int(port)]
+        let session = URLSession(configuration: c, delegate: AppProbeNoRedirects(), delegateQueue: nil)
+        sessions[port] = session
+        return session
+    }
 
     override func startProxy(options: [String: Any]?, completionHandler: @escaping (Error?) -> Void) {
         guard let raw = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration else {
@@ -33,10 +37,14 @@ final class AppProbeProvider: NEAppProxyProvider {
             }
             aiConfiguration = config; deadline = config.deadline
         } else {
+            #if MAIN_APP_PROXY
+            completionHandler(NSError(domain: "AppProxy", code: 1)); return
+            #else
             guard let config = try? ProbeSessionConfiguration(options: raw, now: Date().timeIntervalSince1970), config.strictUnknown else {
                 completionHandler(NSError(domain: "AppProbe", code: 1)); return
             }
             deadline = config.deadline
+            #endif
         }
         let settings = NETunnelNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
         let dns = NEDNSSettings(servers: ["1.1.1.1"])
@@ -64,7 +72,7 @@ final class AppProbeProvider: NEAppProxyProvider {
         queue.async {
             self.active = false; self.expiry?.cancel()
             for close in Array(self.closers.values) { close() }
-            self.closers.removeAll(); self.session.invalidateAndCancel()
+            self.closers.removeAll(); self.sessions.values.forEach { $0.invalidateAndCancel() }; self.sessions.removeAll()
             appLog.notice("app_probe_stopped")
             completionHandler()
         }
@@ -76,6 +84,9 @@ final class AppProbeProvider: NEAppProxyProvider {
             guard self.active, (self.aiConfiguration != nil ? identity != "unknown" : ["selected", "helper"].contains(identity)), self.closers.count < (self.aiConfiguration == nil ? 128 : 1024) else {
                 self.count("rejected_identity_or_capacity")
                 self.reject(flow); return
+            }
+            guard let proxyPort = self.aiConfiguration.map({ $0.proxyPort(for: identity) }) ?? UInt16(7897) else {
+                self.count("rejected_unattributed_tool"); self.reject(flow); return
             }
             self.count("flow_" + identity)
             let id = UUID()
@@ -95,13 +106,13 @@ final class AppProbeProvider: NEAppProxyProvider {
                         self.count("rejected_missing_or_unexpected_hostname"); self.reject(flow); return
                     }
                     self.count("hostname_tcp_" + identity)
-                    let bridge = AppProbeTCPBridge(flow: tcp, host: candidate, port: port, local: local, queue: self.queue,
+                    let bridge = AppProbeTCPBridge(flow: tcp, host: candidate, port: port, local: local, proxyPort: proxyPort, queue: self.queue,
                                                    count: self.count, finished: finished)
                     self.closers[id] = { bridge.close() }; bridge.start()
                 }
             } else if let udp = flow as? NEAppProxyUDPFlow {
                 if self.aiConfiguration != nil {
-                    let bridge = AppProxyUDPBridge(flow: udp, queue: self.queue, forwardDNS: { query, reply in
+                    let bridge = AppProxyUDPBridge(flow: udp, proxyPort: proxyPort, queue: self.queue, forwardDNS: { query, reply in
                         self.forwardDNS(query, identity: identity, reply: reply)
                     }, count: self.count, finished: finished)
                     self.closers[id] = { bridge.close() }; bridge.start()
@@ -140,7 +151,8 @@ final class AppProbeProvider: NEAppProxyProvider {
         request.httpMethod = "POST"; request.httpBody = query
         request.setValue("application/dns-message", forHTTPHeaderField: "Content-Type")
         request.setValue("application/dns-message", forHTTPHeaderField: "Accept")
-        session.dataTask(with: request) { data, response, error in
+        guard let proxyPort = aiConfiguration.map({ $0.proxyPort(for: identity) }) ?? UInt16(7897) else { reply(nil); return }
+        session(port: proxyPort).dataTask(with: request) { data, response, error in
             self.queue.async {
                 guard self.active, error == nil, let response = response as? HTTPURLResponse,
                       response.statusCode == 200, response.mimeType == "application/dns-message",
@@ -185,11 +197,11 @@ private final class AppProbeTCPBridge {
     var remoteEOF = false
     var timer: DispatchWorkItem?
 
-    init(flow: NEAppProxyTCPFlow, host: String, port: UInt16, local: Bool, queue: DispatchQueue,
+    init(flow: NEAppProxyTCPFlow, host: String, port: UInt16, local: Bool, proxyPort: UInt16, queue: DispatchQueue,
          count: @escaping (String) -> Void, finished: @escaping () -> Void) {
         self.local = local
         self.connection = local ? NWConnection(host: Network.NWEndpoint.Host(host), port: Network.NWEndpoint.Port(rawValue: port)!, using: .tcp)
-                                : NWConnection(host: "127.0.0.1", port: 7897, using: .tcp)
+                                : NWConnection(host: "127.0.0.1", port: Network.NWEndpoint.Port(rawValue: proxyPort)!, using: .tcp)
         self.flow = flow; self.host = host; self.port = port; self.queue = queue; self.count = count; self.finished = finished
     }
     func start() {

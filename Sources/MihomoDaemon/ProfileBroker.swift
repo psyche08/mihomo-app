@@ -55,6 +55,38 @@ final class ProfileBroker: @unchecked Sendable {
         }
     }
 
+    func appProxyStatus() throws -> Data {
+        try queue.sync { try JSONEncoder().encode(appProxyState()) }
+    }
+
+    func setAppProxyRouting(_ update: AppProxyRoutingUpdate) throws -> Data {
+        try queue.sync {
+            let before = try appProxyState()
+            guard before.revision == update.expectedRevision else { throw AppProxySettingsError.staleState }
+            try update.settings.validate()
+            let data = try readStoredProfile(root.appendingPathComponent("profiles").appendingPathComponent(before.profile))
+            try activateProfile(name: before.profile, data: data, appProxySettings: update.settings)
+            return try JSONEncoder().encode(appProxyState())
+        }
+    }
+
+    private func appProxySettings() throws -> AppProxySettings {
+        let path = root.appendingPathComponent("app-proxy.json")
+        guard FileManager.default.fileExists(atPath: path.path) else { return AppProxySettings() }
+        let settings = try JSONDecoder().decode(AppProxySettings.self, from: readStoredProfile(path))
+        try settings.validate()
+        return settings
+    }
+
+    private func appProxyState() throws -> AppProxyRoutingState {
+        let name = try activeProfileName()
+        let source = try readStoredProfile(root.appendingPathComponent("profiles").appendingPathComponent(name))
+        let settings = try appProxySettings()
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let revision = ComponentUpdatePackage.digest(Data(name.utf8) + source + (try encoder.encode(settings)))
+        return AppProxyRoutingState(settings: settings, profile: name, revision: revision)
+    }
+
     /// Upgrades legacy helper state before the first managed process starts.
     /// The migration always lands in controller/DNS standby: LocalHttpDns is
     /// configured, macOS DNS preferences are left alone, and TUN is disabled
@@ -337,7 +369,7 @@ final class ProfileBroker: @unchecked Sendable {
         try storeRawProfile(name: name, data: data)
     }
 
-    private func activateProfile(name: String, data: Data) throws {
+    private func activateProfile(name: String, data: Data, appProxySettings: AppProxySettings? = nil) throws {
         try validate(name: name, data: data)
         let transaction = root.appendingPathComponent(".profile-transaction-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(
@@ -349,7 +381,7 @@ final class ProfileBroker: @unchecked Sendable {
 
         let protected = [
             "daemon.json", "controller.json", "controller-secret", "active-profile",
-            "provisioning", "mihomo-data/config.yaml", "profiles/\(name)",
+            "provisioning", "mihomo-data/config.yaml", "profiles/\(name)", "app-proxy.json",
         ]
         var backupDigests: [String: String] = [:]
         for relative in protected {
@@ -368,6 +400,9 @@ final class ProfileBroker: @unchecked Sendable {
         }
         let wasRunning = agent.isRunning
         do {
+            if let appProxySettings {
+                try writePrivate(try JSONEncoder().encode(appProxySettings), to: root.appendingPathComponent("app-proxy.json"), permissions: 0o600)
+            }
             let configured = try preparedProfile(data: data, publishController: true)
             defer { try? FileManager.default.removeItem(at: configured.deletingLastPathComponent()) }
             try validateMihomo(path: configured)
@@ -466,9 +501,13 @@ final class ProfileBroker: @unchecked Sendable {
             withIntermediateDirectories: false,
             attributes: [.posixPermissions: 0o700]
         )
+        var prepared = false
+        defer { if !prepared { try? FileManager.default.removeItem(at: directory) } }
         let config = directory.appendingPathComponent("config.yaml")
         let backup = directory.appendingPathComponent("original.yaml")
-        try writePrivate(data, to: config, permissions: 0o600)
+        guard let source = String(data: data, encoding: .utf8) else { throw profileError("profile must be UTF-8") }
+        let rendered = try AppProxyProfile.applying(appProxySettings(), to: source)
+        try writePrivate(Data(rendered.utf8), to: config, permissions: 0o600)
         var arguments = [
             "--configure-profile",
             "--profile", config.path,
@@ -485,6 +524,7 @@ final class ProfileBroker: @unchecked Sendable {
         guard try run(root.appendingPathComponent("mihomo-agent").path, arguments) == 0 else {
             throw profileError("profile configuration failed")
         }
+        prepared = true
         return config
     }
 

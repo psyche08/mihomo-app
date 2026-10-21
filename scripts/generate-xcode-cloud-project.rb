@@ -34,6 +34,7 @@ if ARGV == ["--check"]
     "MihomoDaemon" => ROOT.join("Sources/MihomoDaemon"),
     "MihomoAgent" => ROOT.join("Sources/MihomoAgent"),
     "MihomoBoxCLI" => ROOT.join("Sources/MihomoBoxCLI"),
+    "MihomoAppProxy" => ROOT.join("experiments/DNSIdentityProbe/Extension"),
   }
   abort "unexpected Xcode Cloud targets" unless project.targets.map(&:name).sort == expected_sources.keys.sort
 
@@ -52,6 +53,7 @@ if ARGV == ["--check"]
     "Prepare pinned Mihomo and icon inputs",
     "Embed signed helper executables",
     "Embed signed pinned Mihomo",
+    "Embed App Proxy system extension",
     "Assemble audited application resources",
   ]
   abort "MihomoBox archive phases drifted" unless app.build_phases.map(&:display_name) == expected_phases
@@ -183,6 +185,7 @@ app.build_configurations.each do |configuration|
     "INFOPLIST_FILE" => "../Config/XcodeCloud-Info.plist",
     "LD_RUNPATH_SEARCH_PATHS" => "$(inherited) @executable_path/../Frameworks",
     "PRODUCT_BUNDLE_IDENTIFIER" => "dev.linsheng.mihomo-app",
+    "CODE_SIGN_ENTITLEMENTS" => "../Config/AppProxyHost.entitlements",
     "SKIP_INSTALL" => "NO"
   )
 end
@@ -191,7 +194,7 @@ add_package_product(project, app, local_package, "MihomoControl")
 add_package_product(project, app, local_package, "MihomoDNSCore")
 add_package_product(project, app, local_package, "MihomoBoxUI")
 add_package_product(project, app, sparkle_package, "Sparkle")
-app.add_system_framework(["AppKit", "Security", "UniformTypeIdentifiers"])
+app.add_system_framework(["AppKit", "Security", "UniformTypeIdentifiers", "NetworkExtension", "SystemExtensions"])
 
 [daemon, agent, cli].each { |helper| app.add_dependency(helper) }
 
@@ -229,6 +232,31 @@ mihomo_phase = app.new_copy_files_build_phase("Embed signed pinned Mihomo")
 mihomo_phase.symbol_dst_subfolder_spec = :executables
 mihomo_build_file = mihomo_phase.add_file_reference(mihomo)
 mihomo_build_file.settings = { "ATTRIBUTES" => ["CodeSignOnCopy"] }
+
+extension = project.new_target(:application, "MihomoAppProxy", :osx, "14.0", nil, :swift)
+extension.product_type = "com.apple.product-type.system-extension"
+extension.product_reference.path = "dev.linsheng.mihomo-app.app-proxy.systemextension"
+extension.product_reference.explicit_file_type = "wrapper.system-extension"
+configure_target(extension, "dev.linsheng.mihomo-app.app-proxy")
+extension.build_configurations.each do |configuration|
+  configuration.build_settings.merge!(
+    "EXECUTABLE_NAME" => "MihomoAppProxy",
+    "PRODUCT_MODULE_NAME" => "MihomoAppProxy",
+    "PRODUCT_BUNDLE_IDENTIFIER" => "dev.linsheng.mihomo-app.app-proxy",
+    "INFOPLIST_FILE" => "../Config/AppProxyExtension-Info.plist",
+    "GENERATE_INFOPLIST_FILE" => "NO",
+    "CODE_SIGN_ENTITLEMENTS" => "../Config/AppProxyExtension.entitlements",
+    "SWIFT_ACTIVE_COMPILATION_CONDITIONS" => "$(inherited) MAIN_APP_PROXY",
+    "SKIP_INSTALL" => "YES"
+  )
+end
+add_sources(project, extension, "App Proxy Sources", ROOT.join("experiments/DNSIdentityProbe/Extension"))
+extension.add_system_framework(["NetworkExtension", "Network", "Security"])
+app.add_dependency(extension)
+extension_phase = app.new_copy_files_build_phase("Embed App Proxy system extension")
+extension_phase.dst_subfolder_spec = "1"
+extension_phase.dst_path = "Contents/Library/SystemExtensions"
+extension_phase.add_file_reference(extension.product_reference).settings = {"ATTRIBUTES" => ["CodeSignOnCopy", "RemoveHeadersOnCopy"]}
 
 resources_phase = app.new_shell_script_build_phase("Assemble audited application resources")
 resources_phase.shell_path = "/bin/bash"

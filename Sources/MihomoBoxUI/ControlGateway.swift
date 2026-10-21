@@ -315,6 +315,19 @@ public final class ControlGateway: @unchecked Sendable {
     channel = RetainedControlChannel(makeSession: makeSession)
   }
 
+  public func fetchAppProxyRouting() async throws -> AppProxyRoutingState {
+    try await decode(AppProxyRoutingState.self, request: ControlRequest(operation: .appProxyStatus), retryReadOnDisconnect: true)
+  }
+
+  public func setAppProxyRouting(_ update: AppProxyRoutingUpdate) async throws -> AppProxyRoutingState {
+    try update.settings.validate()
+    return try await Self.mutationGate.withLock { [self] in
+      try await decode(AppProxyRoutingState.self,
+        request: ControlRequest(operation: .setAppProxyRouting, payload: try JSONEncoder().encode(update)),
+        retryReadOnDisconnect: false)
+    }
+  }
+
   public func fetchVersion() async throws -> ControllerVersion {
     try await decode(
       ControllerVersion.self,

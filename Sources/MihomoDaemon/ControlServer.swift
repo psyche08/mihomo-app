@@ -425,6 +425,13 @@ final class ControlDispatcher: @unchecked Sendable {
                 if result.restartDaemon {
                     scheduleDaemonRestart()
                 }
+            case .appProxyStatus:
+                payload = try profiles.appProxyStatus()
+            case .setAppProxyRouting:
+                guard let data = request.payload, data.count <= 16_384 else { throw serverError("invalid App Proxy update") }
+                let update = try JSONDecoder().decode(AppProxyRoutingUpdate.self, from: data)
+                if agent.isRunning { try controller.validateAppProxyRoutes(update.settings) }
+                payload = try profiles.setAppProxyRouting(update)
             case .listProfiles:
                 payload = try profiles.list()
             case .importProfile, .switchProfile, .reloadProfile:
@@ -537,7 +544,7 @@ final class ControlDispatcher: @unchecked Sendable {
              .importProfile, .switchProfile, .reloadProfile, .setTUN,
              .setOutboundMode, .selectProxy, .refreshProxyProvider,
              .closeAllConnections, .installLocalDoH, .trustLocalDoHCertificate,
-             .prepareLocalDoHCertificateTrust, .setDNSMode:
+             .prepareLocalDoHCertificateTrust, .setDNSMode, .setAppProxyRouting:
             return true
         case .controllerRequest:
             // ControllerRequestPolicy is still the authority for the exact
@@ -545,7 +552,7 @@ final class ControlDispatcher: @unchecked Sendable {
             // because this operation represents both safe reads and bounded
             // mutations, and the typed envelope does not carry the method here.
             return true
-        case .ping, .status, .trayState, .snapshot, .componentStatus, .localDoHStatus,
+        case .ping, .status, .trayState, .snapshot, .componentStatus, .localDoHStatus, .appProxyStatus,
              .controllerVersion, .listRules, .listProxyProviders,
              .listRuleProviders, .listConnections, .controllerStreamMessage,
              .controllerStreamOpen, .controllerStreamNext, .controllerStreamClose,
@@ -731,6 +738,7 @@ final class ControlDispatcher: @unchecked Sendable {
                         throw serverErrorStatic("the standby runtime still owns a TUN route")
                     }
                 }
+                try controller.ensureConfiguredAppProxyRoutes()
                 return
             } catch ControllerBrokerCriticalError.unsafeGlobalRuntime {
                 throw ControllerBrokerCriticalError.unsafeGlobalRuntime

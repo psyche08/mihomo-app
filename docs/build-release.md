@@ -393,3 +393,20 @@ Before uploading, freeze SHA-256 values and verify:
 The project MIT license, `THIRD_PARTY_NOTICES.md`, Mihomo, MetaCubeXD and Sparkle
 license texts are bundled. Mihomo remains an unmodified official release
 artifact; MetaCubeXD remains a non-shipped design reference.
+
+## Bundled App Proxy
+
+The Cloud project includes the `MihomoAppProxy` system-extension target and
+embeds it with code signing into MihomoBox. The host and extension need App
+Proxy system-extension capabilities/provisioning profiles; the host additionally
+needs system-extension installation permission. Cloud capability/provisioning
+and live macOS approval must be verified before shipping this feature.
+`scripts/check-app-proxy-bundle.sh` checks the nested bundle identity and provider
+class; the Cloud export gate also checks matching host/extension leaf
+certificates, entitlement presence and embedded provisioning profiles.
+
+Local `build-macos-app.sh` compiles the same provider with `MAIN_APP_PROXY` and
+includes an unsigned development extension. It cannot be activated as a
+production system extension. The top-level five executable contract remains
+unchanged; the extension executable lives in its own nested bundle. No local
+Developer ID signing, notarization, installation or publication is added.

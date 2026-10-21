@@ -39,6 +39,8 @@ certificate_leaf_sha1() {
   /bin/rm -rf -- "$extraction"
 }
 
+"$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts/check-app-proxy-bundle.sh" "$APP" --signed
+
 /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP"
 TEAM_ID="$(/usr/bin/codesign -dvvv "$APP" 2>&1 | /usr/bin/sed -n 's/^TeamIdentifier=//p')"
 if [[ "$TEAM_ID" != "$EXPECTED_TEAM_ID" ]]; then

@@ -371,3 +371,49 @@ Custom listeners, merged mappings and ambiguous/duplicate managed keys require
 manual YAML editing rather than guessing how to rewrite them. Arbitrary policy
 names still have to pass the bundled core's validator before saving. No new
 controller mutation, privileged shell command, or GUI-owned core is introduced.
+
+## App Proxy application routes
+
+Config now includes **App Proxy**, separate from the profile editor's TUN
+process rules. Four rows cover ChatGPT/Codex Desktop, Codex CLI, Claude Desktop,
+and Claude CLI. Each row can select a concrete node or follow an existing proxy
+group. Discovered signed helper executables inherit their application's route;
+Terminal/editor `matchTools` rules still select only the two CLI families.
+A host-only identity that cannot identify the actual CLI is rejected, rather
+than assigned an arbitrary application's route.
+
+**Apply Routes** sends `app-proxy.set-routing` over authenticated XPC. The root
+daemon checks a revision of the active raw profile and saved settings, validates
+the selected targets against the current controller catalog, and uses the
+existing profile activation/rollback transaction. After startup it validates
+the new controller catalog too. The pinned core's `-t` check alone does not
+reject an unknown listener `proxy`, so it is not sufficient evidence. A failed
+or ambiguous reply requires refresh before another apply/enable.
+
+Settings live in the root-owned `app-proxy.json`, alongside the active-profile
+state. Subscription bytes and the user's profile mirror are preserved. The
+runtime overlay adds four loopback mixed listeners on ports 17971–17974, each
+with its explicit outbound `proxy`; TCP, UDP and intercepted DNS-over-HTTPS
+use the same application-specific listener. Switching a node restarts the
+managed runtime and can interrupt existing connections. Settings also apply to
+subsequent profiles; missing targets cause activation to roll back. Custom
+listeners, conflicting ports and ambiguous YAML mappings require manual profile
+changes. **Reset Routes**, available after disabling the extension, removes the
+overlay so a profile with incompatible listeners or node names can be selected.
+
+**Enable App Proxy…** requests macOS approval for the bundled
+`dev.linsheng.mihomo-app.app-proxy` system extension, discovers current signed
+application identities, saves a source-application VPN configuration, verifies
+its complete readback, and waits for a connected state. **Disable App Proxy**
+saves and verifies disabled preferences and waits for disconnection. Neither
+operation installs or repairs the root daemon, nor starts a second core.
+Local unsigned builds expose routing settings but cannot activate an extension.
+Refresh updates discovered targets and the VPN status; changing application
+versions/paths requires disable/re-enable to rediscover their signatures.
+
+The earlier standalone `MihomoDNSProbe.app` has a separate extension identity
+and must be disabled before enabling the main App's extension. It is not
+silently migrated or deactivated. This change does not claim strict system DNS
+isolation, complete attribution of every CLI-host flow, automatic recovery
+across reboot, or live validation of the newly bundled extension. Those require
+an appropriately provisioned Xcode Cloud build and macOS approval.

@@ -9,14 +9,15 @@ final class AppProxyUDPBridge {
     private let forwardDNS: (Data, @escaping (Data?) -> Void) -> Void
     private let count: (String) -> Void
     private let finished: () -> Void
-    private let control = NWConnection(host: "127.0.0.1", port: 7897, using: .tcp)
+    private let control: NWConnection
     private var relay: NWConnection?
     private var localConnections: [String: NWConnection] = [:]
     private var closed = false
     private var timer: DispatchWorkItem?
-    init(flow: NEAppProxyUDPFlow, queue: DispatchQueue,
+    init(flow: NEAppProxyUDPFlow, proxyPort: UInt16, queue: DispatchQueue,
          forwardDNS: @escaping (Data, @escaping (Data?) -> Void) -> Void,
          count: @escaping (String) -> Void, finished: @escaping () -> Void) {
+        self.control = NWConnection(host: "127.0.0.1", port: Network.NWEndpoint.Port(rawValue: proxyPort)!, using: .tcp)
         self.flow = flow; self.queue = queue; self.forwardDNS = forwardDNS
         self.count = count; self.finished = finished
     }

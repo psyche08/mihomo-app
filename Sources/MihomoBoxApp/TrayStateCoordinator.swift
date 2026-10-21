@@ -828,6 +828,7 @@ private final class LiveAppShellCoordinator: AppShellCoordinating {
     updates.start()
     DashboardStore.shared.configureUpdatePreference(updates)
     DashboardStore.shared.configureLocalDoHService(localDoH)
+    DashboardStore.shared.appProxy.configure(AppProxyCoordinator())
   }
 
   func stopBackgroundServices() {
@@ -844,6 +845,7 @@ enum AppComposition {
     let localDoH = LocalDoHCoordinator()
     DashboardStore.shared.configureUpdatePreference(updates)
     DashboardStore.shared.configureLocalDoHService(localDoH)
+    DashboardStore.shared.appProxy.configure(AppProxyCoordinator())
     let mutationGate = AppMutationGate()
     let tray = TrayStateCoordinator(
       control: control,

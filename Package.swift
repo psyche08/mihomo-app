@@ -40,6 +40,7 @@ let package = Package(
       name: "MihomoDNSCore",
       dependencies: [
         "CMihomoDNSSystem",
+        "MihomoControl",
         .product(name: "NIOCore", package: "swift-nio"),
         .product(name: "NIOFoundationCompat", package: "swift-nio"),
         .product(name: "NIOHTTP1", package: "swift-nio"),

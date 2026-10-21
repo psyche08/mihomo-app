@@ -63,6 +63,19 @@ final class ControllerBroker: @unchecked Sendable {
         )
     }
 
+    func validateAppProxyRoutes(_ settings: AppProxySettings) throws {
+        guard !settings.routes.isEmpty else { return }
+        let configuration = try ProxyConfiguration.load(path: configPath)
+        try settings.validateRoutes(in: routeSnapshot(configuration))
+    }
+
+    func ensureConfiguredAppProxyRoutes() throws {
+        let file = URL(fileURLWithPath: configPath).deletingLastPathComponent().appendingPathComponent("app-proxy.json")
+        guard FileManager.default.fileExists(atPath: file.path) else { return }
+        let settings = try JSONDecoder().decode(AppProxySettings.self, from: Data(contentsOf: file))
+        try validateAppProxyRoutes(settings)
+    }
+
     func waitForSafeGlobalRoute(attempts: Int = 30) throws {
         let attempts = max(1, attempts)
         var lastError: Error?

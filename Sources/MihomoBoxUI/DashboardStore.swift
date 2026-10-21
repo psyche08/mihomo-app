@@ -56,6 +56,7 @@ public protocol DashboardUpdatePreference: AnyObject {
 }
 
 public enum DashboardConfigAction: Equatable, Sendable {
+  case updatingAppProxy
   case updatingSettings
   case reloadingConfiguration
   case restartingRuntime
@@ -70,6 +71,7 @@ public enum DashboardConfigAction: Equatable, Sendable {
 
   public var progressTitle: String {
     switch self {
+    case .updatingAppProxy: "Applying App Proxy / waiting for macOS approval…"
     case .updatingSettings: "Applying settings…"
     case .reloadingConfiguration: "Reloading configuration…"
     case .restartingRuntime: "Restarting managed runtime…"
@@ -270,6 +272,20 @@ public final class DashboardStore: ObservableObject {
   /// Connects the App-owned Sparkle policy after process composition. Keeping
   /// this typed boundary out of `ControlGateway` prevents a user preference
   /// from being mistaken for a privileged daemon mutation.
+  public let appProxy = AppProxyStore()
+
+  public func resetAppProxyRoutes() async {
+    await performConfigAction(.updatingAppProxy) { try await self.appProxy.reset() }
+  }
+
+  public func applyAppProxyRoutes() async {
+    await performConfigAction(.updatingAppProxy) { try await self.appProxy.apply() }
+  }
+
+  public func setAppProxyEnabled(_ enabled: Bool) async {
+    await performConfigAction(.updatingAppProxy) { try await self.appProxy.setEnabled(enabled) }
+  }
+
   public func configureUpdatePreference(_ preference: any DashboardUpdatePreference) {
     updatePreference = preference
     automaticUpdatesAvailable = preference.automaticUpdatesAvailable
@@ -1307,6 +1323,7 @@ public final class DashboardStore: ObservableObject {
   }
 
   private func loadPreviewFixtures() {
+    appProxy.loadPreviewFixtures()
     runtimeStatus = .connected
     coreVersion = "Mihomo v1.19.30"
     runtimeMessage = "\(coreVersion) • Rule • TUN On"

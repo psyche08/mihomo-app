@@ -100,6 +100,7 @@ MANIFEST="$APP/Contents/Resources/BuildManifest.plist"
 PROVENANCE="$ROOT/build/MihomoBox-$VERSION-unsigned-bundle.sha256"
 TRAY_ICON="$APP/Contents/Resources/Meta.png"
 test -d "$APP"
+"$ROOT/scripts/check-app-proxy-bundle.sh" "$APP"
 for executable in mihomo-app mihomo mihomo-daemon mihomo-agent mihomoboxctl; do
   test -x "$APP/Contents/MacOS/$executable"
 done

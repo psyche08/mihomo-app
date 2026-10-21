@@ -295,3 +295,16 @@ profile through the main App or the typed CLI, then run `--app-ai-enable`; that
 command re-discovers signatures and paths before saving. Do not use the original
 profile without its explicit extension Proxy rule. The full `--rules` choices
 also include `primary` (main apps, native CLIs and restricted terminal hosts).
+
+### Main application integration
+
+The main App now builds these provider sources as a separate system-extension
+identity (`dev.linsheng.mihomo-app.app-proxy`) with `MAIN_APP_PROXY`. That variant
+requires `routing: per-application-v1`, assigning ChatGPT, Codex CLI, Claude,
+and Claude CLI to loopback ports 17971, 17972, 17973 and 17974 respectively.
+TCP, UDP and DoH all use that assignment; host-only CLI attribution is rejected.
+The standalone experiment retains its 7897 legacy behavior for existing tests.
+Signature discovery is shared from `Sources/MihomoBoxApp/AIAppTargets.swift`.
+See `docs/tray-and-controller.md` for the Config UI, root transaction and
+migration/validation limitations. Historical Cloud34 live results do not count
+as live acceptance of the new main-App extension.

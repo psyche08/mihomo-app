@@ -30,6 +30,8 @@ for executable in "${EXPECTED_EXECUTABLES[@]}"; do
   fi
 done
 
+"$ROOT/scripts/check-app-proxy-bundle.sh" "$APP"
+
 /bin/mkdir -p \
   "$APP/Contents/Resources/scripts" \
   "$APP/Contents/Resources/daemon" \

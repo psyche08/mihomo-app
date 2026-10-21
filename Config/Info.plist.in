@@ -26,6 +26,8 @@
 	<string>14.0</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSSystemExtensionUsageDescription</key>
+	<string>Route selected applications through their chosen proxy nodes.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>

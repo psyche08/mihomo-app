@@ -52,6 +52,8 @@ helper = target(p, root, 'MihomoDNSHelper', 'dev.linsheng.mihomo-dns-probe.selec
 selected = target(p, root, 'MihomoDNSSelected', 'dev.linsheng.mihomo-dns-probe.selected', 'Client')
 control = target(p, root, 'MihomoDNSControl', 'dev.linsheng.mihomo-dns-probe.control', 'Client')
 host = target(p, root, 'MihomoDNSProbe', 'dev.linsheng.mihomo-dns-probe', 'Host')
+shared = p.main_group.new_file('../../Sources/MihomoBoxApp/AIAppTargets.swift')
+host.source_build_phase.add_file_reference(shared)
 embed(selected, helper, 'Contents/Library/LoginItems')
 embed(host, ext, 'Contents/Library/SystemExtensions')
 embed(host, selected, 'Contents/Resources/Clients')

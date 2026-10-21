@@ -13,12 +13,12 @@
 		068D923E130B5984E04B0EB3 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34C703B20E6BBB4ECB4BA92C /* main.swift */; };
 		0A80ABA8B50B8AC390AE7CC7 /* SOCKSDatagram.swift in Sources */ = {isa = PBXBuildFile; fileRef = 262AAC87D1B2A7926A0F5703 /* SOCKSDatagram.swift */; };
 		0F038523B6FC5256BC883A87 /* AppProxyUDPBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A054D09BA1DE4C0B796477CE /* AppProxyUDPBridge.swift */; };
-		129890E9C6B98DD69D1EAD08 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECFA5D959DF9409B08E94103 /* main.swift */; };
+		129890E9C6B98DD69D1EAD08 /* AIAppTargets.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECFA5D959DF9409B08E94103 /* AIAppTargets.swift */; };
 		17D808BE02B73E004FFE366A /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = C931C9E8461E1917E6690180 /* main.swift */; };
 		347552944539AA00A198EA87 /* MihomoDNSControl.app in Embed MihomoDNSControl */ = {isa = PBXBuildFile; fileRef = 154B222E808014A8A577054C /* MihomoDNSControl.app */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		3CEC26BEEFB106C43A381B7B /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 20278CE7B83856A69D2EBACD /* Cocoa.framework */; };
 		4C54B085243FCCC9053F0568 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 375F50A09C0226F55B8FB55F /* main.swift */; };
-		5E42BC3DBF58B1510C5C89CC /* AppProbeHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5AEE8ACC467951CD5D81770 /* AppProbeHost.swift */; };
+		5E42BC3DBF58B1510C5C89CC /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5AEE8ACC467951CD5D81770 /* main.swift */; };
 		6BAECE14EDF88562626F9C25 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 20278CE7B83856A69D2EBACD /* Cocoa.framework */; };
 		7043D86287BBAFE26A8F1C7B /* ProbeSessionConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80E6ED177D03B5428F0F0313 /* ProbeSessionConfiguration.swift */; };
 		7745B47CF846818E036942D2 /* MihomoDNSSelected.app in Embed MihomoDNSSelected */ = {isa = PBXBuildFile; fileRef = 2110F43A2796A36EB5232B62 /* MihomoDNSSelected.app */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -26,7 +26,7 @@
 		8B79C1538586A9702776548E /* Provider.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7EB9BCBA26A0E031957A05E /* Provider.swift */; };
 		921CC2027237E6C838303D58 /* AIProxyConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 945C2E59FEA4BFF062C190AD /* AIProxyConfiguration.swift */; };
 		B9E7CEF3D75802675089EBCF /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06A5CC505CEAD18FE2615476 /* main.swift */; };
-		CF0848782996C66A79350F67 /* AIAppTargets.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF73E8DE2B2C4DE327C49A41 /* AIAppTargets.swift */; };
+		CF0848782996C66A79350F67 /* AppProbeHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF73E8DE2B2C4DE327C49A41 /* AppProbeHost.swift */; };
 		E299DC6DF9D43C04D955A014 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 20278CE7B83856A69D2EBACD /* Cocoa.framework */; };
 		EC9508C1C6244CBF5499B913 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 20278CE7B83856A69D2EBACD /* Cocoa.framework */; };
 		FCA3A9081FAADB500BC84F68 /* AppProbeProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59A7F3A0934A4E6188E8A98B /* AppProbeProvider.swift */; };
@@ -125,12 +125,12 @@
 		80E6ED177D03B5428F0F0313 /* ProbeSessionConfiguration.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ProbeSessionConfiguration.swift; sourceTree = "<group>"; };
 		945C2E59FEA4BFF062C190AD /* AIProxyConfiguration.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AIProxyConfiguration.swift; sourceTree = "<group>"; };
 		A054D09BA1DE4C0B796477CE /* AppProxyUDPBridge.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppProxyUDPBridge.swift; sourceTree = "<group>"; };
-		A5AEE8ACC467951CD5D81770 /* AppProbeHost.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppProbeHost.swift; sourceTree = "<group>"; };
-		AF73E8DE2B2C4DE327C49A41 /* AIAppTargets.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AIAppTargets.swift; sourceTree = "<group>"; };
+		A5AEE8ACC467951CD5D81770 /* main.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		AF73E8DE2B2C4DE327C49A41 /* AppProbeHost.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppProbeHost.swift; sourceTree = "<group>"; };
 		C7EB9BCBA26A0E031957A05E /* Provider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Provider.swift; sourceTree = "<group>"; };
 		C931C9E8461E1917E6690180 /* main.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		EA03F941E862764AD689785C /* MihomoDNSHelper.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MihomoDNSHelper.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		ECFA5D959DF9409B08E94103 /* main.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		ECFA5D959DF9409B08E94103 /* AIAppTargets.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AIAppTargets.swift; path = ../../Sources/MihomoBoxApp/AIAppTargets.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -237,15 +237,15 @@
 				5EEF7E19E6850F2EE043A8BF /* MihomoDNSSelected */,
 				91F6389D3810436D8D9928CF /* MihomoDNSControl */,
 				A755EA978A53515173368691 /* MihomoDNSProbe */,
+				ECFA5D959DF9409B08E94103 /* AIAppTargets.swift */,
 			);
 			sourceTree = "<group>";
 		};
 		A755EA978A53515173368691 /* MihomoDNSProbe */ = {
 			isa = PBXGroup;
 			children = (
-				AF73E8DE2B2C4DE327C49A41 /* AIAppTargets.swift */,
-				A5AEE8ACC467951CD5D81770 /* AppProbeHost.swift */,
-				ECFA5D959DF9409B08E94103 /* main.swift */,
+				AF73E8DE2B2C4DE327C49A41 /* AppProbeHost.swift */,
+				A5AEE8ACC467951CD5D81770 /* main.swift */,
 			);
 			name = MihomoDNSProbe;
 			path = Host;
@@ -467,9 +467,9 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				CF0848782996C66A79350F67 /* AIAppTargets.swift in Sources */,
-				5E42BC3DBF58B1510C5C89CC /* AppProbeHost.swift in Sources */,
-				129890E9C6B98DD69D1EAD08 /* main.swift in Sources */,
+				CF0848782996C66A79350F67 /* AppProbeHost.swift in Sources */,
+				5E42BC3DBF58B1510C5C89CC /* main.swift in Sources */,
+				129890E9C6B98DD69D1EAD08 /* AIAppTargets.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

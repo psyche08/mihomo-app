@@ -22,7 +22,7 @@ struct AIAppTargets {
     let targets: [Target]
     let rules: [NEAppRule]
 
-    init(ruleSet: String = "all") throws {
+    init(ruleSet: String = "all", requireAll: Bool = true) throws {
         let fm = FileManager.default
         let home = fm.homeDirectoryForCurrentUser
         var found: [String: Target] = [:]
@@ -70,9 +70,12 @@ struct AIAppTargets {
             }
         }
         let tools = found.values.filter { ["codex_cli", "claude_cli"].contains($0.category) }.sorted { $0.path < $1.path }
+        if requireAll {
         guard found.values.contains(where: { $0.category == "chatgpt" }),
               found.values.contains(where: { $0.category == "claude" }),
               Set(tools.map(\.category)) == ["codex_cli", "claude_cli"] else { throw Failure.missingTarget }
+        }
+        guard !found.isEmpty else { throw Failure.missingTarget }
         // NE treats application rules as identity records. Consolidate repeated
         // identities (multiple renderers, versions and remote servers) and keep
         // executable-path validation inside the provider.
@@ -95,7 +98,7 @@ struct AIAppTargets {
         for path in ["/System/Applications/Utilities/Terminal.app", "/Applications/iTerm.app",
                      "/Applications/Warp.app", "/Applications/Ghostty.app", "/Applications/kitty.app",
                      "/Applications/Alacritty.app", "/Applications/Visual Studio Code.app"] {
-            guard let executable = Bundle(url: URL(fileURLWithPath: path))?.executableURL,
+            guard !tools.isEmpty, let executable = Bundle(url: URL(fileURLWithPath: path))?.executableURL,
                   let terminal = Self.inspect(executable.resolvingSymlinksInPath(), category: "cli_host", team: nil) else { continue }
             let rule = NEAppRule(signingIdentifier: terminal.id, designatedRequirement: terminal.requirement)
             rule.matchTools = tools.map { NEAppRule(signingIdentifier: $0.id, designatedRequirement: $0.requirement) }

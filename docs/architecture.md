@@ -192,3 +192,21 @@ dialog; only the explicit repair boundaries described above do.
 | `127.0.0.1:<profile port>` HTTP/WS | agent-local control path | Mihomo controller; never a Desktop/CLI control boundary |
 
 See [daemon-and-dns.md](daemon-and-dns.md) for failure and restoration rules.
+
+## Optional App Proxy extension
+
+The signed application additionally embeds
+`Contents/Library/SystemExtensions/dev.linsheng.mihomo-app.app-proxy.systemextension`.
+The AppKit `AppProxyCoordinator` owns user-scoped NetworkExtension preferences
+and macOS activation requests. SwiftUI receives only typed service actions;
+node configuration still goes through `ControlGateway` and authenticated root
+XPC (`app-proxy.status`, `app-proxy.set-routing`). No host CLI subprocess or
+additional Mihomo process participates in this control path.
+
+The extension reuses the audited experiment's flow handling and signature
+inspection, but `MAIN_APP_PROXY` requires the per-application routing schema
+and rejects legacy test sessions. Its only remote forwarding paths are the
+four fixed root-core loopback listeners. Unknown identities and unattributable
+CLI hosts fail closed. DNS HTTPS sessions are isolated by application listener;
+loopback application callbacks remain explicit local bridges. No controller
+credentials, arbitrary remote endpoints, or packet logs are added to the UI.
