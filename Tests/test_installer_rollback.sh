@@ -51,4 +51,32 @@ export APP_SUPPORT LOCAL_DOH_CERT LOCAL_DOH_KEY
 export -f managed_runtime_dns_ready managed_agent_standby_ready
 /bin/bash -c 'set -Eeuo pipefail; trap rollback_installation ERR; managed_runtime_dns_ready'
 test ! -e "$TEST_TMP/events"
+
+# An exited core leaves a Unix socket behind. Remove only that socket before
+# copying the stopped installation; never follow a symlink or remove real data.
+load_function remove_stopped_dns_socket
+APP_SUPPORT="$TEST_TMP/socket-support"
+mkdir -p "$APP_SUPPORT/mihomo-data/.dns-ipc"
+socket="$APP_SUPPORT/mihomo-data/.dns-ipc/mihomo.sock"
+python3 - "$socket" <<'PY'
+import socket, sys
+s = socket.socket(socket.AF_UNIX)
+s.bind(sys.argv[1])
+s.close()
+PY
+remove_stopped_dns_socket
+test ! -e "$socket"
+printf 'preserve\n' > "$socket"
+if remove_stopped_dns_socket 2>/dev/null; then exit 1; fi
+test "$(cat "$socket")" = preserve
+rm "$socket"
+ln -s "$TEST_TMP/live-support/preserved" "$socket"
+if remove_stopped_dns_socket 2>/dev/null; then exit 1; fi
+test -L "$socket"
+test -f "$TEST_TMP/live-support/preserved"
+rm "$socket"
+rmdir "$APP_SUPPORT/mihomo-data/.dns-ipc"
+ln -s "$TEST_TMP/live-support" "$APP_SUPPORT/mihomo-data/.dns-ipc"
+if remove_stopped_dns_socket 2>/dev/null; then exit 1; fi
+test -L "$APP_SUPPORT/mihomo-data/.dns-ipc"
 echo "installer rollback isolation tests passed"

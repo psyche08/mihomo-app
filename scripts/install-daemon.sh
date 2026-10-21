@@ -970,10 +970,38 @@ record_installation_state() {
   fi
 }
 
+remove_stopped_dns_socket() {
+  # Called only after launchd and all managed processes have stopped. A Unix
+  # socket has no recoverable contents and ditto can fail while copying it.
+  local parent socket mode
+  for parent in "$APP_SUPPORT" "$APP_SUPPORT/mihomo-data" "$APP_SUPPORT/mihomo-data/.dns-ipc"; do
+    [[ -e "$parent" || -L "$parent" ]] || return 0
+    [[ -d "$parent" && ! -L "$parent" &&
+      "$(/usr/bin/stat -f '%u' "$parent")" == "$EUID" ]] || {
+      echo "refusing unsafe DNS socket parent" >&2
+      return 1
+    }
+    mode="$(/usr/bin/stat -f '%Lp' "$parent")"
+    (( (8#$mode & 8#22) == 0 )) || {
+      echo "refusing writable DNS socket parent" >&2
+      return 1
+    }
+  done
+  socket="$APP_SUPPORT/mihomo-data/.dns-ipc/mihomo.sock"
+  [[ -e "$socket" || -L "$socket" ]] || return 0
+  [[ -S "$socket" && ! -L "$socket" &&
+    "$(/usr/bin/stat -f '%u' "$socket")" == "$EUID" ]] || {
+    echo "refusing unexpected DNS socket file" >&2
+    return 1
+  }
+  /bin/rm -- "$socket"
+}
+
 snapshot_installation() {
   [[ "$DRY_RUN" -eq 0 ]] || return 0
   ensure_rollback_directory || return 1
   if [[ -d "$APP_SUPPORT" ]]; then
+    remove_stopped_dns_socket || return 1
     /usr/bin/ditto "$APP_SUPPORT" "$ROLLBACK_DIR/app-support" || return 1
     PREVIOUS_APP_SUPPORT_PRESENT=1
   fi

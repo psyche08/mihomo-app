@@ -31,6 +31,9 @@ It does not publish a supplemental default DNS resolver or use a separate
 public DoH service. DNS follows the core's shared configuration; each app's
 selected node still controls its proxied connections. With TUN off, the core's
 standby DNS returns real addresses. A failed core DNS request fails closed.
+Disabling Enhanced TUN keeps that standby core and DNS available, including
+when switching away from Global DNS fallback. `mihomoboxctl rpc set-tun false`
+performs this same transition; `mihomoboxctl stop` stops the entire runtime.
 
 ## Uninstalling the Privileged Helper
 

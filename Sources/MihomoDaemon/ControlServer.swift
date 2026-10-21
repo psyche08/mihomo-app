@@ -459,12 +459,10 @@ final class ControlDispatcher: @unchecked Sendable {
                         finishGlobalDNSFallbackLocked()
                         try verifyGlobalDNSProfileRemovalLocked()
                     } else {
-                        // There is no independent DNS service in fallback.
-                        // Turning TUN off therefore stops the worker and
-                        // restores physical DNS through verified shutdown.
-                        guard agent.stopAndRestoreVerified() else {
-                            throw ControllerBrokerCriticalError.unsafeGlobalRuntime
-                        }
+                        // Restore the old Global DNS owner before entering
+                        // standby. App Proxy still needs the daemon-owned core
+                        // and shared DNS listener after the TUN route is gone.
+                        try profiles.setEnhancedTUN(false)
                     }
                     payload = nil
                     break

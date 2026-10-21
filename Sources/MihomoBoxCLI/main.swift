@@ -984,8 +984,8 @@ private func performRPC(_ arguments: [String]) throws -> Int32 {
         try requireNoExtraArguments(values)
         payload = try sendControl(.snapshot)
     case "set-tun":
-        guard values == ["true"] else {
-            throw CLIError(message: "usage: mihomoboxctl rpc set-tun true; use stop to disable TUN and restore DNS")
+        guard values == ["true"] || values == ["false"] else {
+            throw CLIError(message: "usage: mihomoboxctl rpc set-tun true|false; use stop to stop the runtime and restore DNS")
         }
         payload = try sendControl(.setTUN, arguments: ["enabled": values[0]])
     case "set-mode":

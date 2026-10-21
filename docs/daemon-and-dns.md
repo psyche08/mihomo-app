@@ -182,8 +182,8 @@ Standby retains the controller and Mihomo DNS with TUN and the Fake-IP route
 absent; Enhanced mode uses Local DoH only after the installed profile, identity,
 native SSL trust and 443 listener are verified. Otherwise it runs the verified
 Global DNS fallback transaction and confirms removal of any overriding DoH
-profile. Disabling Enhanced TUN returns Local DoH to standby; in Global DNS it
-stops the worker and restores original DNS.
+profile. Disabling Enhanced TUN returns the core to standby in either DNS mode;
+Global DNS is restored to the original settings before that transition.
 
 `enhancedTUNPreviouslyEnabled` separately remembers a successful enable. Turning
 TUN off changes the current session but preserves that preference. A subsequent
@@ -219,7 +219,8 @@ Device Management; network health alone does not prove fallback completion.
 The identity and prepared profile remain available for a later Prepare retry.
 
 Fallback survives daemon restart and does not repeatedly contend for 443.
-Disabling TUN in fallback stops the worker and restores system DNS. Prepare
+Disabling TUN in fallback restores system DNS and enters controller/DNS standby,
+so App Proxy can keep using the shared resolver without a TUN route. Prepare
 restores Global DNS before switching to LocalHttpDns standby; another failure
 re-enters fallback. LocalHttpDns remains on loopback: binding it to the TUN
 address would couple its lifetime to TUN and would not evade a wildcard 443
