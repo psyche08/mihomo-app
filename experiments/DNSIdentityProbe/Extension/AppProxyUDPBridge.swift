@@ -2,7 +2,8 @@ import Foundation
 import Network
 import NetworkExtension
 
-/// One SOCKS association per app UDP flow. No direct network fallback or FRAG support.
+/// DNS uses the shared resolver independently of the optional SOCKS association.
+/// No direct network fallback or FRAG support.
 final class AppProxyUDPBridge {
     private let flow: NEAppProxyUDPFlow
     private let queue: DispatchQueue
@@ -11,6 +12,7 @@ final class AppProxyUDPBridge {
     private let finished: () -> Void
     private let control: NWConnection
     private var relay: NWConnection?
+    private var relayReady: (() -> Void)?
     private var localConnections: [String: NWConnection] = [:]
     private var closed = false
     private var timer: DispatchWorkItem?
@@ -22,6 +24,16 @@ final class AppProxyUDPBridge {
         self.count = count; self.finished = finished
     }
     func start() {
+        armTimer(30)
+        flow.open(withLocalEndpoint: nil) { error in
+            self.queue.async {
+                guard !self.closed, error == nil else { self.close(); return }
+                self.readClient()
+            }
+        }
+    }
+    private func startAssociation(_ ready: @escaping () -> Void) {
+        relayReady = ready
         armTimer(30)
         control.stateUpdateHandler = { state in
             switch state {
@@ -58,15 +70,11 @@ final class AppProxyUDPBridge {
             switch state {
             case .ready:
                 relay.stateUpdateHandler = nil
-                self.flow.open(withLocalEndpoint: nil) { error in
-                    self.queue.async {
-                        guard !self.closed, error == nil else { self.close(); return }
-                        self.armTimer(180); self.count("socks_udp_connected")
-                        self.readClient(); self.readRelay()
-                        // An association is only valid while its TCP control stays open.
-                        self.control.receive(minimumIncompleteLength: 1, maximumLength: 1) { _, _, _, _ in self.close() }
-                    }
-                }
+                self.armTimer(180); self.count("socks_udp_connected")
+                self.readRelay()
+                // An association is only valid while its TCP control stays open.
+                self.control.receive(minimumIncompleteLength: 1, maximumLength: 1) { _, _, _, _ in self.close() }
+                let ready = self.relayReady; self.relayReady = nil; ready?()
             case .failed, .cancelled: self.close()
             default: break
             }
@@ -87,11 +95,19 @@ final class AppProxyUDPBridge {
         guard !closed else { return }
         guard index < data.count else { readClient(); return }
         let endpoint = endpoints[index]
-        guard let port = UInt16(endpoint.port), port > 0, let relay else { close(); return }
-        armTimer(180)
+        guard let port = UInt16(endpoint.port), port > 0 else { close(); return }
         if port == 53 {
+            // mDNSResponder reuses these flows. A core restart or idle SOCKS
+            // timeout must not close its DNS socket and poison later lookups.
+            // Each DNS request already has its own bounded deadline/capacity.
+            if relay == nil, localConnections.isEmpty { timer?.cancel(); timer = nil }
             forwardDNS(data[index]) { response in
-                guard !self.closed, let response else { self.close(); return }
+                guard !self.closed else { return }
+                guard let response else {
+                    // Drop a failed query without bypassing the core. A retry
+                    // on this same flow can recover when the resolver returns.
+                    self.sendBatch(data, endpoints, index: index + 1); return
+                }
                 self.flow.writeDatagrams([response], sentBy: [endpoint]) { error in
                     self.queue.async {
                         if error != nil { self.close() } else { self.sendBatch(data, endpoints, index: index + 1) }
@@ -99,6 +115,7 @@ final class AppProxyUDPBridge {
                 }
             }
         } else if AppProbeProvider.isLoopback(endpoint.hostname) {
+            armTimer(180)
             let key = endpoint.hostname + ":" + endpoint.port
             let connection: NWConnection
             if let existing = localConnections[key] { connection = existing }
@@ -118,6 +135,11 @@ final class AppProxyUDPBridge {
                 }
             })
         } else {
+            guard let relay else {
+                startAssociation { self.sendBatch(data, endpoints, index: index) }
+                return
+            }
+            armTimer(180)
             guard let packet = SOCKSDatagram.encode(host: endpoint.hostname, port: port, payload: data[index]) else { close(); return }
             relay.send(content: packet, completion: .contentProcessed { error in
                 if error != nil { self.close() } else {
@@ -173,6 +195,7 @@ final class AppProxyUDPBridge {
     func close() {
         guard !closed else { return }
         closed = true; timer?.cancel(); control.cancel(); relay?.cancel()
+        relayReady = nil
         for connection in localConnections.values { connection.cancel() }
         localConnections.removeAll()
         let error = NSError(domain: "AppProxyUDP", code: 1)

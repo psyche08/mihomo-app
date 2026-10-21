@@ -34,6 +34,10 @@ standby DNS returns real addresses. A failed core DNS request fails closed.
 Disabling Enhanced TUN keeps that standby core and DNS available, including
 when switching away from Global DNS fallback. `mihomoboxctl rpc set-tun false`
 performs this same transition; `mihomoboxctl stop` stops the entire runtime.
+DNS UDP flows do not open a SOCKS association or expire with its idle timer.
+macOS reuses these resolver flows across core restarts; a failed DNS request
+is dropped without closing the flow, so later requests can recover through
+the shared resolver. Non-DNS remote UDP still uses the application's SOCKS route.
 
 ## Uninstalling the Privileged Helper
 
