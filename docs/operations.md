@@ -38,6 +38,9 @@ DNS UDP flows do not open a SOCKS association or expire with its idle timer.
 macOS reuses these resolver flows across core restarts; a failed DNS request
 is dropped without closing the flow, so later requests can recover through
 the shared resolver. Non-DNS remote UDP still uses the application's SOCKS route.
+Global DNS cleanup and stopped-runtime checks exclude service-specific DNS
+dictionaries carrying `ServiceIdentifier`. These belong to Network Extension;
+matching the TUN DNS address alone does not make them stale Global DNS state.
 
 ## Uninstalling the Privileged Helper
 

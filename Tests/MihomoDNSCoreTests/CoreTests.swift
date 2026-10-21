@@ -185,6 +185,21 @@ final class CoreTests: XCTestCase {
         )
     }
 
+    func testGlobalDNSCleanupAndRestoreChecksExcludeAppProxyResolver() {
+        let addressKey = kSCPropNetDNSServerAddresses as String
+        let servers = ["198.18.0.1"]
+        // Shape observed in macOS's App Proxy dynamic DNS service. Its
+        // address equals TUN DNS, but its ownership and scope are different.
+        for identifier: Any in [2, 0, "unknown"] {
+            let appDNS: [String: Any] = [addressKey: servers, "ServiceIdentifier": identifier]
+            XCTAssertNil(ManagedDNSDictionaryCleanup.removingExactServers(servers, from: appDNS))
+            XCTAssertEqual(ManagedDNSDictionaryCleanup.globalServers(in: appDNS), [])
+        }
+        let physicalDNS: [String: Any] = [addressKey: servers]
+        XCTAssertEqual(ManagedDNSDictionaryCleanup.globalServers(in: physicalDNS), servers)
+        XCTAssertEqual(ManagedDNSDictionaryCleanup.removingExactServers(servers, from: physicalDNS)?.count, 0)
+    }
+
     func testStoppedRuntimeVerificationReportsOnlyUnsafeStateNames() {
         let health = NetworkConsistencyHealth(
             controllerReachable: true,

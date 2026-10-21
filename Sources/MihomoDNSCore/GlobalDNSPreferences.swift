@@ -74,6 +74,14 @@ struct ResolverTopologyObservation: Equatable, Sendable {
 }
 
 enum ManagedDNSDictionaryCleanup {
+    /// Service-specific resolvers (including App Proxy) belong to Network
+    /// Extension, even when they advertise the same address as Global DNS.
+    /// Preserve any ServiceIdentifier-bearing dictionary conservatively.
+    static func globalServers(in dictionary: [String: Any]?) -> [String] {
+        guard let dictionary, dictionary["ServiceIdentifier"] == nil else { return [] }
+        return dictionary[kSCPropNetDNSServerAddresses as String] as? [String] ?? []
+    }
+
     /// Returns an updated dictionary only when ServerAddresses exactly matches
     /// the managed value. An empty dictionary tells the caller to remove the
     /// whole path; nil means ownership cannot be proved and nothing may change.
@@ -81,7 +89,7 @@ enum ManagedDNSDictionaryCleanup {
         _ servers: [String],
         from dictionary: [String: Any]
     ) -> [String: Any]? {
-        guard dictionary[kSCPropNetDNSServerAddresses as String] as? [String] == servers else {
+        guard globalServers(in: dictionary) == servers, !servers.isEmpty else {
             return nil
         }
         var updated = dictionary
@@ -285,12 +293,12 @@ public final class GlobalDNSPreferences: @unchecked Sendable {
 
     private func persistentServers(at path: String, preferences: SCPreferences) -> [String] {
         let dns = SCPreferencesPathGetValue(preferences, path as CFString) as? [String: Any]
-        return dns?[kSCPropNetDNSServerAddresses as String] as? [String] ?? []
+        return ManagedDNSDictionaryCleanup.globalServers(in: dns)
     }
 
     private func dynamicServers(at key: String, store: SCDynamicStore) -> [String] {
         let dns = SCDynamicStoreCopyValue(store, key as CFString) as? [String: Any]
-        return dns?[kSCPropNetDNSServerAddresses as String] as? [String] ?? []
+        return ManagedDNSDictionaryCleanup.globalServers(in: dns)
     }
 
     public func hasManagedBackup() -> Bool {
