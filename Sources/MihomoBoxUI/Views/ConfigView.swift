@@ -508,7 +508,7 @@ public struct ConfigView: View {
     case .globalDNSFallback:
       "System DNS uses 198.18.0.1 through Enhanced TUN, either by selection or fallback. Stop Mihomo to restore the original DNS. Prepare & Trust and reinstall the profile to return to Local DoH."
     case .fallbackNeedsProfileRemoval:
-      "Global DNS fallback is configured, but macOS has not confirmed removal of the MihomoBox Local DoH profile. Remove it in Device Management so matching domains can use Global DNS."
+      "Global DNS fallback is configured, but macOS has not confirmed removal of the MihomoBox DNS profile. Remove it in Device Management so matching domains can use Global DNS."
     case .fallbackUnavailable:
       "Global DNS fallback is configured but not currently active. Start Mihomo to restore the TUN DNS path, or Prepare to retry LocalHttpDns."
     }

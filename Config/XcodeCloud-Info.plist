@@ -27,7 +27,7 @@
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSSystemExtensionUsageDescription</key>
-	<string>Route selected applications through their chosen proxy nodes.</string>
+	<string>MihomoBox routes selected applications through their chosen proxy nodes.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>

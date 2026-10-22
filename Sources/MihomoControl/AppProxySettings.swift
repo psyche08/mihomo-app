@@ -26,8 +26,19 @@ public struct AppProxyEntry: Codable, Equatable, Sendable, Identifiable {
     public var title: String
     public var path: String?
     public var port: UInt16
-    public init(id: String, title: String, path: String? = nil, port: UInt16) {
+    public var executablePaths: [String]
+    public init(id: String, title: String, path: String? = nil, port: UInt16, executablePaths: [String] = []) {
         self.id = id; self.title = title; self.path = path; self.port = port
+        self.executablePaths = executablePaths
+    }
+    private enum CodingKeys: String, CodingKey { case id, title, path, port, executablePaths }
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        title = try values.decode(String.self, forKey: .title)
+        path = try values.decodeIfPresent(String.self, forKey: .path)
+        port = try values.decode(UInt16.self, forKey: .port)
+        executablePaths = try values.decodeIfPresent([String].self, forKey: .executablePaths) ?? []
     }
     public static var defaults: [Self] {
         AppProxyApplication.allCases.map { .init(id: $0.rawValue, title: $0.title, port: $0.port) }
@@ -55,6 +66,14 @@ public struct AppProxySettings: Codable, Equatable, Sendable {
         }
     }
     public func validate() throws {
+        let executables = applications.flatMap(\.executablePaths)
+        guard executables.count <= 128, Set(executables).count == executables.count,
+              applications.allSatisfy({ $0.executablePaths.count <= 32 }),
+              executables.allSatisfy({ path in
+                  path.hasPrefix("/") && path != "/" && path.utf8.count <= 4096
+                    && !path.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+                    && URL(fileURLWithPath: path).standardizedFileURL.path == path
+              }) else { throw AppProxySettingsError.invalidExecutables }
         guard applications.count <= 32,
               Set(applications.map(\.id)).count == applications.count,
               Set(applications.map(\.port)).count == applications.count,
@@ -82,9 +101,10 @@ public struct AppProxySettings: Codable, Equatable, Sendable {
 }
 
 public enum AppProxySettingsError: LocalizedError {
-    case invalidRoutes, unsupportedProfile, staleState, unavailableNode
+    case invalidRoutes, unsupportedProfile, staleState, unavailableNode, invalidExecutables
     public var errorDescription: String? {
         switch self {
+        case .invalidExecutables: "Enter unique absolute executable paths (up to 32 per app and 128 total). Each executable can belong to only one app."
         case .unavailableNode: "An App Proxy target is missing or does not currently resolve to a remote proxy. Refresh the node list and choose another target."
         case .invalidRoutes: "Choose a proxy node or proxy group for each application."
         case .unsupportedProfile: "App Proxy requires a single block-style profile without custom listeners or conflicting application listener ports."

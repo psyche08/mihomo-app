@@ -80,7 +80,17 @@ struct AIAppTargets {
             }
         }
         var toolCategories: Set<String> = ["codex_cli", "claude_cli"]
+        var explicitToolPaths = Set<String>()
         for entry in applications {
+            for path in entry.executablePaths {
+                let url = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL
+                var isDirectory: ObjCBool = false
+                guard fm.fileExists(atPath: url.path, isDirectory: &isDirectory), !isDirectory.boolValue,
+                      fm.isExecutableFile(atPath: url.path),
+                      Self.inspect(url, category: entry.id, team: nil) != nil else { throw Failure.unsignedTarget }
+                add(url, category: entry.id, team: nil)
+                explicitToolPaths.insert(url.path)
+            }
             guard let path = entry.path else { continue }
             let url = URL(fileURLWithPath: path).resolvingSymlinksInPath()
             if url.pathExtension == "app" {
@@ -95,11 +105,11 @@ struct AIAppTargets {
             }
         }
         guard !duplicate else { throw Failure.duplicateTarget }
-        let tools = found.values.filter { toolCategories.contains($0.category) }.sorted { $0.path < $1.path }
+        let tools = found.values.filter { toolCategories.contains($0.category) || explicitToolPaths.contains($0.path) }.sorted { $0.path < $1.path }
         if requireAll {
         guard found.values.contains(where: { $0.category == "chatgpt" }),
               found.values.contains(where: { $0.category == "claude" }),
-              Set(tools.map(\.category)) == ["codex_cli", "claude_cli"] else { throw Failure.missingTarget }
+              Set(tools.map(\.category)).isSuperset(of: ["codex_cli", "claude_cli"]) else { throw Failure.missingTarget }
         }
         // NE treats application rules as identity records. Consolidate repeated
         // identities (multiple renderers, versions and remote servers) and keep

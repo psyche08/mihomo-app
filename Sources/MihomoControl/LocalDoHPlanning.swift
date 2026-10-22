@@ -311,7 +311,7 @@ public enum LocalDoHProfileDocument {
       "PayloadVersion": 1,
       "PayloadIdentifier": "\(identifier).dns",
       "PayloadUUID": "9D49DE6B-77E6-4D2A-93D2-685A8F9F8B12",
-      "PayloadDisplayName": "MihomoBox Local DoH",
+      "PayloadDisplayName": "MihomoBox",
       "DNSSettings": [
         "DNSProtocol": "HTTPS",
         "ServerURL": serverURL,
@@ -329,7 +329,7 @@ public enum LocalDoHProfileDocument {
       "PayloadVersion": 1,
       "PayloadIdentifier": identifier,
       "PayloadUUID": "EB76D427-128C-4F94-BD19-8937D352899B",
-      "PayloadDisplayName": "MihomoBox Local DoH",
+      "PayloadDisplayName": "MihomoBox",
       "PayloadDescription":
         "Routes DNS queries to MihomoBox over local HTTPS. Mihomo determines the DNS response using the active profile.",
       "PayloadOrganization": "MihomoBox",

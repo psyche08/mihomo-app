@@ -4,16 +4,40 @@
 
 Open **App Proxy** in the sidebar (Command-8). Use **Add App or CLI…** to select
 a signed application bundle or executable. Embedded signed helpers follow the
-application's route. Expand **Signed executables** to inspect the discovered
-paths, Signing IDs, Team IDs and designated requirements; Refresh re-scans disk.
+application's route. Open **Signed executables** to inspect the discovered
+paths, Signing IDs, Team IDs and designated requirements in a separate panel.
+Refresh Nodes reads routing, available targets and extension status concurrently,
+without repeating the signature scan or replacing an edited draft. The signature
+inventory is cached for the displayed application list; use Rescan in the details
+panel (or Rescan Signed Executables in the actions menu) after installing or
+updating an app. Activation always performs a fresh signature verification.
 Unsigned files and duplicate executable ownership are rejected.
 
-Choose a node or proxy group for every entry, then **Apply Routes** and
+Search applications or search inside each node picker. The fixed bottom bar
+shows unsaved edits and keeps Apply, Discard and the extension switch visible.
+An external settings change preserves the draft but blocks Apply until Discard
+loads the latest saved settings, preventing accidental overwrites.
+Choose a node or proxy group for every entry, then **Apply Changes** and
 **Enable App Proxy…**. A LoadBalance group is accepted only when every candidate
 resolves to a remote proxy. macOS may require Network Extension and VPN approval.
 Disable App Proxy before adding or removing entries. Removing an entry only
 removes its proxy routing, never the installed application. Apply saves these
 changes; Restore Default Apps brings back the four initial categories.
+
+Each entry's **CLI executables** editor accepts additional signed binaries that
+share that entry's node. Enter one absolute path per line or use **Choose
+Executable…**, then **Update Draft**, **Apply Changes**, and enable App Proxy.
+Turn App Proxy off before editing membership. Removing a line removes that
+explicit assignment; automatically discovered app helpers remain included.
+The assignment follows the exact executable, regardless of its launcher;
+it does not automatically include all descendants of Codex or any other app.
+For scripts, select the signed interpreter, which also covers its other uses.
+Limits are 32 additional executables per entry and 128 total. Duplicate ownership,
+missing files, unsigned programs and directories are rejected before accepting
+the draft. Symlinks resolve to their canonical executable path, signatures are
+verified again on activation, and the Signed executables panel includes these
+additional binaries. Existing configurations migrate with an empty explicit list.
+
 For authenticated remote diagnosis, `mihomoboxctl app-proxy status` reads the
 saved list and `mihomoboxctl app-proxy set-all Proxy` transactionally assigns
 the existing entries to a group through the same typed XPC validation. Neither
@@ -91,6 +115,11 @@ root-owned component version floor. It does not send v2 runtime mutations or
 relax the certificate/profile prerequisite; missing or unsafe version state
 and newer daemon protocols remain rejected.
 
+The app name in user-facing copy, system extension metadata, DNS profiles and
+VPN configuration names is **MihomoBox**. Feature labels such as App Proxy and
+Local DoH describe functionality; Mihomo names the bundled upstream core.
+Existing installed DNS/VPN names update when their configuration is regenerated
+and approved or re-enabled, respectively.
 The visible bundle is `MihomoBox.app`. Existing
 `/Library/Application Support/Mihomo App` and `/Library/Logs/Mihomo App` paths
 remain stable so upgrades preserve configuration, DNS backups, and structured

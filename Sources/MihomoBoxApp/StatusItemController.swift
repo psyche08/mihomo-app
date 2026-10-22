@@ -257,7 +257,7 @@ final class StatusItemController: NSObject, NSMenuDelegate, ApplicationStatusIte
 
     if snapshot.proxies.isEmpty {
       let empty = NSMenuItem(
-        title: snapshot.controllerReachable ? "No proxy nodes" : "Mihomo daemon unavailable",
+        title: snapshot.controllerReachable ? "No proxy nodes" : "MihomoBox daemon unavailable",
         action: nil,
         keyEquivalent: ""
       )

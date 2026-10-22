@@ -222,6 +222,16 @@ The independent App Proxy page owns the editable application list. Default
 entries migrate from the original four-route settings without losing choices.
 Changing the list requires disabling the extension first; node-only changes
 retain stable ports. The App re-discovers signatures before enabling and rejects
-executables assigned to more than one entry. Expand an entry to inspect paths,
+executables assigned to more than one entry. Open an entry’s Signed executables panel to inspect paths,
 signing identifiers, Team IDs and designated requirements. LoadBalance groups
 have no current selection; route validation checks every member recursively.
+
+Each entry may persist additional `executablePaths` through the same typed XPC
+settings transaction. These are discovery metadata, never root-executed paths.
+The host resolves and verifies each signed executable, assigns it to the entry's
+existing listener, and includes it in the restricted terminal `matchTools` rules.
+The provider still requires the audit-token identity, canonical path and signing
+requirement to agree. There is no process-name matching or parent-process
+inheritance: explicitly selected tools use the assigned route from any launcher.
+Legacy entries decode with an empty list. Membership edits require the extension
+to be off and are rejected if a binary belongs to another entry.

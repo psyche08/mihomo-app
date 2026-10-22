@@ -18,6 +18,9 @@ it never kills an unrelated process merely because a PID file exists.
 LocalHttpDns is the default macOS DNS integration. Installing the root
 helper creates a valid Mihomo standby runtime with TUN disabled. The user then
 prepares and approves one macOS DNS Settings profile to select Local DoH.
+The profile and its DNS service are displayed as **MihomoBox**. Previously
+installed profiles retain their old name until the regenerated profile is
+approved again; the fixed profile identifier remains unchanged.
 Enhanced TUN does not require this setup: it uses verified Global DNS when the
 certificate, profile, or listener is not ready.
 

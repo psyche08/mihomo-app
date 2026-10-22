@@ -3,6 +3,23 @@ import MihomoControl
 @testable import MihomoDNSCore
 
 final class AppProxyProfileTests: XCTestCase {
+    func testExecutableMembershipMigrationPersistenceAndBounds() throws {
+        let legacy = try JSONDecoder().decode(AppProxyEntry.self, from: Data(#"{"id":"chatgpt","title":"Codex","port":17971}"#.utf8))
+        XCTAssertEqual(legacy.executablePaths, [])
+        var settings = AppProxySettings(applications: [legacy])
+        settings.applications[0].executablePaths = ["/usr/bin/curl", "/usr/bin/git"]
+        XCTAssertNoThrow(try settings.validate())
+        XCTAssertEqual(try JSONDecoder().decode(AppProxySettings.self, from: JSONEncoder().encode(settings)), settings)
+        for paths in [["curl"], ["~/bin/curl"], ["/usr/../bin/curl"], ["/bin/curl\n"], ["/"],
+                      ["/bin/curl", "/bin/curl"], (0..<33).map { "/bin/tool\($0)" }] {
+            settings.applications[0].executablePaths = paths
+            XCTAssertThrowsError(try settings.validate())
+        }
+        settings.applications = AppProxyEntry.defaults
+        settings.applications[0].executablePaths = ["/usr/bin/curl"]
+        settings.applications[1].executablePaths = ["/usr/bin/curl"]
+        XCTAssertThrowsError(try settings.validate(), "Ownership must be unique across apps")
+    }
     private var settings: AppProxySettings {
         .init(routes: Dictionary(uniqueKeysWithValues: AppProxyApplication.allCases.map { ($0.rawValue, "node-" + $0.rawValue) }))
     }

@@ -12,7 +12,6 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
     private let extensionID = "dev.linsheng.mihomo-app.app-proxy"
     private var activation: CheckedContinuation<Void, Error>?
     private var busy = false
-    private var counts: [String: Int] = [:]
     private var available: Bool {
         guard Bundle.main.bundleURL.pathExtension == "app", FileManager.default.fileExists(atPath:
             Bundle.main.bundleURL.appendingPathComponent("Contents/Library/SystemExtensions/\(extensionID).systemextension").path) else { return false }
@@ -30,15 +29,19 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         NSError(domain: "MihomoBox.AppProxy", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
     }
     func status(applications: [AppProxyEntry]) async throws -> AppProxyExtensionStatus {
-        let manager = available ? try await load() : nil
-        let targets = try await Task.detached { try AIAppTargets(requireAll: false, applications: applications) }.value
-        counts = Dictionary(grouping: targets.targets, by: \.category).mapValues(\.count)
-        return .init(available: available, enabled: manager?.isEnabled == true,
-                     connected: manager?.connection.status == .connected, targetCounts: counts,
-                     executables: targets.targets.filter { $0.category != "cli_host" }.map {
-                         .init(applicationID: $0.category, path: $0.path, signingIdentifier: $0.id,
-                               teamIdentifier: $0.team, requirement: $0.requirement)
-                     })
+        let isAvailable = available
+        let manager = isAvailable ? try await load() : nil
+        return .init(available: isAvailable, enabled: manager?.isEnabled == true,
+                     connected: manager?.connection.status == .connected)
+    }
+    func discoverExecutables(applications: [AppProxyEntry]) async throws -> [AppProxyExecutable] {
+        try await Task.detached(priority: .utility) {
+            try AIAppTargets(requireAll: false, applications: applications).targets
+                .filter { $0.category != "cli_host" }.map {
+                    AppProxyExecutable(applicationID: $0.category, path: $0.path, signingIdentifier: $0.id,
+                                       teamIdentifier: $0.team, requirement: $0.requirement)
+                }
+        }.value
     }
     func chooseApplication(port: UInt16) async throws -> AppProxyEntry? {
         let panel = NSOpenPanel()
@@ -51,8 +54,18 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         let url = selected.resolvingSymlinksInPath().standardizedFileURL
         let title = selected.pathExtension == "app" ? selected.deletingPathExtension().lastPathComponent : selected.lastPathComponent
         let entry = AppProxyEntry(id: "app_" + UUID().uuidString.lowercased(), title: title, path: url.path, port: port)
-        _ = try await Task.detached { try AIAppTargets(requireAll: false, applications: [entry]) }.value
+        // The store validates the complete candidate list once, including duplicate ownership.
         return entry
+    }
+    func chooseExecutable() async throws -> String? {
+        let panel = NSOpenPanel()
+        panel.title = "Choose CLI executable"
+        panel.message = "Choose the signed executable itself, such as /usr/bin/curl. Use Command-Shift-G to enter a path."
+        panel.canChooseFiles = true; panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false; panel.treatsFilePackagesAsDirectories = true
+        panel.directoryURL = URL(fileURLWithPath: "/usr/bin")
+        guard await panel.begin() == .OK, let selected = panel.url else { return nil }
+        return selected.resolvingSymlinksInPath().standardizedFileURL.path
     }
     func setEnabled(_ enabled: Bool, settings: AppProxySettings) async throws {
         guard !busy, available else { throw failure("The bundled App Proxy extension is unavailable or busy.") }
@@ -73,12 +86,12 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         guard manager.routingMethod == .sourceApplication else { throw failure("The saved VPN is not an application routing configuration.") }
         let config = NETunnelProviderProtocol()
         config.providerBundleIdentifier = extensionID
-        config.serverAddress = "MihomoBox App Proxy"
+        config.serverAddress = "MihomoBox"
         config.providerConfiguration = ["mode": "ai", "targets": targets.targets.map(\.record),
                                         "deadline": 0, "routing": "per-application-v2",
                                         "ports": Dictionary(uniqueKeysWithValues: settings.applications.map { ($0.id, Int($0.port)) })]
         manager.protocolConfiguration = config
-        manager.localizedDescription = "MihomoBox App Proxy"
+        manager.localizedDescription = "MihomoBox"
         manager.appRules = targets.rules
         manager.isEnabled = true
         do {
@@ -122,7 +135,7 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         for manager in managers where !(manager is NEAppProxyProviderManager)
           && (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == extensionID {
             guard !manager.isEnabled, [.disconnected, .invalid].contains(manager.connection.status) else {
-                throw failure("Disable the earlier MihomoBox App Proxy VPN configuration in System Settings before retrying.")
+                throw failure("Disable the earlier VPN configuration for MihomoBox in System Settings before retrying.")
             }
             try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
                 manager.removeFromPreferences { error in

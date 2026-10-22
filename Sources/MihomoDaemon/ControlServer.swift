@@ -382,7 +382,7 @@ final class ControlDispatcher: @unchecked Sendable {
                     guard profile.succeeded, profile.present == false else {
                         throw serverError(
                             "Global DNS is configured, but the Local DoH profile still overrides it. " +
-                            "Remove only the MihomoBox Local DoH profile in Device Management."
+                            "Remove only the MihomoBox DNS profile in Device Management."
                         )
                     }
                 case .localDoH:
@@ -666,7 +666,7 @@ final class ControlDispatcher: @unchecked Sendable {
     private func verifyGlobalDNSProfileRemovalLocked() throws {
         let profile = LocalDoHStatusProvider.inspectInstalledProfile()
         guard profile.succeeded, profile.present == false else {
-            throw serverError("Global DNS is configured, but its use is not confirmed. Remove only the MihomoBox Local DoH profile in Device Management.")
+            throw serverError("Global DNS is configured, but its use is not confirmed. Remove only the MihomoBox DNS profile in Device Management.")
         }
     }
 

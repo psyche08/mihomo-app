@@ -1229,7 +1229,7 @@ start_service() {
   local restart="$1"
   if [[ "$DRY_RUN" -eq 0 ]]; then
     [[ -x "$APP_SUPPORT/mihomo-daemon" && -f "$APP_SUPPORT/daemon.json" && -f "$PLIST" ]] || {
-      echo "Mihomo LaunchDaemon is not installed; run mihomoboxctl install first" >&2
+      echo "MihomoBox LaunchDaemon is not installed; run mihomoboxctl install first" >&2
       exit 1
     }
     [[ ! -f "$PROVISIONING_STATE" ]] || {
