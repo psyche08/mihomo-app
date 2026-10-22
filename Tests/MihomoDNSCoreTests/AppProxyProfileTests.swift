@@ -12,7 +12,7 @@ final class AppProxyProfileTests: XCTestCase {
         let reloaded = try JSONDecoder().decode(AppProxySettings.self, from: JSONEncoder().encode(settings))
         XCTAssertEqual(try AppProxyProfile.applying(reloaded, to: source), generated)
         for app in AppProxyApplication.allCases {
-            XCTAssertTrue(generated.contains("proxy: \"node-\(app.rawValue)\""))
+            XCTAssertTrue(generated.contains("proxies: [\"node-\(app.rawValue)\"]"))
         }
         var disabled = settings; disabled.bypass = .init(cidrs: [])
         XCTAssertNoThrow(try AppProxyProfile.applying(disabled, to: "dns:\n  fake-ip-range: 10.0.0.1/16\nrules: []\n"))
@@ -42,8 +42,10 @@ final class AppProxyProfileTests: XCTestCase {
         let rendered = try AppProxyProfile.applying(settings, to: source)
         XCTAssertTrue(rendered.hasPrefix(source))
         for app in AppProxyApplication.allCases {
-            XCTAssertTrue(rendered.contains("port: \(app.port)\n    udp: true\n    proxy: \"node-\(app.rawValue)\""))
+            XCTAssertTrue(rendered.contains("port: \(app.port)\n    udp: true\n    rule: mihomobox-app-\(app.rawValue)"))
+            XCTAssertTrue(rendered.contains("MATCH,mihomobox-app-\(app.rawValue)"))
         }
+        XCTAssertFalse(rendered.contains("    proxy:"), "An unconditional listener proxy bypasses Global/Direct mode")
         XCTAssertEqual(rendered.components(separatedBy: "listen: 127.0.0.1").count - 1, 4)
         XCTAssertFalse(rendered.contains("0.0.0.0"))
         XCTAssertEqual(try AppProxyProfile.applying(.init(), to: source), source)
@@ -84,7 +86,7 @@ final class AppProxyProfileTests: XCTestCase {
         var routes = settings
         routes.routes["chatgpt"] = "香港: \"fast\" # node"
         let output = try AppProxyProfile.applying(routes, to: "rules: []\n")
-        XCTAssertTrue(output.contains("proxy: \"香港: \\\"fast\\\" # node\""))
+        XCTAssertTrue(output.contains("proxies: [\"香港: \\\"fast\\\" # node\"]"))
         routes.routes["chatgpt"] = "x\nlisteners: []"
         XCTAssertThrowsError(try AppProxyProfile.applying(routes, to: "rules: []"))
     }
@@ -111,13 +113,74 @@ final class AppProxyProfileTests: XCTestCase {
         }
         XCTAssertEqual(try validate(settings), 0)
         var invalid = settings; invalid.routes["claude"] = "missing-node"
-        // v1.19.30 deliberately does not validate listener proxy names with
-        // -t. The root transaction must check the live catalog as well.
-        XCTAssertEqual(try validate(invalid), 0)
+        // The private selector also makes unknown targets fail core validation.
+        XCTAssertNotEqual(try validate(invalid), 0)
         let snapshot = ControllerRouteSnapshot(mode: "rule", proxies: Dictionary(uniqueKeysWithValues:
             AppProxyApplication.allCases.map { ("node-" + $0.rawValue, .init(name: "node-" + $0.rawValue, type: "Socks5")) }))
         XCTAssertNoThrow(try settings.validateRoutes(in: snapshot))
         XCTAssertThrowsError(try invalid.validateRoutes(in: snapshot))
+    }
+
+    func testExistingGroupAndSubRuleBlocksArePreservedWithoutDuplicateKeys() throws {
+        for indentation in ["", "  ", "    "] {
+            let source = "proxy-groups:\n\(indentation)- name: Existing\n\(indentation)  type: select\n\(indentation)  proxies: [DIRECT]\nsub-rules:\n    existing:\n      - MATCH,DIRECT\nrules: []\n"
+            let output = try AppProxyProfile.applying(settings, to: source)
+            XCTAssertEqual(output.components(separatedBy: "\nsub-rules:").count, 2)
+            XCTAssertTrue(output.contains("\(indentation)- name: mihomobox-app-chatgpt"))
+            XCTAssertTrue(output.contains("    existing:\n      - MATCH,DIRECT"))
+            XCTAssertTrue(output.contains("    mihomobox-app-chatgpt:\n      - MATCH,mihomobox-app-chatgpt"))
+        }
+        XCTAssertNoThrow(try AppProxyProfile.applying(settings, to: "proxy-groups: []\nsub-rules: {}\nrules: []\n"))
+        let quotedKeys = try AppProxyProfile.applying(settings, to: "'proxy-groups' : []\n\"sub-rules\" : {}\nrules: []\n")
+        XCTAssertFalse(quotedKeys.contains("'proxy-groups'"))
+        XCTAssertFalse(quotedKeys.contains("\"sub-rules\""))
+        for source in ["proxy-groups: *groups", "sub-rules: {existing: []}", "sub-rules: {}\nsub-rules: {}", "proxies:\n  - name: mihomobox-app-chatgpt\n"] {
+            XCTAssertThrowsError(try AppProxyProfile.applying(settings, to: source))
+        }
+    }
+
+    func testPinnedCoreActuallyFollowsModeAtRuntime() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let binary = root.appendingPathComponent(".build/staging/mihomo-aarch64-apple-darwin")
+        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: binary.path), "pinned Mihomo not staged")
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("app-proxy-modes-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let entry = AppProxyEntry(id: "app_00000000-0000-0000-0000-000000000001", title: "Fixture", path: "/tmp/fixture", port: 17999)
+        let settings = AppProxySettings(routes: [entry.id: "app,node"], applications: [entry])
+        let source = """
+        mode: rule
+        external-controller: 127.0.0.1:12347
+        find-process-mode: off
+        log-level: silent
+        dns:
+          enable: false
+        proxies:
+          - name: app,node
+            type: http
+            server: 127.0.0.1
+            port: 12345
+          - name: global-node
+            type: http
+            server: 127.0.0.1
+            port: 12346
+        proxy-groups:
+        - name: Existing
+          type: select
+          proxies: [global-node]
+        sub-rules:
+            existing:
+              - MATCH,REJECT
+        rules:
+          - MATCH,REJECT
+        """
+        let path = directory.appendingPathComponent("config.yaml")
+        try AppProxyProfile.applying(settings, to: source).write(to: path, atomically: true, encoding: .utf8)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        process.arguments = [root.appendingPathComponent("scripts/check-app-proxy-modes.py").path, binary.path, path.path]
+        try process.run(); process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0)
     }
 
     func testIncompleteUnknownAndDirectRoutesFailClosed() {

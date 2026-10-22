@@ -6,6 +6,21 @@ import XCTest
 
 @MainActor
 final class DashboardStoreIPCTests: XCTestCase {
+  func testAppProxyReadsSharedModeOnEntryAndUsesAuthoritativeModeMutation() async throws {
+    let gateway = FakeDashboardGateway()
+    let store = DashboardStore(gateway: gateway, appProxy: AppProxyStore(gateway: ModeTestRoutingGateway()))
+    _ = try await gateway.applyOutboundMode(.direct)
+    await store.refresh(.appProxy)
+    XCTAssertEqual(store.configuration.mode, .direct)
+    XCTAssertTrue(gateway.calls.contains("fetchConfig"))
+    await store.setMode(.global)
+    XCTAssertEqual(store.configuration.mode, .global)
+    XCTAssertTrue(gateway.calls.contains("applyOutboundMode:global"))
+    _ = try await gateway.applyOutboundMode(.rule)
+    await store.refresh(.appProxy)
+    XCTAssertEqual(store.configuration.mode, .rule)
+  }
+
   func testVisibleStoreLoadsOnlyTheActivePageAndItsIPCStreams() async throws {
     let gateway = FakeDashboardGateway()
     let store = DashboardStore(gateway: gateway)
@@ -280,6 +295,16 @@ final class DashboardStoreIPCTests: XCTestCase {
       }
       try await Task.sleep(nanoseconds: 10_000_000)
     }
+  }
+}
+
+private struct ModeTestRoutingGateway: AppProxyRoutingGateway {
+  func fetchAppProxyRouting() async throws -> AppProxyRoutingState {
+    .init(settings: .init(applications: []), profile: "test.yaml", revision: "1")
+  }
+  func fetchProxies() async throws -> ControllerProxyCatalog { .init(proxies: [:]) }
+  func setAppProxyRouting(_ update: AppProxyRoutingUpdate) async throws -> AppProxyRoutingState {
+    throw AppProxySettingsError.staleState
   }
 }
 

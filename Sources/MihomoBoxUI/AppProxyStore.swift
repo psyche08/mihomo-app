@@ -138,7 +138,8 @@ public final class AppProxyStore: ObservableObject {
             let (state, catalog) = try await (stateRequest, catalogRequest)
             async let statusRequest = service?.status(settings: state.settings)
             let allowed = catalog.proxies.filter { key, value in
-                !["DIRECT", "REJECT", "REJECT-DROP", "PASS", "PASS-RULE", "COMPATIBLE", "GLOBAL"].contains(key.uppercased())
+                !key.hasPrefix("mihomobox-app-")
+                  && !["DIRECT", "REJECT", "REJECT-DROP", "PASS", "PASS-RULE", "COMPATIBLE", "GLOBAL"].contains(key.uppercased())
                   && !["direct", "reject", "pass", "passrule", "compatible"].contains(value.type.lowercased())
             }
             nodes = allowed.filter { $0.value.all.isEmpty }.keys.sorted()

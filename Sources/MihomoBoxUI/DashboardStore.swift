@@ -192,14 +192,16 @@ public final class DashboardStore: ObservableObject {
 
   public init() {
     gateway = ControlGateway()
+    appProxy = AppProxyStore()
     previewMode = Self.previewRequested()
     if previewMode {
       loadPreviewFixtures()
     }
   }
 
-  init(gateway: any DashboardControlGateway, previewMode: Bool = false) {
+  init(gateway: any DashboardControlGateway, previewMode: Bool = false, appProxy: AppProxyStore? = nil) {
     self.gateway = gateway
+    self.appProxy = appProxy ?? AppProxyStore()
     self.previewMode = previewMode
     if previewMode {
       loadPreviewFixtures()
@@ -272,7 +274,7 @@ public final class DashboardStore: ObservableObject {
   /// Connects the App-owned Sparkle policy after process composition. Keeping
   /// this typed boundary out of `ControlGateway` prevents a user preference
   /// from being mistaken for a privileged daemon mutation.
-  public let appProxy = AppProxyStore()
+  public let appProxy: AppProxyStore
 
   public func resetAppProxyRoutes() async {
     await performConfigAction(.updatingAppProxy) { try await self.appProxy.reset() }
@@ -634,7 +636,11 @@ public final class DashboardStore: ObservableObject {
     case .logs:
       break
     case .appProxy:
-      await appProxy.refresh()
+      async let routing: Void = appProxy.refresh()
+      await load(page: .config) {
+        apply(config: try await gateway.fetchConfig())
+      }
+      await routing
     case .config:
       await refreshLocalDoHStatus()
       await load(page: page) {

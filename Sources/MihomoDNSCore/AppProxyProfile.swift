@@ -22,6 +22,7 @@ public enum AppProxyProfile {
             }
         }
         guard lines.filter({ $0 == "---" }).count <= 1, !lines.contains("..."),
+              !lines.contains(where: { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("#") && $0.contains("mihomobox-app-") }),
               !lines.contains(where: { line in
                   guard !line.hasPrefix(" "), !line.hasPrefix("\t"), !line.hasPrefix("#"),
                         let colon = line.firstIndex(of: ":") else { return false }
@@ -34,11 +35,56 @@ public enum AppProxyProfile {
                   !line.trimmingCharacters(in: .whitespaces).hasPrefix("#")
                     && line.contains("port") && settings.applications.contains { line.contains(String($0.port)) }
               }) else { throw AppProxySettingsError.unsupportedProfile }
-        var result = source + "\n# MihomoBox App Proxy runtime overlay\nlisteners:\n"
+        // Listener `proxy` is an unconditional core override, even in Direct
+        // mode. Rule-only sub-rules leave Global/Direct to Mihomo itself.
+        var subRules: [String] = []
+        var groups: [String] = []
+        var result = source
         for app in settings.applications {
+            let name = "mihomobox-app-\(app.id)"
             let quoted = String(decoding: try JSONEncoder().encode(settings.routes[app.id]!), as: UTF8.self)
-            result += "  - name: mihomobox-app-\(app.id)\n    type: mixed\n    listen: 127.0.0.1\n    port: \(app.port)\n    udp: true\n    proxy: \(quoted)\n"
+            // A private selector keeps commas and other rule delimiters in a
+            // user node name out of Mihomo's comma-delimited rule grammar.
+            groups += ["  - name: \(name)", "    type: select", "    hidden: true", "    proxies: [\(quoted)]"]
+            subRules += ["  \(name):", "    - MATCH,\(name)"]
+        }
+        result = try inserting(groups, into: "proxy-groups", emptyValue: "[]", source: result)
+        result = try inserting(subRules, into: "sub-rules", emptyValue: "{}", source: result)
+        result += "\n# MihomoBox App Proxy runtime overlay\nlisteners:\n"
+        for app in settings.applications {
+            result += "  - name: mihomobox-app-\(app.id)\n    type: mixed\n    listen: 127.0.0.1\n    port: \(app.port)\n    udp: true\n    rule: mihomobox-app-\(app.id)\n"
         }
         return result
+    }
+
+    private static func inserting(_ entries: [String], into key: String, emptyValue: String, source: String) throws -> String {
+        var lines = source.components(separatedBy: "\n")
+        let indices = lines.indices.filter { index in
+            let line = lines[index]
+            guard !line.hasPrefix(" "), !line.hasPrefix("\t"), !line.hasPrefix("#"), let colon = line.firstIndex(of: ":") else { return false }
+            return line[..<colon].trimmingCharacters(in: CharacterSet(charactersIn: " \t\"'")) == key
+        }
+        guard indices.count <= 1 else { throw AppProxySettingsError.unsupportedProfile }
+        if let index = indices.first {
+            let line = lines[index]
+            let suffix = String(line[line.index(after: line.firstIndex(of: ":")!)...]).trimmingCharacters(in: .whitespaces)
+            guard suffix.isEmpty || suffix.hasPrefix("#") || suffix == emptyValue else { throw AppProxySettingsError.unsupportedProfile }
+            lines[index] = "\(key):"
+            // Support both indented and indentationless block sequences.
+            var end = index + 1
+            while end < lines.count {
+                let next = lines[end]
+                if !next.isEmpty, !next.hasPrefix(" "), !next.hasPrefix("\t"), !next.hasPrefix("#"), !next.hasPrefix("-") { break }
+                end += 1
+            }
+            let content = lines[(index + 1)..<end].first { line in
+                let value = line.trimmingCharacters(in: .whitespaces)
+                return !value.isEmpty && !value.hasPrefix("#")
+            }
+            let indentation = content.map { String($0.prefix(while: { $0 == " " })) } ?? "  "
+            lines.insert(contentsOf: entries.map { indentation + $0.dropFirst(2) }, at: end)
+            return lines.joined(separator: "\n")
+        }
+        return source + "\n\(key):\n" + entries.joined(separator: "\n") + "\n"
     }
 }

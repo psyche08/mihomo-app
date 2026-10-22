@@ -51,7 +51,6 @@ struct AppProxyView: View {
             AppProxyExecutableEditor(model: model, application: app)
         }
         .sheet(isPresented: $editingBypass) { AppProxyBypassEditor(model: model) }
-        .task { await model.refresh() }
     }
 
     private var bypassSummary: some View {
@@ -87,8 +86,25 @@ struct AppProxyView: View {
                     .font(.callout)
                     .foregroundStyle(model.extensionStatus.connected ? Color.green : .secondary)
             }
-            Text("Choose a node for each app. Signed helpers follow the same route.")
-                .foregroundStyle(.secondary)
+            HStack {
+                Text("Running Mode")
+                Picker("Running Mode", selection: Binding(
+                    get: { dashboard.configuration.mode },
+                    set: { mode in Task { await dashboard.setMode(mode) } }
+                )) {
+                    ForEach(DashboardProxyMode.allCases) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented).frame(width: 230)
+                .disabled(busy || model.refreshing || dashboard.configState != .loaded)
+                .help("Uses the same running mode as MihomoBox. Changes apply to new connections.")
+                Spacer()
+            }
+            Text(modeDescription).foregroundStyle(.secondary)
+            if case .failed(let message) = dashboard.configState {
+                Text("Running mode unavailable: \(message)").font(.callout).foregroundStyle(.red)
+            }
             HStack {
                 TextField("Search apps", text: $search)
                     .textFieldStyle(.roundedBorder).frame(maxWidth: 260)
@@ -114,11 +130,19 @@ struct AppProxyView: View {
                 .disabled(busy).accessibilityLabel("Application actions")
                 Spacer()
                 if model.refreshing { ProgressView().controlSize(.small) }
-                Button("Refresh Nodes", systemImage: "arrow.clockwise") { Task { await model.refresh() } }
+                Button("Refresh Nodes", systemImage: "arrow.clockwise") { Task { await dashboard.refresh(.appProxy) } }
                     .disabled(busy || model.refreshing)
             }
         }
         .padding(20)
+    }
+
+    private var modeDescription: String {
+        switch dashboard.configuration.mode {
+        case .global: "Global: applications use MihomoBox's global node. Saved app nodes apply in Rule mode."
+        case .rule: "Rule: each application's routing rule uses its selected node. Signed helpers follow the same route."
+        case .direct: "Direct: applications connect directly. Saved app nodes apply in Rule mode."
+        }
     }
 
     private func applicationRow(_ app: AppProxyEntry) -> some View {
@@ -155,6 +179,7 @@ struct AppProxyView: View {
                 model.selectTarget($0, for: app.id)
             }
             .frame(width: 230).disabled(busy || model.routing == nil)
+            .help("Saved node for this application's Rule-mode routing")
             Button(role: .destructive) { model.removeApplication(app.id) } label: { Image(systemName: "trash") }
                 .buttonStyle(.borderless)
                 .disabled(busy || model.refreshing || model.extensionStatus.enabled)

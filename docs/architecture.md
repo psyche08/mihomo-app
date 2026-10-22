@@ -208,6 +208,13 @@ inspection, but `MAIN_APP_PROXY` requires the per-application routing schema
 and rejects legacy test sessions. Proxied destinations use the
 validated root-core loopback listeners: 17971–17974 for the default applications,
 and 17975–18002 for user-selected signed apps and CLI executables. The root
+overlay assigns each listener a named sub-rule rather than an unconditional
+`proxy` override. Mihomo evaluates Global/Direct before these Rule-mode app
+rules. Hidden single-member selectors preserve arbitrary node names (including
+commas) without interpolating them into rule syntax. Existing block-style
+proxy groups and sub-rules are retained; the `mihomobox-app-` namespace is
+reserved. The app's mode picker uses the shared authenticated mode transaction.
+The root
 settings schema bounds and validates application IDs, ports and route names;
 the extension independently validates the same port mapping. Application paths
 are discovery metadata, never root-side filesystem instructions. Unknown identities and unattributable

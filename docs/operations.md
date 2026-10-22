@@ -2,6 +2,16 @@
 
 ## Per-application proxy settings
 
+App Proxy uses the same **Running Mode** as the tray and Config page. Its mode
+picker reads the current core configuration when the page opens or refreshes,
+and changes it through the existing authenticated controller action. **Global**
+uses the core's `GLOBAL` selection; **Direct** connects directly; **Rule** applies
+each app's selected node as its application routing rule. App node choices are
+retained while Global or Direct is active. Mode changes affect new connections;
+established connections keep their current outbound until they reconnect.
+Explicit local-network bypasses and shared DNS handling still precede these
+core routing decisions.
+
 **Local networks and VPNs → Edit Bypass…** controls destination CIDRs that use
 macOS routing before an application's node. Defaults include RFC1918, IPv4
 link-local, IPv6 ULA and link-local. Other VPN ranges (including CGNAT or public
@@ -23,7 +33,8 @@ For the private VPN regression, check the system route to `192.168.13.12`, then
 run `ssh -o BatchMode=yes -o ConnectTimeout=10 m4pro /usr/bin/true` from the actual
 Codex context. Confirm successful SSH handshake/authentication and absence of
 that target on the app's remote-proxy listener. Also verify public HTTPS still
-appears on that listener and retains its selected node. Repeat after a provider
+appears on that listener and follows the current mode: the app node in Rule,
+the global node in Global, and DIRECT in Direct. Repeat after a provider
 restart, profile reload, and TUN/mode changes. A syntax check or a successful
 direct connection from an unrelated process alone does not satisfy this test.
 

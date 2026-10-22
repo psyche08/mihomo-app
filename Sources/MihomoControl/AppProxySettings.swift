@@ -98,6 +98,7 @@ public struct AppProxySettings: Codable, Equatable, Sendable {
               routes.isEmpty || Set(routes.keys) == Set(applications.map(\.id)),
               routes.values.allSatisfy({ value in
                   !value.isEmpty && value.utf8.count <= 1024
+                    && !value.hasPrefix("mihomobox-app-")
                     && value == value.trimmingCharacters(in: .whitespacesAndNewlines)
                     && !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
                     && !["DIRECT", "REJECT", "REJECT-DROP", "PASS", "COMPATIBLE", "GLOBAL"].contains(value.uppercased())
