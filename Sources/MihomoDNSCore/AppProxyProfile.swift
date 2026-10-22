@@ -7,6 +7,20 @@ public enum AppProxyProfile {
         try settings.validate()
         guard !settings.routes.isEmpty else { return source }
         let lines = source.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
+        // Custom Fake-IP ranges must never become direct network destinations.
+        // Check before the daemon commits the profile/settings transaction.
+        var inDNS = false
+        for line in lines {
+            if !line.isEmpty, !line.hasPrefix(" "), !line.hasPrefix("\t"), !line.hasPrefix("#") {
+                inDNS = line.hasPrefix("dns:") || line.hasPrefix("'dns':") || line.hasPrefix("\"dns\":")
+            }
+            guard inDNS, let colon = line.firstIndex(of: ":") else { continue }
+            let key = line[..<colon].trimmingCharacters(in: CharacterSet(charactersIn: " \t\"'"))
+            if ["fake-ip-range", "fake-ip-range6"].contains(key),
+               settings.bypass.overlaps(MihomoConfigurator.parseScalar(String(line[line.index(after: colon)...]))) {
+                throw AppProxySettingsError.overlappingFakeIP
+            }
+        }
         guard lines.filter({ $0 == "---" }).count <= 1, !lines.contains("..."),
               !lines.contains(where: { line in
                   guard !line.hasPrefix(" "), !line.hasPrefix("\t"), !line.hasPrefix("#"),

@@ -3,7 +3,8 @@ import Network
 import NetworkExtension
 
 /// DNS uses the shared resolver independently of the optional SOCKS association.
-/// No direct network fallback or FRAG support.
+/// Explicit numeric destination bypasses use macOS routing. No failure fallback
+/// to direct networking or FRAG support.
 final class AppProxyUDPBridge {
     private let flow: NEAppProxyUDPFlow
     private let queue: DispatchQueue
@@ -11,16 +12,18 @@ final class AppProxyUDPBridge {
     private let count: (String) -> Void
     private let finished: () -> Void
     private let control: NWConnection
+    private let bypass: AppProxyBypassPolicy
     private var relay: NWConnection?
     private var relayReady: (() -> Void)?
     private var localConnections: [String: NWConnection] = [:]
     private var closed = false
     private var timer: DispatchWorkItem?
-    init(flow: NEAppProxyUDPFlow, proxyPort: UInt16, queue: DispatchQueue,
+    init(flow: NEAppProxyUDPFlow, proxyPort: UInt16, bypass: AppProxyBypassPolicy, queue: DispatchQueue,
          forwardDNS: @escaping (Data, @escaping (Data?) -> Void) -> Void,
          count: @escaping (String) -> Void, finished: @escaping () -> Void) {
         self.control = NWConnection(host: "127.0.0.1", port: Network.NWEndpoint.Port(rawValue: proxyPort)!, using: .tcp)
         self.flow = flow; self.queue = queue; self.forwardDNS = forwardDNS
+        self.bypass = bypass
         self.count = count; self.finished = finished
     }
     func start() {
@@ -114,7 +117,7 @@ final class AppProxyUDPBridge {
                     }
                 }
             }
-        } else if AppProbeProvider.isLoopback(endpoint.hostname) {
+        } else if AppProbeProvider.isLoopback(endpoint.hostname) || bypass.contains(endpoint.hostname) {
             armTimer(180)
             let key = endpoint.hostname + ":" + endpoint.port
             let connection: NWConnection

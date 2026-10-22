@@ -18,17 +18,19 @@ public struct AppProxyExtensionStatus: Equatable, Sendable {
     public var available: Bool
     public var enabled: Bool
     public var connected: Bool
+    public var requiresReactivation: Bool
     public var targetCounts: [String: Int]
     public var executables: [AppProxyExecutable]
-    public init(available: Bool, enabled: Bool = false, connected: Bool = false, targetCounts: [String: Int] = [:], executables: [AppProxyExecutable] = []) {
+    public init(available: Bool, enabled: Bool = false, connected: Bool = false, requiresReactivation: Bool = false, targetCounts: [String: Int] = [:], executables: [AppProxyExecutable] = []) {
         self.available = available; self.enabled = enabled; self.connected = connected; self.targetCounts = targetCounts
+        self.requiresReactivation = requiresReactivation
         self.executables = executables
     }
 }
 
 @MainActor
 public protocol DashboardAppProxyService: AnyObject {
-    func status(applications: [AppProxyEntry]) async throws -> AppProxyExtensionStatus
+    func status(settings: AppProxySettings) async throws -> AppProxyExtensionStatus
     func discoverExecutables(applications: [AppProxyEntry]) async throws -> [AppProxyExecutable]
     func setEnabled(_ enabled: Bool, settings: AppProxySettings) async throws
     func chooseApplication(port: UInt16) async throws -> AppProxyEntry?
@@ -87,6 +89,14 @@ public final class AppProxyStore: ObservableObject {
         guard !busy else { return }
         draft.routes = Dictionary(uniqueKeysWithValues: draft.applications.map { ($0.id, target) })
     }
+    public func setBypassCIDRs(_ cidrs: [String]) throws {
+        guard !busy, !refreshing, !extensionStatus.enabled, !hasConflict, routing != nil else {
+            throw AppProxySettingsError.staleState
+        }
+        let policy = AppProxyBypassPolicy(cidrs: cidrs)
+        try policy.validate()
+        draft.bypass = policy
+    }
     public var valid: Bool {
         (draft.applications.isEmpty || !draft.routes.isEmpty) && (try? draft.validate()) != nil
           && draft.routes.values.allSatisfy { nodes.contains($0) || groups.contains($0) }
@@ -125,8 +135,8 @@ public final class AppProxyStore: ObservableObject {
         do {
             async let stateRequest = gateway.fetchAppProxyRouting()
             async let catalogRequest = gateway.fetchProxies()
-            async let statusRequest = service?.status(applications: draft.applications)
             let (state, catalog) = try await (stateRequest, catalogRequest)
+            async let statusRequest = service?.status(settings: state.settings)
             let allowed = catalog.proxies.filter { key, value in
                 !["DIRECT", "REJECT", "REJECT-DROP", "PASS", "PASS-RULE", "COMPATIBLE", "GLOBAL"].contains(key.uppercased())
                   && !["direct", "reject", "pass", "passrule", "compatible"].contains(value.type.lowercased())
@@ -259,7 +269,8 @@ public final class AppProxyStore: ObservableObject {
         guard !preview else { return }
         guard !busy, !refreshing, !hasConflict else { throw AppProxySettingsError.staleState }
         guard let routing, valid else { throw AppProxySettingsError.invalidRoutes }
-        guard !extensionStatus.enabled || routing.settings.applications == draft.applications else { throw AppProxySettingsError.staleState }
+        guard !extensionStatus.enabled || (routing.settings.applications == draft.applications
+            && routing.settings.bypass == draft.bypass) else { throw AppProxySettingsError.staleState }
         guard dirty else { return }
         mutating = true; defer { mutating = false }
         do {
@@ -295,10 +306,10 @@ public final class AppProxyStore: ObservableObject {
         }
         do {
             try await service.setEnabled(enabled, settings: routing?.settings ?? draft)
-            updateStatus(try await service.status(applications: draft.applications))
+            updateStatus(try await service.status(settings: routing?.settings ?? draft))
             error = nil
         } catch {
-            if let status = try? await service.status(applications: draft.applications) { updateStatus(status) }
+            if let status = try? await service.status(settings: routing?.settings ?? draft) { updateStatus(status) }
             self.error = error.localizedDescription
             throw error
         }

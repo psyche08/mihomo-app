@@ -14,6 +14,7 @@ struct AIProxyConfiguration {
     let deadline: TimeInterval?
     let perApplicationRouting: Bool
     let ports: [String: UInt16]
+    let bypass: AppProxyBypassPolicy
     func proxyPort(for category: String) -> UInt16? {
         guard perApplicationRouting else { return 7897 }
         return ports[category]
@@ -22,16 +23,27 @@ struct AIProxyConfiguration {
     init(_ raw: [String: Any], now: TimeInterval) throws {
         let keys = Set(raw.keys)
         let routing = raw["routing"] as? String
-        perApplicationRouting = routing == "per-application-v1" || routing == "per-application-v2"
-        let dynamic = routing == "per-application-v2"
+        let withBypass = routing == "per-application-v3"
+        perApplicationRouting = routing == "per-application-v1" || routing == "per-application-v2" || withBypass
+        let dynamic = routing == "per-application-v2" || withBypass
         guard (keys == ["mode", "targets", "deadline"] || (keys == ["mode", "targets", "deadline", "routing"] && routing == "per-application-v1") ||
-               (keys == ["mode", "targets", "deadline", "routing", "ports"] && dynamic)), raw["mode"] as? String == "ai",
+               (keys == ["mode", "targets", "deadline", "routing", "ports"] && routing == "per-application-v2") ||
+               (keys == ["mode", "targets", "deadline", "routing", "ports", "bypassCIDRs"] && withBypass)), raw["mode"] as? String == "ai",
               let targets = raw["targets"] as? [[String: String]], !targets.isEmpty, targets.count <= 512,
               let number = raw["deadline"] as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
               number.doubleValue.isFinite else { throw Invalid.configuration }
         #if MAIN_APP_PROXY
         guard perApplicationRouting else { throw Invalid.configuration }
         #endif
+        if withBypass {
+            guard let cidrs = raw["bypassCIDRs"] as? [String] else { throw Invalid.configuration }
+            bypass = AppProxyBypassPolicy(cidrs: cidrs)
+        } else {
+            // Old VPN preferences have not installed an explicit bypass policy.
+            // The app asks for reactivation instead of guessing an active list.
+            bypass = AppProxyBypassPolicy(cidrs: [])
+        }
+        try bypass.validate()
         let value = number.doubleValue
         guard value == 0 || (value > now && value <= now + 330) else { throw Invalid.configuration }
         deadline = value == 0 ? nil : value

@@ -35,7 +35,7 @@ private final class RoutingGateway: AppProxyRoutingGateway, @unchecked Sendable 
     var enableStarted: (() -> Void)?
     var enableContinuation: CheckedContinuation<Void, Error>?
     var suspendEnable = false
-    func status(applications: [AppProxyEntry]) async throws -> AppProxyExtensionStatus { .init(available: true, enabled: enabled, connected: enabled) }
+    func status(settings: AppProxySettings) async throws -> AppProxyExtensionStatus { .init(available: true, enabled: enabled, connected: enabled) }
     func discoverExecutables(applications: [AppProxyEntry]) async throws -> [AppProxyExecutable] {
         scans += 1
         if failScan { throw AppProxySettingsError.invalidExecutables }
@@ -63,6 +63,27 @@ private final class RoutingGateway: AppProxyRoutingGateway, @unchecked Sendable 
     func chooseExecutable() async throws -> String? { "/usr/bin/curl" }
 }
 final class AppProxyStoreTests: XCTestCase {
+    @MainActor func testBypassEditsPersistAndRequireDisabledExtension() async throws {
+        let gateway = RoutingGateway(); let model = AppProxyStore(gateway: gateway); let service = ExtensionService()
+        model.configure(service); await model.refresh()
+        let routes = model.draft.routes
+        try model.setBypassCIDRs(["192.168.13.12/32", "fd12::/16"])
+        XCTAssertTrue(model.dirty)
+        try await model.apply()
+        XCTAssertEqual(gateway.state.settings.bypass.cidrs, ["192.168.13.12/32", "fd12::/16"])
+        XCTAssertEqual(gateway.state.settings.routes, routes)
+        try await model.setEnabled(true)
+        XCTAssertThrowsError(try model.setBypassCIDRs([]))
+        model.draft.bypass = .init(cidrs: [])
+        do { try await model.apply(); XCTFail("Enabled extension must not keep a stale bypass policy") } catch {}
+        model.discardChanges()
+        try await model.setEnabled(false)
+        try model.setBypassCIDRs([])
+        try await model.apply()
+        await model.refresh()
+        XCTAssertTrue(model.draft.bypass.cidrs.isEmpty)
+        XCTAssertEqual(model.draft.routes, routes)
+    }
     @MainActor func testDaemonDroppingExecutableMembershipCannotReportSuccessfulSave() async throws {
         let gateway = RoutingGateway(); let model = AppProxyStore(gateway: gateway); let service = ExtensionService()
         model.configure(service); await model.refresh()

@@ -2,6 +2,31 @@
 
 ## Per-application proxy settings
 
+**Local networks and VPNs → Edit Bypass…** controls destination CIDRs that use
+macOS routing before an application's node. Defaults include RFC1918, IPv4
+link-local, IPv6 ULA and link-local. Other VPN ranges (including CGNAT or public
+addresses) require explicit entries. An empty list disables these exemptions;
+loopback callbacks still remain local. DNS port 53 always uses Mihomo's shared
+DNS service. Names are not independently resolved by the bypass matcher: it
+matches the actual numeric flow endpoint. Fake-IP endpoints remain with Mihomo;
+private names requiring real addresses must use the profile's DNS/Fake-IP filter.
+
+Turn App Proxy off before editing, save the draft, apply changes, then enable it.
+After upgrading from an older provider configuration, an orange notice asks for
+this off/on cycle to install the policy. The policy is stored in root settings
+and the NetworkExtension preferences, so YAML regeneration, TUN changes and
+Rule/Global/Direct changes cannot remove it. No route table changes are made.
+If a VPN disappears, macOS chooses the remaining route; this is not a VPN kill
+switch. No proxy failure automatically falls back to direct access.
+
+For the private VPN regression, check the system route to `192.168.13.12`, then
+run `ssh -o BatchMode=yes -o ConnectTimeout=10 m4pro /usr/bin/true` from the actual
+Codex context. Confirm successful SSH handshake/authentication and absence of
+that target on the app's remote-proxy listener. Also verify public HTTPS still
+appears on that listener and retains its selected node. Repeat after a provider
+restart, profile reload, and TUN/mode changes. A syntax check or a successful
+direct connection from an unrelated process alone does not satisfy this test.
+
 Open **App Proxy** in the sidebar (Command-8). Use **Add App or CLI…** to select
 a signed application bundle or executable. Embedded signed helpers follow the
 application's route. Open **Signed executables** to inspect the discovered

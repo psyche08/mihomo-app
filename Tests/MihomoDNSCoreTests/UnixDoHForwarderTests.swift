@@ -143,7 +143,24 @@ final class UnixDoHForwarderTests: XCTestCase {
         while !FileManager.default.fileExists(atPath: path), process.isRunning, Date() < deadline {
             usleep(10_000)
         }
-        let real = try client.forward(XCTUnwrap(DNSMessage.addressQuery(for: "real.example.invalid")), on: group.next()).wait()
+        // The Unix listener can exist before the pinned core's DNS handler is
+        // ready. Probe readiness instead of treating socket creation as readiness.
+        // Only startup is retried; the assertions and shutdown probes below are not.
+        let realQuery = try XCTUnwrap(DNSMessage.addressQuery(for: "real.example.invalid"))
+        var readyResponse: Data?
+        var startupError: Error?
+        while process.isRunning, Date() < deadline {
+            do {
+                readyResponse = try client.forward(realQuery, on: group.next()).wait()
+                break
+            } catch {
+                startupError = error
+                usleep(20_000)
+            }
+        }
+        guard let real = readyResponse else {
+            throw startupError ?? LocalDoHIPC.IPCError.unavailable
+        }
         XCTAssertEqual(DNSMessage.firstIPv4Answer(real), "203.0.113.9")
         let fake = try routed.forward(fakeQuery, on: group.next()).wait()
         if standby {

@@ -30,6 +30,7 @@
 		E299DC6DF9D43C04D955A014 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 20278CE7B83856A69D2EBACD /* Cocoa.framework */; };
 		EC9508C1C6244CBF5499B913 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 20278CE7B83856A69D2EBACD /* Cocoa.framework */; };
 		F842152344F9191074979963 /* AppProxyDNSRequest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57E3B7B702FF4AA9E8EFC440 /* AppProxyDNSRequest.swift */; };
+		F8A2F4E74C2F80AF27DD50E2 /* AppProxyBypassPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F00C5429E26CDF59702A00B /* AppProxyBypassPolicy.swift */; };
 		FCA3A9081FAADB500BC84F68 /* AppProbeProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59A7F3A0934A4E6188E8A98B /* AppProbeProvider.swift */; };
 /* End PBXBuildFile section */
 
@@ -114,6 +115,7 @@
 /* Begin PBXFileReference section */
 		06A5CC505CEAD18FE2615476 /* main.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		08CBCA5A3C9C5F58273A18B2 /* dev.linsheng.mihomo-dns-probe.extension.systemextension */ = {isa = PBXFileReference; explicitFileType = "wrapper.system-extension"; includeInIndex = 0; path = "dev.linsheng.mihomo-dns-probe.extension.systemextension"; sourceTree = BUILT_PRODUCTS_DIR; };
+		0F00C5429E26CDF59702A00B /* AppProxyBypassPolicy.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AppProxyBypassPolicy.swift; path = ../../Sources/MihomoControl/AppProxyBypassPolicy.swift; sourceTree = "<group>"; };
 		154B222E808014A8A577054C /* MihomoDNSControl.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MihomoDNSControl.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		20278CE7B83856A69D2EBACD /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		2110F43A2796A36EB5232B62 /* MihomoDNSSelected.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MihomoDNSSelected.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -241,6 +243,7 @@
 				91F6389D3810436D8D9928CF /* MihomoDNSControl */,
 				A755EA978A53515173368691 /* MihomoDNSProbe */,
 				ECFA5D959DF9409B08E94103 /* AIAppTargets.swift */,
+				0F00C5429E26CDF59702A00B /* AppProxyBypassPolicy.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -456,6 +459,7 @@
 				0A80ABA8B50B8AC390AE7CC7 /* SOCKSDatagram.swift in Sources */,
 				B9E7CEF3D75802675089EBCF /* main.swift in Sources */,
 				F842152344F9191074979963 /* AppProxyDNSRequest.swift in Sources */,
+				F8A2F4E74C2F80AF27DD50E2 /* AppProxyBypassPolicy.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

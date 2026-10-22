@@ -205,7 +205,7 @@ additional Mihomo process participates in this control path.
 
 The extension reuses the audited experiment's flow handling and signature
 inspection, but `MAIN_APP_PROXY` requires the per-application routing schema
-and rejects legacy test sessions. Its only remote forwarding paths are the
+and rejects legacy test sessions. Proxied destinations use the
 validated root-core loopback listeners: 17971–17974 for the default applications,
 and 17975–18002 for user-selected signed apps and CLI executables. The root
 settings schema bounds and validates application IDs, ports and route names;
@@ -215,8 +215,12 @@ CLI hosts fail closed. Captured DNS flows share the existing Mihomo/TUN DNS
 resolver through loopback TCP `1153`, with bounded requests and no public DNS
 fallback or supplemental default resolver. App node selections govern
 connections, while DNS policy and cache remain owned by the core;
-loopback application callbacks remain explicit local bridges. No controller
-credentials, arbitrary remote endpoints, or packet logs are added to the UI.
+loopback application callbacks remain explicit local bridges. Numeric addresses
+matching the persisted `bypass.cidrs` list also use bounded TCP/UDP bridges and
+macOS route selection, so existing private VPN routes take precedence over an
+application's proxy node. Identity validation and capacity limits still precede
+this decision. There is no direct retry after a proxy error. No controller
+credentials or packet logs are added to the UI.
 
 The independent App Proxy page owns the editable application list. Default
 entries migrate from the original four-route settings without losing choices.
@@ -235,3 +239,17 @@ requirement to agree. There is no process-name matching or parent-process
 inheritance: explicitly selected tools use the assigned route from any launcher.
 Legacy entries decode with an empty list. Membership edits require the extension
 to be off and are rejected if a binary belongs to another entry.
+
+Network bypass defaults cover RFC1918, IPv4 link-local, IPv6 ULA and IPv6
+link-local. Users can replace or empty this list on the App Proxy page, including
+explicit CIDRs for VPNs using public or CGNAT addresses. The app never exempts
+an entire VPN interface or automatically trusts its default route. DNS port 53
+continues through the shared resolver before bypass matching. Fake-IP space is
+not a local-network bypass; overlapping custom profile ranges are rejected.
+The provider's v3 preferences contain the validated CIDRs. Legacy root settings
+decode with default ranges, but saved v1/v2 VPN preferences retain their old
+forwarding behavior until reactivation installs v3; the UI marks this explicitly.
+Changing bypass membership requires disabling and re-enabling the extension,
+while public node selections continue to update through the root listeners.
+This ordering is independent of the Mihomo Rule/Global/Direct mode and survives
+profile regeneration because it is stored outside the generated YAML.

@@ -7,6 +7,7 @@ struct AppProxyView: View {
     @State private var search = ""
     @State private var inspecting: AppProxyEntry?
     @State private var editingExecutables: AppProxyEntry?
+    @State private var editingBypass = false
 
     private var busy: Bool { dashboard.configAction != nil || model.busy }
     private var changeSummary: String {
@@ -14,6 +15,7 @@ struct AppProxyView: View {
         if model.routing == nil { return model.refreshing ? "Loading settings…" : "Refresh to verify saved settings" }
         guard model.dirty else { return "All changes saved" }
         let count = model.changedApplicationCount
+        if count == 0 { return "Network bypass has unsaved changes" }
         return "\(count) \(count == 1 ? "app" : "apps") with unsaved changes"
     }
     private var applications: [AppProxyEntry] {
@@ -28,6 +30,7 @@ struct AppProxyView: View {
             header
             Divider()
             ScrollView {
+                bypassSummary.padding(.horizontal, 16).padding(.top, 16)
                 LazyVStack(spacing: 1) {
                     if model.draft.applications.isEmpty {
                         ContentUnavailableView("No applications", systemImage: "app.dashed",
@@ -47,7 +50,29 @@ struct AppProxyView: View {
         .sheet(item: $editingExecutables) { app in
             AppProxyExecutableEditor(model: model, application: app)
         }
+        .sheet(isPresented: $editingBypass) { AppProxyBypassEditor(model: model) }
         .task { await model.refresh() }
+    }
+
+    private var bypassSummary: some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Local networks and VPNs").font(.headline)
+                if model.extensionStatus.requiresReactivation {
+                    Text("Turn App Proxy off and on to activate network bypasses after this update.")
+                        .font(.callout).foregroundStyle(.orange)
+                }
+                Text(model.draft.bypass.cidrs.isEmpty
+                     ? "Only loopback callbacks bypass the selected app node."
+                     : "\(model.draft.bypass.cidrs.count) IP ranges use macOS routing before the app node, including existing private VPN routes.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Edit Bypass…") { editingBypass = true }
+                .disabled(busy || model.refreshing || model.extensionStatus.enabled || model.routing == nil)
+                .help("Turn off App Proxy before editing network bypasses")
+        }
+        .padding(12).background(DashboardTheme.surface).clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     private var header: some View {
@@ -226,6 +251,41 @@ struct AppProxyView: View {
         .padding(20).frame(width: 680, height: 520)
         .background(DashboardTheme.background)
         .task { await model.refreshExecutables() }
+    }
+}
+
+private struct AppProxyBypassEditor: View {
+    @ObservedObject var model: AppProxyStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var text: String
+    @State private var error: String?
+    init(model: AppProxyStore) {
+        self.model = model
+        _text = State(initialValue: model.draft.bypass.cidrs.joined(separator: "\n"))
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Local networks and VPNs").font(.title2.bold())
+            Text("Matching IP destinations use macOS routing before the selected node in every mode. DNS still uses Mihomo. Enter one IPv4 or IPv6 CIDR per line; leave empty to disable these bypasses. Loopback callbacks remain local.")
+                .foregroundStyle(.secondary)
+            TextEditor(text: $text).font(.system(.body, design: .monospaced)).frame(minHeight: 160)
+                .accessibilityLabel("Network bypass CIDRs")
+            Text("Add the specific range for VPNs using other addresses, such as 100.64.0.0/10. Public IP ranges also bypass your app node when explicitly listed. No default VPN route is automatically exempted.")
+                .font(.caption).foregroundStyle(.secondary)
+            if let error { Text(error).foregroundStyle(.red) }
+            HStack {
+                Button("Restore Private Ranges") { text = AppProxyBypassPolicy.defaultCIDRs.joined(separator: "\n") }
+                Spacer()
+                Button("Cancel") { dismiss() }
+                Button("Save Draft") {
+                    do {
+                        try model.setBypassCIDRs(text.components(separatedBy: .newlines)
+                            .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
+                        dismiss()
+                    } catch { self.error = error.localizedDescription }
+                }.buttonStyle(.borderedProminent)
+            }
+        }.padding(24).frame(width: 580)
     }
 }
 

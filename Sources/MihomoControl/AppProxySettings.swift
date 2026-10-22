@@ -50,14 +50,18 @@ public struct AppProxyEntry: Codable, Equatable, Sendable, Identifiable {
 public struct AppProxySettings: Codable, Equatable, Sendable {
     public var routes: [String: String]
     public var applications: [AppProxyEntry]
-    public init(routes: [String: String] = [:], applications: [AppProxyEntry] = AppProxyEntry.defaults) {
+    public var bypass: AppProxyBypassPolicy
+    public init(routes: [String: String] = [:], applications: [AppProxyEntry] = AppProxyEntry.defaults,
+                bypass: AppProxyBypassPolicy = .init()) {
         self.routes = routes; self.applications = applications
+        self.bypass = bypass
     }
-    private enum CodingKeys: String, CodingKey { case routes, applications }
+    private enum CodingKeys: String, CodingKey { case routes, applications, bypass }
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         routes = try values.decode([String: String].self, forKey: .routes)
         applications = try values.decodeIfPresent([AppProxyEntry].self, forKey: .applications) ?? AppProxyEntry.defaults
+        bypass = try values.decodeIfPresent(AppProxyBypassPolicy.self, forKey: .bypass) ?? .init()
     }
     public func validateRoutes(in snapshot: ControllerRouteSnapshot) throws {
         try validate()
@@ -66,6 +70,7 @@ public struct AppProxySettings: Codable, Equatable, Sendable {
         }
     }
     public func validate() throws {
+        try bypass.validate()
         let executables = applications.flatMap(\.executablePaths)
         guard executables.count <= 128, Set(executables).count == executables.count,
               applications.allSatisfy({ $0.executablePaths.count <= 32 }),
@@ -101,9 +106,10 @@ public struct AppProxySettings: Codable, Equatable, Sendable {
 }
 
 public enum AppProxySettingsError: LocalizedError {
-    case invalidRoutes, unsupportedProfile, staleState, unavailableNode, invalidExecutables
+    case invalidRoutes, unsupportedProfile, staleState, unavailableNode, invalidExecutables, overlappingFakeIP
     public var errorDescription: String? {
         switch self {
+        case .overlappingFakeIP: "An App Proxy bypass overlaps this profile's Fake-IP range. Remove the overlapping bypass before applying."
         case .invalidExecutables: "Enter unique absolute executable paths (up to 32 per app and 128 total). Each executable can belong to only one app."
         case .unavailableNode: "An App Proxy target is missing or does not currently resolve to a remote proxy. Refresh the node list and choose another target."
         case .invalidRoutes: "Choose a proxy node or proxy group for each application."

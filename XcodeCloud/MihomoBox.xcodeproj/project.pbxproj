@@ -66,6 +66,7 @@
 		DB5A4383660AB9376FE07BB1 /* SOCKSConnect.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C7C7808BD18934F515B7DE0 /* SOCKSConnect.swift */; };
 		DE60B3F770F449286528CEAA /* StatusItemController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6800BBB4BA267C89F221FA17 /* StatusItemController.swift */; };
 		E05088CE7CA6FCA29029B983 /* InstallerCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 586E4D5711F05FD9C34C5443 /* InstallerCoordinator.swift */; };
+		E16DDF393690A778A7845A5E /* AppProxyBypassPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 250D4A387A0B6E13EC0CDD3B /* AppProxyBypassPolicy.swift */; };
 		E54B34D6153CE9075BB8680E /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 37656AF3A173CEE5D3FF52AE /* NetworkExtension.framework */; };
 		F05E6785C89698A525A214EF /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D464BA15DA23325A30C049E /* main.swift */; };
 		F0FDCB40C3291F3329DC37AF /* AgentSupervisor.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1A7CE955B5C29E6A00F7F01 /* AgentSupervisor.swift */; };
@@ -156,6 +157,7 @@
 		1A60E50578F9AA3C498098E8 /* AIAppTargets.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AIAppTargets.swift; sourceTree = "<group>"; };
 		1E050E31E79C948D86A09618 /* ControllerBroker.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ControllerBroker.swift; sourceTree = "<group>"; };
 		1E16015099E71717B86CED9A /* LoginAutostartController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LoginAutostartController.swift; sourceTree = "<group>"; };
+		250D4A387A0B6E13EC0CDD3B /* AppProxyBypassPolicy.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AppProxyBypassPolicy.swift; path = ../Sources/MihomoControl/AppProxyBypassPolicy.swift; sourceTree = "<group>"; };
 		28EE0092E9529CF0724154CA /* AppKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppKit.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/AppKit.framework; sourceTree = DEVELOPER_DIR; };
 		2B3C8CE3093799B4C41BA8DA /* IOKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = IOKit.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/IOKit.framework; sourceTree = DEVELOPER_DIR; };
 		35AD05C0850D367118FF9429 /* UniformTypeIdentifiers.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UniformTypeIdentifiers.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/UniformTypeIdentifiers.framework; sourceTree = DEVELOPER_DIR; };
@@ -412,6 +414,7 @@
 				634DD8FDA5F241368E49264B /* App Sources */,
 				161D0B3E548572DF670623AF /* Pinned Build Inputs */,
 				31C69C6C885BB0880D9C7409 /* App Proxy Sources */,
+				250D4A387A0B6E13EC0CDD3B /* AppProxyBypassPolicy.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -647,6 +650,7 @@
 				DB5A4383660AB9376FE07BB1 /* SOCKSConnect.swift in Sources */,
 				43DCECAF0B39F63999ADBB40 /* SOCKSDatagram.swift in Sources */,
 				FE796BCAE5DDC17C54F8E90D /* main.swift in Sources */,
+				E16DDF393690A778A7845A5E /* AppProxyBypassPolicy.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

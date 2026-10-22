@@ -28,11 +28,15 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
     private func failure(_ message: String) -> NSError {
         NSError(domain: "MihomoBox.AppProxy", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
     }
-    func status(applications: [AppProxyEntry]) async throws -> AppProxyExtensionStatus {
+    func status(settings: AppProxySettings) async throws -> AppProxyExtensionStatus {
         let isAvailable = available
         let manager = isAvailable ? try await load() : nil
+        let configuration = (manager?.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration
         return .init(available: isAvailable, enabled: manager?.isEnabled == true,
-                     connected: manager?.connection.status == .connected)
+                     connected: manager?.connection.status == .connected,
+                     requiresReactivation: manager?.isEnabled == true &&
+                        ((configuration?["routing"] as? String) != "per-application-v3"
+                         || (configuration?["bypassCIDRs"] as? [String]) != settings.bypass.cidrs))
     }
     func discoverExecutables(applications: [AppProxyEntry]) async throws -> [AppProxyExecutable] {
         try await Task.detached(priority: .utility) {
@@ -88,7 +92,8 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         config.providerBundleIdentifier = extensionID
         config.serverAddress = "MihomoBox"
         config.providerConfiguration = ["mode": "ai", "targets": targets.targets.map(\.record),
-                                        "deadline": 0, "routing": "per-application-v2",
+                                        "deadline": 0, "routing": "per-application-v3",
+                                        "bypassCIDRs": settings.bypass.cidrs,
                                         "ports": Dictionary(uniqueKeysWithValues: settings.applications.map { ($0.id, Int($0.port)) })]
         manager.protocolConfiguration = config
         manager.localizedDescription = "MihomoBox"

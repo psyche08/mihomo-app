@@ -42,6 +42,7 @@ if ARGV == ["--check"]
     target = project.targets.find { |candidate| candidate.name == target_name }
     actual = target.source_build_phase.files_references.map { |reference| reference.real_path.to_s }.sort
     expected = directory.glob("**/*.swift").map { |source| source.expand_path.to_s }.sort
+    expected = (expected + [ROOT.join("Sources/MihomoControl/AppProxyBypassPolicy.swift").to_s]).sort if target_name == "MihomoAppProxy"
     abort "source membership drift for #{target_name}; regenerate the project" unless actual == expected
   end
 
@@ -263,6 +264,8 @@ resources_phase.shell_path = "/bin/bash"
 resources_phase.shell_script = '"$SRCROOT/../scripts/assemble-xcode-cloud-resources.sh"'
 resources_phase.always_out_of_date = "1"
 
+shared_bypass = project.main_group.new_file("../Sources/MihomoControl/AppProxyBypassPolicy.swift")
+extension.source_build_phase.add_file_reference(shared_bypass)
 project.save
 
 scheme = Xcodeproj::XCScheme.new

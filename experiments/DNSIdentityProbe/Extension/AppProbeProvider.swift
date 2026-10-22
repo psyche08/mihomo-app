@@ -95,7 +95,8 @@ final class AppProbeProvider: NEAppProxyProvider {
                 } else {
                     // Prefer metadata's original name; retain numeric destinations
                     // when low-level clients have already resolved them.
-                    let local = self.aiConfiguration != nil && Self.isLoopback(endpoint.hostname)
+                    let local = self.aiConfiguration != nil && (Self.isLoopback(endpoint.hostname)
+                        || self.aiConfiguration?.bypass.contains(endpoint.hostname) == true)
                     let candidate = local ? endpoint.hostname : (flow.remoteHostname.flatMap { $0.isEmpty ? nil : $0 } ?? endpoint.hostname).lowercased()
                     guard let port = UInt16(endpoint.port), port > 0,
                           SOCKSConnect.request(host: candidate, port: port) != nil,
@@ -109,14 +110,15 @@ final class AppProbeProvider: NEAppProxyProvider {
                 }
             } else if let udp = flow as? NEAppProxyUDPFlow {
                 if self.aiConfiguration != nil {
-                    let bridge = AppProxyUDPBridge(flow: udp, proxyPort: proxyPort, queue: self.queue, forwardDNS: { query, reply in
+                    let bridge = AppProxyUDPBridge(flow: udp, proxyPort: proxyPort, bypass: self.aiConfiguration!.bypass, queue: self.queue, forwardDNS: { query, reply in
                         self.forwardDNS(query, identity: identity, reply: reply)
                     }, count: self.count, finished: finished)
                     self.closers[id] = { bridge.close() }; bridge.start()
                 } else { self.startDNS(flow, id: id, identity: identity, finished: finished) }
             } else { self.count("rejected_flow_type"); self.reject(flow) }
         }
-        // Accepted flows are always either forwarded or explicitly closed; no bypass.
+        // Accepted flows are bridged by policy or explicitly closed. Returning
+        // false is not used as an implicit NetworkExtension routing fallback.
         return true
     }
 

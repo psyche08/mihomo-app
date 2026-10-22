@@ -3,6 +3,20 @@ import MihomoControl
 @testable import MihomoDNSCore
 
 final class AppProxyProfileTests: XCTestCase {
+    func testBypassCannotConsumeCustomFakeIPAndDoesNotChangePublicNode() throws {
+        for range in ["10.0.0.1/16", "fc00::/18"] {
+            XCTAssertThrowsError(try AppProxyProfile.applying(settings, to: "dns:\n  fake-ip-range: \(range)\nrules: []\n"))
+        }
+        let source = "dns:\n  fake-ip-range: 198.18.0.1/16\nrules: []\n"
+        let generated = try AppProxyProfile.applying(settings, to: source)
+        let reloaded = try JSONDecoder().decode(AppProxySettings.self, from: JSONEncoder().encode(settings))
+        XCTAssertEqual(try AppProxyProfile.applying(reloaded, to: source), generated)
+        for app in AppProxyApplication.allCases {
+            XCTAssertTrue(generated.contains("proxy: \"node-\(app.rawValue)\""))
+        }
+        var disabled = settings; disabled.bypass = .init(cidrs: [])
+        XCTAssertNoThrow(try AppProxyProfile.applying(disabled, to: "dns:\n  fake-ip-range: 10.0.0.1/16\nrules: []\n"))
+    }
     func testExecutableMembershipMigrationPersistenceAndBounds() throws {
         let legacy = try JSONDecoder().decode(AppProxyEntry.self, from: Data(#"{"id":"chatgpt","title":"Codex","port":17971}"#.utf8))
         XCTAssertEqual(legacy.executablePaths, [])

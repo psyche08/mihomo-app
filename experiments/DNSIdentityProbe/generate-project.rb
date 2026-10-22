@@ -58,6 +58,7 @@ embed(selected, helper, 'Contents/Library/LoginItems')
 embed(host, ext, 'Contents/Library/SystemExtensions')
 embed(host, selected, 'Contents/Resources/Clients')
 embed(host, control, 'Contents/Resources/Clients')
+ext.source_build_phase.add_file_reference(p.main_group.new_file('../../Sources/MihomoControl/AppProxyBypassPolicy.swift'))
 p.save
 scheme = Xcodeproj::XCScheme.new
 scheme.configure_with_targets(host, nil)
