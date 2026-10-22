@@ -188,12 +188,13 @@ Global DNS fallback transaction and confirms removal of any overriding DoH
 profile. Disabling Enhanced TUN returns the core to standby in either DNS mode;
 Global DNS is restored to the original settings before that transition.
 
-`enhancedTUNPreviouslyEnabled` separately remembers a successful enable. Turning
-TUN off changes the current session but preserves that preference. A subsequent
-daemon boot or App launch resumes Enhanced mode through the same validated
-transaction; missing profile/trust uses the existing verified Global DNS fallback.
-Never-enabled installations stay in standby. Migration remembers the old current
-TUN value; versions that already recorded it as off have no recoverable history.
+`enhancedTUNResumeEnabled` remembers the last explicit TUN choice. Turning TUN
+off persists standby across daemon restarts, component updates and App launches.
+Migration uses the old current TUN state and ignores the legacy sticky
+`enhancedTUNPreviouslyEnabled` history. A temporary base-service migration keeps
+the new resume preference separate from the runtime state. When enabled, startup
+uses the same validated transaction, with verified Global DNS fallback if Local
+DoH is unavailable. Automatic DoH recovery cannot enable a disabled TUN.
 
 ### Global DNS fallback
 

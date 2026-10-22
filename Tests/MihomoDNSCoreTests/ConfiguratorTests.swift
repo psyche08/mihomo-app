@@ -402,7 +402,7 @@ extension ConfiguratorTests {
         XCTAssertNotNil(configured.localDoH)
     }
 
-    func testNeverEnabledTUNDoesNotAutostartAndHistorySurvivesSessionOff() throws {
+    func testExplicitTUNOffSurvivesReloadAndBaseMigration() throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let path = directory.appendingPathComponent("daemon.json")
@@ -414,10 +414,33 @@ extension ConfiguratorTests {
         try LocalDoHConfigurationStore.setEnhancedTUN(true, configurationPath: path.path)
         try LocalDoHConfigurationStore.setEnhancedTUN(false, configurationPath: path.path)
         let stored = try ProxyConfiguration.load(path: path.path)
-        XCTAssertTrue(stored.resumesEnhancedTUN)
+        XCTAssertFalse(stored.resumesEnhancedTUN)
         XCTAssertFalse(stored.expectsEnhancedTUN)
         try LocalDoHConfigurationStore.ensureBaseService(configurationPath: path.path)
+        XCTAssertFalse(try ProxyConfiguration.load(path: path.path).resumesEnhancedTUN)
+        try LocalDoHConfigurationStore.useGlobalDNSFallback(configurationPath: path.path)
         XCTAssertTrue(try ProxyConfiguration.load(path: path.path).resumesEnhancedTUN)
+        try LocalDoHConfigurationStore.setEnhancedTUN(false, configurationPath: path.path)
+        XCTAssertFalse(try ProxyConfiguration.load(path: path.path).resumesEnhancedTUN)
+    }
+
+    func testLegacyStickyHistoryCannotOverrideLastTUNChoice() throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("daemon.json")
+        for enabled in [false, true] {
+            try JSONEncoder().encode(ProxyConfiguration(
+                manageSystemDNS: false, enhancedTUNEnabled: enabled,
+                enhancedTUNPreviouslyEnabled: true, localDoH: LocalDoHConfiguration()
+            )).write(to: path)
+            XCTAssertEqual(try ProxyConfiguration.load(path: path.path).resumesEnhancedTUN, enabled)
+            try LocalDoHConfigurationStore.ensureBaseService(configurationPath: path.path)
+            try LocalDoHConfigurationStore.ensureBaseService(configurationPath: path.path)
+            let migrated = try ProxyConfiguration.load(path: path.path)
+            XCTAssertFalse(migrated.expectsEnhancedTUN)
+            XCTAssertEqual(migrated.resumesEnhancedTUN, enabled)
+        }
+        XCTAssertTrue(ProxyConfiguration().resumesEnhancedTUN, "Pre-toggle releases retain their always-on state")
     }
 
     func testGlobalDNSFallbackAndReturnToLocalStandby() throws {

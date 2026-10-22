@@ -186,9 +186,10 @@ later rule, selector, and GeoSite changes no longer require profile regeneration
 
 There are two intentionally separate startup mechanisms. The root LaunchDaemon
 starts LocalHttpDns and the managed Mihomo runtime at system startup. The
-sticky `enhancedTUNPreviouslyEnabled` value resumes Enhanced TUN after a successful
-activation even if the prior session was turned off; never-enabled installations
-stay in standby. LocalHttpDns is unchanged by that choice. On launch, the App
+`enhancedTUNResumeEnabled` preference restores the last explicit TUN choice;
+turning TUN off survives restarts and component updates. Upgrades use the old
+current state instead of the legacy "ever enabled" flag. LocalHttpDns is unchanged
+by that choice. On launch, the App
 also applies a one-time current-user login-item default, without requiring TUN
 or a healthy network, so the hidden tray App returns after login.
 Only an installed copy under `/Applications` or `~/Applications` applies this

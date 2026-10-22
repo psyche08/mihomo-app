@@ -41,8 +41,10 @@ public struct ProxyConfiguration: Codable, Equatable {
     /// Persisted desired TUN state. `nil` is accepted only for upgrades from
     /// older installations and means the previously always-on TUN behavior.
     public var enhancedTUNEnabled: Bool?
-    /// Sticky preference: turning TUN off affects this session, not next boot.
+    /// Legacy history retained for decoding/rollback, never used as user intent.
     public var enhancedTUNPreviouslyEnabled: Bool?
+    /// Last explicit choice, preserved while migration temporarily enters standby.
+    public var enhancedTUNResumeEnabled: Bool?
     public var loopbackInterface: String
     public var loopbackAlias: String
     public var loopbackNetmask: String
@@ -63,6 +65,7 @@ public struct ProxyConfiguration: Codable, Equatable {
         globalDNSFallbackEnabled: Bool? = nil,
         enhancedTUNEnabled: Bool? = nil,
         enhancedTUNPreviouslyEnabled: Bool? = nil,
+        enhancedTUNResumeEnabled: Bool? = nil,
         loopbackInterface: String = "lo0",
         loopbackAlias: String = "127.0.0.53",
         loopbackNetmask: String = "255.0.0.0",
@@ -82,6 +85,7 @@ public struct ProxyConfiguration: Codable, Equatable {
         self.globalDNSFallbackEnabled = globalDNSFallbackEnabled
         self.enhancedTUNEnabled = enhancedTUNEnabled
         self.enhancedTUNPreviouslyEnabled = enhancedTUNPreviouslyEnabled
+        self.enhancedTUNResumeEnabled = enhancedTUNResumeEnabled
         self.loopbackInterface = loopbackInterface
         self.loopbackAlias = loopbackAlias
         self.loopbackNetmask = loopbackNetmask
@@ -144,7 +148,9 @@ public struct ProxyConfiguration: Codable, Equatable {
     }
 
     public var resumesEnhancedTUN: Bool {
-        enhancedTUNPreviouslyEnabled ?? expectsEnhancedTUN
+        // Old releases remembered "ever enabled" even after an explicit off.
+        // Upgrade from the current state, not that sticky historical flag.
+        enhancedTUNResumeEnabled ?? expectsEnhancedTUN
     }
 
     public var usesGlobalDNSFallback: Bool {
@@ -221,6 +227,7 @@ public struct ProxyConfiguration: Codable, Equatable {
 public enum LocalDoHConfigurationStore {
     public static func ensureBaseService(configurationPath: String) throws {
         var configuration = try ProxyConfiguration.load(path: configurationPath)
+        configuration.enhancedTUNResumeEnabled = configuration.resumesEnhancedTUN
         configuration.enhancedTUNPreviouslyEnabled = configuration.resumesEnhancedTUN
         configuration.manageSystemDNS = false
         configuration.globalDNSFallbackEnabled = false
@@ -234,7 +241,8 @@ public enum LocalDoHConfigurationStore {
 
     public static func setEnhancedTUN(_ enabled: Bool, configurationPath: String) throws {
         var configuration = try ProxyConfiguration.load(path: configurationPath)
-        configuration.enhancedTUNPreviouslyEnabled = enabled || configuration.resumesEnhancedTUN
+        configuration.enhancedTUNResumeEnabled = enabled
+        configuration.enhancedTUNPreviouslyEnabled = enabled
         configuration.manageSystemDNS = false
         configuration.globalDNSFallbackEnabled = false
         configuration.localDoH = LocalDoHConfiguration()
@@ -251,6 +259,7 @@ public enum LocalDoHConfigurationStore {
         configuration.globalDNSFallbackEnabled = true
         configuration.enhancedTUNEnabled = true
         configuration.enhancedTUNPreviouslyEnabled = true
+        configuration.enhancedTUNResumeEnabled = true
         try write(configuration, to: configurationPath)
     }
 

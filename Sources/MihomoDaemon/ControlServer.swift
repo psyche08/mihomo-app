@@ -158,7 +158,7 @@ final class ControlDispatcher: @unchecked Sendable {
             return
         }
         do {
-            if !preserveFallback && !localStarted
+            if resumeEnhancedTUN && !preserveFallback && !localStarted
                 && (agent.localDoHIdentityPrepared || installedProfile.present == true) {
                 try activateGlobalDNSFallbackLocked()
             } else {
@@ -585,7 +585,7 @@ final class ControlDispatcher: @unchecked Sendable {
         guard agent.localHttpDNSBaseConfigured else {
             throw serverError("repair the LocalHttpDns base service before starting Mihomo")
         }
-        if agent.localDoHIdentityPrepared, !localDoHServer.isRunning,
+        if agent.resumesEnhancedTUN, agent.localDoHIdentityPrepared, !localDoHServer.isRunning,
            (try? localDoHServer.startIfPrepared()) != true {
             try activateGlobalDNSFallbackLocked()
             return
@@ -607,7 +607,7 @@ final class ControlDispatcher: @unchecked Sendable {
     private func checkLocalDoHReadiness() {
         mutationLock.lock()
         defer { mutationLock.unlock() }
-        guard agent.isRunning, agent.localHttpDNSBaseConfigured,
+        guard agent.isRunning, agent.resumesEnhancedTUN, agent.localHttpDNSBaseConfigured,
               !agent.globalDNSFallbackConfigured, !profiles.activationRequired,
               !components.recoveryRequired, !components.requiresDaemonRestart,
               !components.ownsPendingMutationFileLock else {
@@ -673,7 +673,7 @@ final class ControlDispatcher: @unchecked Sendable {
     private func handleLocalDoHFailure() {
         mutationLock.lock()
         defer { mutationLock.unlock() }
-        guard agent.isRunning, agent.localHttpDNSBaseConfigured,
+        guard agent.isRunning, agent.resumesEnhancedTUN, agent.localHttpDNSBaseConfigured,
               !localDoHServer.isRunning, !profiles.activationRequired,
               !components.recoveryRequired, !components.requiresDaemonRestart,
               !components.ownsPendingMutationFileLock else { return }
