@@ -5,8 +5,14 @@
 App Proxy uses the same **Running Mode** as the tray and Config page. Its mode
 picker reads the current core configuration when the page opens or refreshes,
 and changes it through the existing authenticated controller action. **Global**
-uses the core's `GLOBAL` selection; **Direct** connects directly; **Rule** applies
-each app's selected node as its application routing rule. App node choices are
+uses the core's `GLOBAL` selection; **Direct** connects directly; **Rule** matches
+the profile's rules in order. Explicit direct, reject and pass actions are
+preserved; proxy targets, including policy-group targets, use the app's selected
+node/group. Rule-set references and matching parameters are retained, and
+referenced sub-rules get the same treatment. With no matching rule the core
+still defaults to direct. A rule's policy-group target is replaced as a whole,
+not evaluated for its selected leaf first; use an explicit direct/reject rule
+to exempt a destination. App node choices are
 retained while Global or Direct is active. Mode changes affect new connections;
 established connections keep their current outbound until they reconnect.
 Explicit local-network bypasses and shared DNS handling still precede these
@@ -33,10 +39,19 @@ For the private VPN regression, check the system route to `192.168.13.12`, then
 run `ssh -o BatchMode=yes -o ConnectTimeout=10 m4pro /usr/bin/true` from the actual
 Codex context. Confirm successful SSH handshake/authentication and absence of
 that target on the app's remote-proxy listener. Also verify public HTTPS still
-appears on that listener and follows the current mode: the app node in Rule,
+appears on that listener and follows the current mode: original direct/reject
+rules or the app node for proxy rules in Rule,
 the global node in Global, and DIRECT in Direct. Repeat after a provider
 restart, profile reload, and TUN/mode changes. A syntax check or a successful
 direct connection from an unrelated process alone does not satisfy this test.
+
+Rule lists must be block-style with a single plain, single-quoted or
+JSON-compatible double-quoted rule per line. Empty `[]` lists are supported.
+Rule aliases, multiline scalars, nonempty inline lists and rematch adapters
+are rejected before activation rather than silently losing rule behavior.
+Named proxy definitions must use block mappings with explicit names and types;
+named direct/reject/DNS adapters are preserved. Original profile rules remain
+unchanged for traffic outside App Proxy.
 
 Open **App Proxy** in the sidebar (Command-8). Use **Add App or CLI…** to select
 a signed application bundle or executable. Embedded signed helpers follow the

@@ -107,7 +107,7 @@ public struct AppProxySettings: Codable, Equatable, Sendable {
 }
 
 public enum AppProxySettingsError: LocalizedError {
-    case invalidRoutes, unsupportedProfile, staleState, unavailableNode, invalidExecutables, overlappingFakeIP
+    case invalidRoutes, unsupportedProfile, unsupportedRules, staleState, unavailableNode, invalidExecutables, overlappingFakeIP
     public var errorDescription: String? {
         switch self {
         case .overlappingFakeIP: "An App Proxy bypass overlaps this profile's Fake-IP range. Remove the overlapping bypass before applying."
@@ -115,6 +115,7 @@ public enum AppProxySettingsError: LocalizedError {
         case .unavailableNode: "An App Proxy target is missing or does not currently resolve to a remote proxy. Refresh the node list and choose another target."
         case .invalidRoutes: "Choose a proxy node or proxy group for each application."
         case .unsupportedProfile: "App Proxy requires a single block-style profile without custom listeners or conflicting application listener ports."
+        case .unsupportedRules: "App Proxy requires unambiguous block-style rules and sub-rules with one rule string per line. Expand rule aliases or inline lists before applying."
         case .staleState: "The active profile or App Proxy settings changed. Refresh before applying."
         }
     }

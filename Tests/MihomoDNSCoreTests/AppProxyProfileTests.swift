@@ -43,7 +43,7 @@ final class AppProxyProfileTests: XCTestCase {
         XCTAssertTrue(rendered.hasPrefix(source))
         for app in AppProxyApplication.allCases {
             XCTAssertTrue(rendered.contains("port: \(app.port)\n    udp: true\n    rule: mihomobox-app-\(app.rawValue)"))
-            XCTAssertTrue(rendered.contains("MATCH,mihomobox-app-\(app.rawValue)"))
+            XCTAssertTrue(rendered.contains("\"MATCH,REJECT\""))
         }
         XCTAssertFalse(rendered.contains("    proxy:"), "An unconditional listener proxy bypasses Global/Direct mode")
         XCTAssertEqual(rendered.components(separatedBy: "listen: 127.0.0.1").count - 1, 4)
@@ -128,7 +128,8 @@ final class AppProxyProfileTests: XCTestCase {
             XCTAssertEqual(output.components(separatedBy: "\nsub-rules:").count, 2)
             XCTAssertTrue(output.contains("\(indentation)- name: mihomobox-app-chatgpt"))
             XCTAssertTrue(output.contains("    existing:\n      - MATCH,DIRECT"))
-            XCTAssertTrue(output.contains("    mihomobox-app-chatgpt:\n      - MATCH,mihomobox-app-chatgpt"))
+            XCTAssertTrue(output.contains("    mihomobox-app-chatgpt: []"))
+            XCTAssertTrue(output.contains("    mihomobox-app-chatgpt-sub-0:\n      - \"MATCH,DIRECT\""))
         }
         XCTAssertNoThrow(try AppProxyProfile.applying(settings, to: "proxy-groups: []\nsub-rules: {}\nrules: []\n"))
         let quotedKeys = try AppProxyProfile.applying(settings, to: "'proxy-groups' : []\n\"sub-rules\" : {}\nrules: []\n")
@@ -147,15 +148,19 @@ final class AppProxyProfileTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: directory) }
         let entry = AppProxyEntry(id: "app_00000000-0000-0000-0000-000000000001", title: "Fixture", path: "/tmp/fixture", port: 17999)
-        let settings = AppProxySettings(routes: [entry.id: "app,node"], applications: [entry])
+        let other = AppProxyEntry(id: "app_00000000-0000-0000-0000-000000000002", title: "Second", path: "/tmp/other", port: 17998)
+        let settings = AppProxySettings(routes: [entry.id: "app,node", other.id: "global-node"], applications: [entry, other])
         let source = """
         mode: rule
         external-controller: 127.0.0.1:12347
+        mixed-port: 12348
         find-process-mode: off
         log-level: silent
         dns:
           enable: false
         proxies:
+          - name: LocalDirect
+            type: direct
           - name: app,node
             type: http
             server: 127.0.0.1
@@ -168,11 +173,35 @@ final class AppProxyProfileTests: XCTestCase {
         - name: Existing
           type: select
           proxies: [global-node]
+        rule-providers:
+          direct-set:
+            type: inline
+            behavior: domain
+            payload: [provider-direct.test]
+          proxy-set:
+            type: inline
+            behavior: classical
+            payload: ["DOMAIN,provider-proxy.test"]
         sub-rules:
             existing:
-              - MATCH,REJECT
+              - DOMAIN,reject.sub.test,REJECT
+              - SUB-RULE,(DOMAIN,direct.sub.test),nested
+              - MATCH,Existing
+            nested:
+              - MATCH,DIRECT
         rules:
-          - MATCH,REJECT
+          - DOMAIN,direct.test,DIRECT
+          - DOMAIN,named-direct.test,LocalDirect
+          - DOMAIN,reject.test,REJECT
+          - DOMAIN,drop.test,REJECT-DROP
+          - DOMAIN,pass.test,PASS
+          - RULE-SET,direct-set,DIRECT
+          - RULE-SET,proxy-set,Existing
+          - SUB-RULE,(DOMAIN-SUFFIX,sub.test),existing
+          - OR,((DOMAIN,logic.test),(DOMAIN,other.test)),Existing
+          - DOMAIN-REGEX,^regex[0-9]{1,3}[.]test$,Existing
+          - DOMAIN,proxy.test,Existing
+          - DOMAIN,pass.test,DIRECT
         """
         let path = directory.appendingPathComponent("config.yaml")
         try AppProxyProfile.applying(settings, to: source).write(to: path, atomically: true, encoding: .utf8)
@@ -192,6 +221,55 @@ final class AppProxyProfileTests: XCTestCase {
             routes = settings; routes.routes["chatgpt"] = target
             XCTAssertThrowsError(try routes.validate())
         }
+    }
+
+    func testRuleOverlayKeepsOrderActionsParametersAndClonesSubRules() throws {
+        let source = """
+        rules:
+          - 'DOMAIN,first.test,DIRECT' # do not override
+          - IP-CIDR,10.0.0.0/8,Proxy,no-resolve,src
+          - DOMAIN-REGEX,^a{1,3}[.]test$,Proxy
+          - AND,((NETWORK,tcp),(DST-PORT,443)),Proxy
+          - SUB-RULE,(NETWORK,tcp),child
+          - MATCH,Proxy
+        sub-rules:
+          child:
+          - DOMAIN,rejected.test,REJECT-DROP
+          - DOMAIN,pass.test,PASS-RULE
+          - MATCH,Proxy
+        """
+        let generated = try AppProxyRuleOverlay(source: source).entries(for: "mihomobox-app-test")
+        XCTAssertEqual(generated, [
+            "  mihomobox-app-test:",
+            "    - \"DOMAIN,first.test,DIRECT\"",
+            "    - \"IP-CIDR,10.0.0.0/8,mihomobox-app-test,no-resolve,src\"",
+            "    - \"DOMAIN-REGEX,^a{1,3}[.]test$,mihomobox-app-test\"",
+            "    - \"AND,((NETWORK,tcp),(DST-PORT,443)),mihomobox-app-test\"",
+            "    - \"SUB-RULE,(NETWORK,tcp),mihomobox-app-test-sub-0\"",
+            "    - \"MATCH,mihomobox-app-test\"",
+            "  mihomobox-app-test-sub-0:",
+            "    - \"DOMAIN,rejected.test,REJECT-DROP\"",
+            "    - \"DOMAIN,pass.test,PASS-RULE\"",
+            "    - \"MATCH,mihomobox-app-test\"",
+        ])
+        XCTAssertEqual(try AppProxyRuleOverlay(source: "rules: [] # empty\n").entries(for: "app"), ["  app: []"])
+    }
+
+    func testRuleOverlayRejectsYAMLItCannotFaithfullyCopy() {
+        for source in [
+            "rules: [MATCH,DIRECT]", "rules: *shared", "rules: &shared\n  - MATCH,DIRECT",
+            "rules:\n  - *shared", "rules:\n  - >\n    MATCH,DIRECT", "rules: []\nrules: []",
+            "rules:\n  - DOMAIN,x,DIRECT\n    - MATCH,Proxy", "rules:\n  - MATCH",
+            "rules:\n  - SUB-RULE,(NETWORK,tcp),missing", "sub-rules:\n  child: []\n  child: []",
+            "rules:\n  - \"MATCH,DIRECT\" garbage", "rules:\n  - \"DOMAIN,\\x61,Proxy\"",
+            "proxies:\n  - {name: Local, type: direct}", "proxies:\n  - name: Local\n    type: *type",
+            "proxies:\n  - name: Local\n    type: rematch", "proxies:\n  - <<: *proxy\n    name: Local",
+        ] {
+            XCTAssertThrowsError(try AppProxyRuleOverlay(source: source).entries(for: "app"), source)
+        }
+        XCTAssertNoThrow(try AppProxyRuleOverlay(source: "rules:\n  - 'DOMAIN,a''b#c,Proxy'\n").entries(for: "app"))
+        let named = "proxies:\n- name: Local\n  type: direct\nrules:\n- MATCH,Local\n"
+        XCTAssertEqual(try AppProxyRuleOverlay(source: named).entries(for: "app"), ["  app:", "    - \"MATCH,Local\""])
     }
 
     func testLoadBalancedAppRoutesDoNotRequireCurrentSelection() throws {

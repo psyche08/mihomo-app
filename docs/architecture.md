@@ -210,7 +210,14 @@ validated root-core loopback listeners: 17971–17974 for the default applicatio
 and 17975–18002 for user-selected signed apps and CLI executables. The root
 overlay assigns each listener a named sub-rule rather than an unconditional
 `proxy` override. Mihomo evaluates Global/Direct before these Rule-mode app
-rules. Hidden single-member selectors preserve arbitrary node names (including
+rules. Each app gets a copy of the original ordered rule list and its sub-rules;
+only outbound proxy targets are replaced with the app selector. Direct, reject,
+pass and DNS adapters, rule-provider references and matching parameters are
+retained. An unmatched flow retains the core's default direct route.
+Policy-group targets are replaced as a whole, not evaluated for their selected
+leaf first. The rule parser follows the pinned core's target positions, including
+comma-bearing regex/logic payloads, and rejects YAML structures it cannot
+faithfully copy. Hidden single-member selectors preserve arbitrary node names (including
 commas) without interpolating them into rule syntax. Existing block-style
 proxy groups and sub-rules are retained; the `mihomobox-app-` namespace is
 reserved. The app's mode picker uses the shared authenticated mode transaction.

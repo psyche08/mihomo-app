@@ -39,14 +39,15 @@ public enum AppProxyProfile {
         // mode. Rule-only sub-rules leave Global/Direct to Mihomo itself.
         var subRules: [String] = []
         var groups: [String] = []
-        var result = source
+        var result = lines.joined(separator: "\n")
+        let ruleOverlay = try AppProxyRuleOverlay(source: result)
         for app in settings.applications {
             let name = "mihomobox-app-\(app.id)"
             let quoted = String(decoding: try JSONEncoder().encode(settings.routes[app.id]!), as: UTF8.self)
             // A private selector keeps commas and other rule delimiters in a
             // user node name out of Mihomo's comma-delimited rule grammar.
             groups += ["  - name: \(name)", "    type: select", "    hidden: true", "    proxies: [\(quoted)]"]
-            subRules += ["  \(name):", "    - MATCH,\(name)"]
+            subRules += try ruleOverlay.entries(for: name)
         }
         result = try inserting(groups, into: "proxy-groups", emptyValue: "[]", source: result)
         result = try inserting(subRules, into: "sub-rules", emptyValue: "{}", source: result)

@@ -96,7 +96,7 @@ struct AppProxyView: View {
                         Text(mode.rawValue).tag(mode)
                     }
                 }
-                .pickerStyle(.segmented).frame(width: 230)
+                .pickerStyle(.segmented).labelsHidden().frame(width: 230)
                 .disabled(busy || model.refreshing || dashboard.configState != .loaded)
                 .help("Uses the same running mode as MihomoBox. Changes apply to new connections.")
                 Spacer()
@@ -140,7 +140,7 @@ struct AppProxyView: View {
     private var modeDescription: String {
         switch dashboard.configuration.mode {
         case .global: "Global: applications use MihomoBox's global node. Saved app nodes apply in Rule mode."
-        case .rule: "Rule: each application's routing rule uses its selected node. Signed helpers follow the same route."
+        case .rule: "Rule: follow profile rules; proxy rules use the app's selected node. Direct and reject rules stay unchanged."
         case .direct: "Direct: applications connect directly. Saved app nodes apply in Rule mode."
         }
     }
@@ -179,7 +179,7 @@ struct AppProxyView: View {
                 model.selectTarget($0, for: app.id)
             }
             .frame(width: 230).disabled(busy || model.routing == nil)
-            .help("Saved node for this application's Rule-mode routing")
+            .help("Used when a profile rule chooses a proxy in Rule mode")
             Button(role: .destructive) { model.removeApplication(app.id) } label: { Image(systemName: "trash") }
                 .buttonStyle(.borderless)
                 .disabled(busy || model.refreshing || model.extensionStatus.enabled)

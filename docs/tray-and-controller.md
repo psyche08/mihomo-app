@@ -386,15 +386,19 @@ than assigned an arbitrary application's route.
 daemon checks a revision of the active raw profile and saved settings, validates
 the selected targets against the current controller catalog, and uses the
 existing profile activation/rollback transaction. After startup it validates
-the new controller catalog too. The pinned core's `-t` check alone does not
-reject an unknown listener `proxy`, so it is not sufficient evidence. A failed
+the new controller catalog too. Generated hidden selectors make missing targets
+fail the pinned core's `-t` check; runtime validation also verifies that each
+app target routes through a remote proxy. A failed
 or ambiguous reply requires refresh before another apply/enable.
 
 Settings live in the root-owned `app-proxy.json`, alongside the active-profile
 state. Subscription bytes and the user's profile mirror are preserved. The
-runtime overlay adds four loopback mixed listeners on ports 17971–17974, each
-with its explicit outbound `proxy`; TCP, UDP and intercepted DNS-over-HTTPS
-use the same application-specific listener. Switching a node restarts the
+runtime overlay adds loopback mixed listeners on ports 17971–18002, each
+with a private rule list derived from the profile. Rule mode retains direct,
+reject and pass actions and replaces proxy targets with the app's saved target.
+Global and Direct follow the shared core mode. TCP and UDP connections use the
+application's listener; captured DNS uses the shared Mihomo resolver on TCP 1153.
+Switching a node restarts the
 managed runtime and can interrupt existing connections. Settings also apply to
 subsequent profiles; missing targets cause activation to roll back. Custom
 listeners, conflicting ports and ambiguous YAML mappings require manual profile

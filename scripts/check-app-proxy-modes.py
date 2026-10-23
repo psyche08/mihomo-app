@@ -13,6 +13,7 @@ import urllib.request
 
 class Fixture(socketserver.BaseRequestHandler):
     def handle(self):
+        self.server.requests += 1
         self.request.settimeout(10)
         reader = self.request.makefile('rb')
         first = reader.readline()
@@ -31,6 +32,7 @@ def fixture(label):
     server = socketserver.ThreadingTCPServer(('127.0.0.1', 0), Fixture)
     server.daemon_threads = True
     server.label = label
+    server.requests = 0
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
 
@@ -44,11 +46,17 @@ def free_port():
 binary, config = sys.argv[1:]
 path = pathlib.Path(config)
 servers = [fixture('app-node'), fixture('global-node'), fixture('direct')]
-controller, inbound = free_port(), free_port()
+controller, inbound, second_inbound, ordinary_inbound = [free_port() for _ in range(4)]
 source = path.read_text().replace('port: 12345', 'port: ' + str(servers[0].server_address[1]))
 source = source.replace('port: 12346', 'port: ' + str(servers[1].server_address[1]))
 source = source.replace('127.0.0.1:12347', '127.0.0.1:' + str(controller))
 source = source.replace('port: 17999', 'port: ' + str(inbound))
+source = source.replace('port: 17998', 'port: ' + str(second_inbound))
+source = source.replace('mixed-port: 12348', 'mixed-port: ' + str(ordinary_inbound))
+domains = ['direct.test', 'named-direct.test', 'reject.test', 'drop.test', 'pass.test', 'provider-direct.test',
+           'provider-proxy.test', 'proxy.sub.test', 'direct.sub.test', 'reject.sub.test',
+           'logic.test', 'regex123.test', 'proxy.test', 'unmatched.test']
+source += '\nhosts:\n' + ''.join('  ' + domain + ': 127.0.0.1\n' for domain in domains)
 path.write_text(source)
 core = subprocess.Popen([binary, '-d', str(path.parent), '-f', str(path)],
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -74,15 +82,37 @@ try:
             assert core.poll() is None and time.monotonic() < deadline, 'Fixture core did not start'
             time.sleep(.05)
     api('/proxies/GLOBAL', 'PUT', {'name': 'global-node'})
-    results = {}
-    for mode, expected in [('rule', 'app-node'), ('global', 'global-node'), ('direct', 'direct'), ('rule', 'app-node')]:
+    results = []
+
+    def check(mode, domain, expected, listener=inbound):
+        before = [server.requests for server in servers]
+        result = subprocess.run(['/usr/bin/curl', '--noproxy', '', '--proxy', 'http://127.0.0.1:' + str(listener),
+                                 '--max-time', '3', '-fsS', 'http://' + domain + ':' + str(servers[2].server_address[1])],
+                                capture_output=True, text=True, timeout=6)
+        if expected == 'reject':
+            assert result.returncode != 0 and [server.requests for server in servers] == before, (mode, domain, result.stdout)
+        else:
+            assert result.returncode == 0 and result.stdout == expected, (mode, domain, result.returncode, result.stdout)
+        results.append({'mode': mode, 'domain': domain, 'expected': expected, 'passed': True})
+
+    for mode in ['rule', 'global', 'direct', 'rule']:
         api('/configs', 'PATCH', {'mode': mode})
-        result = subprocess.run(['/usr/bin/curl', '--noproxy', '', '--proxy', 'http://127.0.0.1:' + str(inbound),
-                                 '--max-time', '5', '-fsS', 'http://127.0.0.1:' + str(servers[2].server_address[1])],
-                                capture_output=True, text=True, timeout=8)
-        assert result.returncode == 0 and result.stdout == expected, (mode, result.returncode, result.stdout)
-        results[mode] = result.stdout
-    print(json.dumps(results))
+        for domain in domains:
+            if mode == 'global': expected = 'global-node'
+            elif mode == 'direct': expected = 'direct'
+            elif domain in ['reject.test', 'drop.test', 'reject.sub.test']: expected = 'reject'
+            elif domain in ['direct.test', 'named-direct.test', 'pass.test', 'provider-direct.test', 'direct.sub.test', 'unmatched.test']: expected = 'direct'
+            else: expected = 'app-node'
+            check(mode, domain, expected)
+        if mode == 'rule':
+            check(mode, 'proxy.test', 'global-node', second_inbound)
+            check(mode, 'direct.test', 'direct', second_inbound)
+            check(mode, 'proxy.test', 'global-node', ordinary_inbound)
+            check(mode, 'reject.test', 'reject', ordinary_inbound)
+    print(json.dumps({'passed': True, 'cases': len(results), 'coverage':
+                     ['two independent apps', 'original listener', 'direct', 'reject', 'reject-drop',
+                      'pass', 'rule providers', 'nested sub-rules', 'logic', 'regex with commas',
+                      'unmatched direct', 'global', 'direct mode', 'live mode changes']}))
 finally:
     core.terminate()
     try:
