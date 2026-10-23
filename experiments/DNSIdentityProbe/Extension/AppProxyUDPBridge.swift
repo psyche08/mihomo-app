@@ -15,7 +15,7 @@ final class AppProxyUDPBridge {
     private let bypass: AppProxyBypassPolicy
     private var relay: NWConnection?
     private var relayReady: (() -> Void)?
-    private var localConnections: [String: NWConnection] = [:]
+    private var localConnections: [String: AppProxyConnection] = [:]
     private var closed = false
     private var timer: DispatchWorkItem?
     init(flow: NEAppProxyUDPFlow, proxyPort: UInt16, bypass: AppProxyBypassPolicy, queue: DispatchQueue,
@@ -120,11 +120,15 @@ final class AppProxyUDPBridge {
         } else if AppProbeProvider.isLoopback(endpoint.hostname) || bypass.contains(endpoint.hostname) {
             armTimer(180)
             let key = endpoint.hostname + ":" + endpoint.port
-            let connection: NWConnection
+            let connection: AppProxyConnection
             if let existing = localConnections[key] { connection = existing }
             else {
-                guard localConnections.count < 32, let port = Network.NWEndpoint.Port(rawValue: port) else { close(); return }
-                connection = NWConnection(host: Network.NWEndpoint.Host(endpoint.hostname), port: port, using: .udp)
+                guard localConnections.count < 32 else { close(); return }
+                let interface = AppProbeProvider.isLoopback(endpoint.hostname) ? nil : flow.networkInterface
+                guard AppProbeProvider.isLoopback(endpoint.hostname) || interface != nil else {
+                    count("rejected_missing_bypass_interface"); close(); return
+                }
+                connection = AppProxyConnection(host: endpoint.hostname, port: port, transport: .udp, interface: interface)
                 localConnections[key] = connection
                 connection.stateUpdateHandler = { state in
                     if case .failed = state { self.close() }
@@ -151,7 +155,7 @@ final class AppProxyUDPBridge {
             })
         }
     }
-    private func readLocal(_ connection: NWConnection, endpoint: NWHostEndpoint) {
+    private func readLocal(_ connection: AppProxyConnection, endpoint: NWHostEndpoint) {
         guard !closed else { return }
         connection.receiveMessage { data, _, _, error in
             guard !self.closed, error == nil, let data else { self.close(); return }

@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		FD12EBAF3100432EA911A002 /* AppProxyConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD12EBAF3100432EA911A001 /* AppProxyConnection.swift */; };
 		00C850377E5BF2897D0297BA /* MihomoControl in Frameworks */ = {isa = PBXBuildFile; productRef = B8FB655E9FEE8FB2ECC3488E /* MihomoControl */; };
 		01024EFC78B3BEDE281E5039 /* ProfileEditorPrompt.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6B72B6CF0012F8AA7B7F1D5 /* ProfileEditorPrompt.swift */; };
 		0163B2450BA163D262B26FF4 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 13F4018AFC1722FD14C83B5D /* Cocoa.framework */; };
@@ -148,6 +149,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		FD12EBAF3100432EA911A001 /* AppProxyConnection.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppProxyConnection.swift; sourceTree = "<group>"; };
 		040A80588D1F84CAC68827CF /* AppProxyDNSRequest.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppProxyDNSRequest.swift; sourceTree = "<group>"; };
 		048148D6F15A519C68068D05 /* ComponentSynchronizer.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ComponentSynchronizer.swift; sourceTree = "<group>"; };
 		12FE68725B51DA4DB03D050F /* LocalDoHManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LocalDoHManager.swift; sourceTree = "<group>"; };
@@ -322,6 +324,7 @@
 			children = (
 				394831A4517299F390E9D28F /* AIProxyConfiguration.swift */,
 				861665DC4A71642FB7D34B4F /* AppProbeProvider.swift */,
+				FD12EBAF3100432EA911A001 /* AppProxyConnection.swift */,
 				040A80588D1F84CAC68827CF /* AppProxyDNSRequest.swift */,
 				91023ACD71C239B312BDE5EA /* AppProxyUDPBridge.swift */,
 				AEDF44553ED5CE10F7F62DE6 /* ProbeSessionConfiguration.swift */,
@@ -643,6 +646,7 @@
 			files = (
 				7C525E0E7F8E129B08DF1BAF /* AIProxyConfiguration.swift in Sources */,
 				89DB946446DDB52CB0E33CE6 /* AppProbeProvider.swift in Sources */,
+				FD12EBAF3100432EA911A002 /* AppProxyConnection.swift in Sources */,
 				69D09D229C579CB636B8E7F2 /* AppProxyDNSRequest.swift in Sources */,
 				C6F947C64E04532D68EAE892 /* AppProxyUDPBridge.swift in Sources */,
 				FB91AA89344954D3042C08DF /* ProbeSessionConfiguration.swift in Sources */,
