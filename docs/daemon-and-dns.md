@@ -24,6 +24,12 @@ approved again; the fixed profile identifier remains unchanged.
 Enhanced TUN does not require this setup: it uses verified Global DNS when the
 certificate, profile, or listener is not ready.
 
+Standby health permits another VPN to own the Fake-IP destination route: the
+managed core has TUN disabled and answers with real addresses. Enhanced TUN
+still requires a route owned by this runtime; a preexisting VPN route cannot
+satisfy that check. This allows installation and updates while another VPN is
+active without changing that VPN's routes.
+
 ```text
 macOS default DNS -> https://127.0.0.1/dns-query (root daemon, port 443)
                  |-> root-private AF_UNIX /dns-query -> Mihomo DNS packet resolver

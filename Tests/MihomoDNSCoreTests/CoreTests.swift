@@ -138,6 +138,43 @@ final class CoreTests: XCTestCase {
         )
     }
 
+    func testStandbyAcceptsForeignVPNWithoutRelaxingEnhancedTUNHealth() {
+        for visible in [nil, "utun9"] as [String?] {
+            let owned = RuntimeRouteOwnership.ownedInterface(
+                controllerReachable: true, tunEnabled: false,
+                visibleInterface: visible, preexistingInterface: visible
+            )
+            XCTAssertNil(owned)
+            XCTAssertTrue(RuntimeReadiness.isReady(
+                baseRuntimeReady: true, expectsEnhancedTUN: false,
+                tunEnabled: false, ownedRouteReady: owned != nil,
+                usesLocalDoH: true, dnsBridgeReady: false
+            ))
+        }
+        for expectsTUN in [false, true] {
+            XCTAssertFalse(RuntimeReadiness.isReady(
+                baseRuntimeReady: false, expectsEnhancedTUN: expectsTUN,
+                tunEnabled: expectsTUN, ownedRouteReady: true,
+                usesLocalDoH: true, dnsBridgeReady: true
+            ))
+        }
+        XCTAssertFalse(RuntimeReadiness.isReady(
+            baseRuntimeReady: true, expectsEnhancedTUN: true,
+            tunEnabled: true, ownedRouteReady: false,
+            usesLocalDoH: true, dnsBridgeReady: true
+        ))
+        XCTAssertFalse(RuntimeReadiness.isReady(
+            baseRuntimeReady: true, expectsEnhancedTUN: false,
+            tunEnabled: true, ownedRouteReady: true,
+            usesLocalDoH: true, dnsBridgeReady: false
+        ))
+        XCTAssertFalse(RuntimeReadiness.isReady(
+            baseRuntimeReady: true, expectsEnhancedTUN: false,
+            tunEnabled: false, ownedRouteReady: false,
+            usesLocalDoH: false, dnsBridgeReady: true
+        ))
+    }
+
     func testListenerErrorClassificationNeverIncludesArbitraryErrorText() {
         XCTAssertEqual(
             DNSListenerErrorClassifier.fields(for: DNSMessageError.invalidLength),

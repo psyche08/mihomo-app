@@ -210,13 +210,14 @@ public enum MihomoRuntimeInspector {
         )
         let routeReady = routeInterface != nil
         let baseRuntimeReady = controller.reachable && fakeIPMode && mihomoDNSReady
-        let enhancedRuntimeReady = baseRuntimeReady && tunEnabled && routeReady
-            && (configuration.localDoH != nil || dnsBridgeReady)
-        let standbyRuntimeReady = baseRuntimeReady && !tunEnabled
-            && visibleRouteInterface == nil && configuration.localDoH != nil
-        let runtimeReady = configuration.expectsEnhancedTUN
-            ? enhancedRuntimeReady
-            : standbyRuntimeReady
+        let runtimeReady = RuntimeReadiness.isReady(
+            baseRuntimeReady: baseRuntimeReady,
+            expectsEnhancedTUN: configuration.expectsEnhancedTUN,
+            tunEnabled: tunEnabled,
+            ownedRouteReady: routeReady,
+            usesLocalDoH: configuration.localDoH != nil,
+            dnsBridgeReady: dnsBridgeReady
+        )
         let systemDNSRestored = !systemDNSManaged
             && ((try? preferences.containsManagedServerPersistently()) == false)
             && ((try? preferences.containsManagedServerEffectively()) == false)
@@ -586,6 +587,25 @@ public enum MihomoRuntimeInspector {
         }
         let interface = String(cString: name)
         return interface.hasPrefix("utun") ? interface : nil
+    }
+}
+
+enum RuntimeReadiness {
+    static func isReady(
+        baseRuntimeReady: Bool,
+        expectsEnhancedTUN: Bool,
+        tunEnabled: Bool,
+        ownedRouteReady: Bool,
+        usesLocalDoH: Bool,
+        dnsBridgeReady: Bool
+    ) -> Bool {
+        if expectsEnhancedTUN {
+            return baseRuntimeReady && tunEnabled && ownedRouteReady
+                && (usesLocalDoH || dnsBridgeReady)
+        }
+        // Standby issues real DNS answers and owns no TUN routes. An existing
+        // VPN's route through the Fake-IP range must not block this runtime.
+        return baseRuntimeReady && !tunEnabled && usesLocalDoH
     }
 }
 
