@@ -103,6 +103,9 @@ final class AppProbeProvider: NEAppProxyProvider {
                           self.aiConfiguration != nil || (["example.com", "example.org"].contains(candidate) && port == 443) else {
                         self.count("rejected_missing_or_unexpected_hostname"); self.reject(flow); return
                     }
+                    guard !local || Self.isLoopback(candidate) || flow.networkInterface != nil else {
+                        self.count("rejected_missing_bypass_interface"); self.reject(flow); return
+                    }
                     self.count("hostname_tcp_" + identity)
                     let bridge = AppProbeTCPBridge(flow: tcp, host: candidate, port: port, local: local, proxyPort: proxyPort, queue: self.queue,
                                                    count: self.count, finished: finished)
@@ -179,7 +182,7 @@ private final class AppProbeTCPBridge {
     let queue: DispatchQueue
     let count: (String) -> Void
     let finished: () -> Void
-    let connection: NWConnection
+    let connection: AppProxyConnection
     let local: Bool
     var closed = false
     var clientEOF = false
@@ -189,8 +192,9 @@ private final class AppProbeTCPBridge {
     init(flow: NEAppProxyTCPFlow, host: String, port: UInt16, local: Bool, proxyPort: UInt16, queue: DispatchQueue,
          count: @escaping (String) -> Void, finished: @escaping () -> Void) {
         self.local = local
-        self.connection = local ? NWConnection(host: Network.NWEndpoint.Host(host), port: Network.NWEndpoint.Port(rawValue: port)!, using: .tcp)
-                                : NWConnection(host: "127.0.0.1", port: Network.NWEndpoint.Port(rawValue: proxyPort)!, using: .tcp)
+        self.connection = AppProxyConnection(host: local ? host : "127.0.0.1",
+                                             port: local ? port : proxyPort, transport: .tcp,
+                                             interface: local && !AppProbeProvider.isLoopback(host) ? flow.networkInterface : nil)
         self.flow = flow; self.host = host; self.port = port; self.queue = queue; self.count = count; self.finished = finished
     }
     func start() {
@@ -223,7 +227,6 @@ private final class AppProbeTCPBridge {
                     }
                 }
             case .failed, .cancelled: self.close()
-            default: break
             }
         }
         connection.start(queue: queue)

@@ -267,3 +267,13 @@ Changing bypass membership requires disabling and re-enabling the extension,
 while public node selections continue to update through the root listeners.
 This ordering is independent of the Mihomo Rule/Global/Direct mode and survives
 profile regeneration because it is stored outside the generated YAML.
+
+Bypassed TCP and UDP connections retain the original flow's `networkInterface`
+through `nw_parameters_require_interface`. An unscoped provider-created
+connection can select the default physical interface even when the intercepted
+flow selected a bridge or private VPN. The native interface object is retained
+without converting it to an interface name, interface type or cached index.
+A non-loopback bypass with no interface fails closed; it never silently retries
+through the default route or the app's remote node. Loopback callbacks and SOCKS
+control connections remain unscoped loopback connections. The bounded setup,
+stream half-close, cancellation and UDP association behavior is unchanged.
