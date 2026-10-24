@@ -90,3 +90,34 @@ extension AppProxyCoordinatorTests {
         XCTAssertNotEqual(expected, AppProxyCoordinator.rulesDigest([a,b]))
     }
 }
+
+
+extension AppProxyCoordinatorTests {
+    @MainActor func testReadinessDistinguishesFailuresWithoutRelaxingChecks() {
+        let generation = UUID()
+        let healthy = AppProxyRuntimeStatus(generation: generation, ready: true, verifiedTargets: 2)
+        func issue(_ live: AppProxyRuntimeStatus?, rules: Bool = true) -> String? {
+            AppProxyCoordinator.readinessIssue(current: true, expectedGeneration: generation, rulesMatch: rules, live: live)
+        }
+        XCTAssertNil(issue(healthy))
+        XCTAssertEqual(issue(nil), "providerUnavailable")
+        XCTAssertEqual(issue(healthy, rules: false), "rulesReadbackMismatch")
+        var state = healthy; state.generation = UUID()
+        XCTAssertEqual(issue(state), "providerGenerationMismatch")
+        state = healthy; state.ready = false
+        XCTAssertEqual(issue(state), "providerNotReady")
+        state.failure = .permission
+        XCTAssertEqual(issue(state), "permission")
+        state.failure = .staleAuthorization
+        XCTAssertEqual(issue(state), "staleAuthorization")
+        XCTAssertEqual(AppProxyCoordinator.readinessIssue(current: false, expectedGeneration: nil,
+                        rulesMatch: true, live: healthy), "configurationObsolete")
+    }
+    @MainActor func testProviderReplyCannotHideFailureBehindReadyFlag() {
+        let generation = UUID()
+        let bad = AppProxyRuntimeStatus(generation: generation, ready: true, verifiedTargets: 2, failure: .signature)
+        XCTAssertThrowsError(try AppProxyCoordinator.requireProvider(bad, generation: generation)) { error in
+            XCTAssertEqual(error as? AppProxyIdentityFailure, .signature)
+        }
+    }
+}

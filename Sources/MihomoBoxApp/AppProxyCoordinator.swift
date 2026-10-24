@@ -18,6 +18,7 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
     private var maintenance: Task<Void, Never>?
     private var identityIssue: String?
     private var discoveryIssues: [String: Int] = [:]
+    private var lastReadbackObservation: String?
     override init() {
         super.init()
         maintenance = Task { [weak self] in
@@ -56,13 +57,15 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         }
         let snapshot = (configuration?["identitySnapshot"] as? Data).flatMap { try? AppProxyIdentitySnapshot.decode($0) }
         let current = configuration?["routing"] as? String == "per-application-v4" && snapshot != nil
-        let ready = current && live?.ready == true && live?.generation == snapshot?.generation
-            && manager.map { Self.rulesDigest($0.appRules) == configuration?["rulesDigest"] as? String } == true
+        let liveIssue = Self.readinessIssue(current: current, expectedGeneration: snapshot?.generation,
+            rulesMatch: manager.map { Self.rulesDigest($0.appRules) == configuration?["rulesDigest"] as? String } == true,
+            live: live)
+        let ready = liveIssue == nil
         return .init(available: isAvailable, enabled: manager?.isEnabled == true,
                      connected: manager?.connection.status == .connected,
                      requiresReactivation: manager?.isEnabled == true && (!current || (configuration?["bypassCIDRs"] as? [String]) != settings.bypass.cidrs),
                      identityReady: ready, verifiedTargetCount: ready ? live?.verifiedTargets ?? 0 : 0,
-                     identityIssue: identityIssue ?? live?.failure?.rawValue ?? (manager?.connection.status == .connected && !ready ? "generationMismatch" : nil),
+                     identityIssue: identityIssue ?? live?.failure?.rawValue ?? (manager?.connection.status == .connected ? liveIssue : nil),
                      diagnostics: live, discoveryIssues: discoveryIssues)
     }
 
@@ -145,9 +148,9 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
                     guard status.ready, status.generation == snapshot.generation else { throw AppProxyIdentityFailure.staleAuthorization }
                     manager.appRules = targets.rules
                     try await save(manager); try await reload(manager)
-                    guard sameRules(manager.appRules, targets.rules) else { throw AppProxyIdentityFailure.generationMismatch }
+                    guard sameRules(manager.appRules, targets.rules) else { throw PolicyCheckFailure.rulesReadbackMismatch }
                     let committed = try await message(.init(.status), to: manager)
-                    guard committed.ready, committed.generation == snapshot.generation else { throw AppProxyIdentityFailure.generationMismatch }
+                    try Self.requireProvider(committed, generation: snapshot.generation)
                     identityIssue = nil; return
                 }
                 try await Task.sleep(for: .seconds(1))
@@ -155,6 +158,8 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
             throw failure("App Proxy did not complete provider-local identity verification. Review code-access diagnostics and system extension approval.")
         } catch {
             let original = error
+            identityIssue = "enable:" + Self.issueCode(error)
+            AppLog.error("event=app_proxy_policy_failure phase=enable issue=\(Self.issueCode(error))")
             do { try await disable(manager) }
             catch { throw failure("App Proxy failed and disabling it could not be verified. Check VPN settings in System Settings.") }
             throw original
@@ -186,38 +191,45 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         guard !busy, available else { return }
         busy = true; defer { busy = false }
         var managed: NEAppProxyProviderManager?
+        // Fixed phase names only: no paths, bookmark data, destinations or credentials.
+        var phase = "load"
         do {
             guard let manager = try await load(), manager.isEnabled else { return }
             managed = manager
             guard let previous = manager.protocolConfiguration as? NETunnelProviderProtocol,
                   previous.providerConfiguration?["routing"] as? String == "per-application-v4",
                   let data = previous.providerConfiguration?["identitySnapshot"] as? Data else { return }
+            phase = "rulesReadback"
             let old = try AppProxyIdentitySnapshot.decode(data)
             guard Self.rulesDigest(manager.appRules) == previous.providerConfiguration?["rulesDigest"] as? String else {
-                throw AppProxyIdentityFailure.generationMismatch
+                throw PolicyCheckFailure.rulesReadbackMismatch
             }
             var uid: uid_t = 0; var gid: gid_t = 0
             guard SCDynamicStoreCopyConsoleUser(nil, &uid, &gid) != nil, uid == getuid(), old.ownerUID == uid else {
                 throw AppProxyIdentityFailure.wrongUser
             }
+            phase = "discovery"
             let settings = try await ControlGateway().fetchAppProxyRouting().settings
             let targets = try await Task.detached { try AIAppTargets(requireAll: false, applications: settings.applications) }.value
             discoveryIssues = Dictionary(grouping: targets.issues, by: { $0.category + ":" + $0.failure.rawValue }).mapValues(\.count)
             let records = targets.targets.map(\.identity)
             try old.validateRefresh(records)
             if records == old.records, manager.connection.status == .connected {
+                phase = "renew"
                 let state = try await message(.init(.renew, expected: old.generation), to: manager)
-                guard state.ready, state.generation == old.generation else { throw state.failure ?? .generationMismatch }
+                try Self.requireProvider(state, generation: old.generation)
                 identityIssue = nil; return
             }
             let previousPorts = previous.providerConfiguration?["ports"] as? [String: Int]
             guard previousPorts == Dictionary(uniqueKeysWithValues: settings.applications.map { ($0.id, Int($0.port)) }),
                   previous.providerConfiguration?["bypassCIDRs"] as? [String] == settings.bypass.cidrs else { throw AppProxyIdentityFailure.needsAuthorization }
+            phase = "codeAccess"
             let next = try await codeAccess.snapshot(records: records, interactive: false)
             let raw = try configuration(settings: settings, targets: targets, snapshot: next)
             let oldRules = manager.appRules
             let wasConnected = manager.connection.status == .connected
             if wasConnected {
+                phase = "prepare"
                 let wire = try PropertyListSerialization.data(fromPropertyList: raw, format: .binary, options: 0)
                 let state = try await message(.init(.prepare, expected: old.generation, configuration: wire), to: manager)
                 guard state.failure == nil else { throw state.failure! }
@@ -225,26 +237,29 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
             let updated = previous.copy() as! NETunnelProviderProtocol
             updated.providerConfiguration = raw
             do {
+                phase = "saveReadback"
                 manager.protocolConfiguration = updated; manager.appRules = wasConnected ? targets.rules : []
                 try await save(manager); try await reload(manager)
-                guard sameRules(manager.appRules, wasConnected ? targets.rules : []),
-                      let saved = manager.protocolConfiguration as? NETunnelProviderProtocol,
-                      NSDictionary(dictionary: saved.providerConfiguration ?? [:]).isEqual(to: raw) else { throw AppProxyIdentityFailure.generationMismatch }
+                guard sameRules(manager.appRules, wasConnected ? targets.rules : []) else { throw PolicyCheckFailure.rulesReadbackMismatch }
+                guard let saved = manager.protocolConfiguration as? NETunnelProviderProtocol,
+                      NSDictionary(dictionary: saved.providerConfiguration ?? [:]).isEqual(to: raw) else { throw PolicyCheckFailure.configurationReadbackMismatch }
                 if [.disconnected, .invalid].contains(manager.connection.status) { try manager.connection.startVPNTunnel() }
                 for _ in 0..<10 {
                     if manager.connection.status == .connected { break }
                     try await Task.sleep(for: .seconds(1))
                 }
+                phase = "commit"
                 let live = try await message(.init(.status), to: manager)
                 let committed = live.generation == next.generation ? live : try await message(.init(.commit, expected: next.generation), to: manager)
-                guard committed.ready, committed.generation == next.generation else { throw committed.failure ?? .generationMismatch }
+                try Self.requireProvider(committed, generation: next.generation)
                 if !wasConnected {
+                    phase = "restartPublication"
                     // On restart, renew grants in the provider before restoring interception rules.
                     manager.appRules = targets.rules
                     try await save(manager); try await reload(manager)
-                    guard sameRules(manager.appRules, targets.rules) else { throw AppProxyIdentityFailure.generationMismatch }
+                    guard sameRules(manager.appRules, targets.rules) else { throw PolicyCheckFailure.rulesReadbackMismatch }
                     let published = try await message(.init(.status), to: manager)
-                    guard published.ready, published.generation == next.generation else { throw AppProxyIdentityFailure.generationMismatch }
+                    try Self.requireProvider(published, generation: next.generation)
                 }
                 identityIssue = nil
             } catch {
@@ -255,13 +270,35 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
                 throw error
             }
         } catch {
-            identityIssue = (error as? AppProxyIdentityFailure ?? .unavailable).rawValue
+            identityIssue = phase + ":" + Self.issueCode(error)
+            AppLog.error("event=app_proxy_policy_failure phase=\(phase) issue=\(Self.issueCode(error))")
             // Never continue to advertise connected while authorization or policy cannot be verified.
             if let managed {
                 do { try await disable(managed) }
                 catch { identityIssue = "rollbackUnverified" }
             }
         }
+    }
+
+    enum PolicyCheckFailure: String, Error, LocalizedError {
+        case rulesReadbackMismatch, configurationReadbackMismatch, providerGenerationMismatch, providerNotReady
+        var errorDescription: String? { "App Proxy policy verification failed: " + rawValue }
+    }
+    static func issueCode(_ error: Error) -> String {
+        (error as? PolicyCheckFailure)?.rawValue ?? (error as? AppProxyIdentityFailure ?? .unavailable).rawValue
+    }
+    static func requireProvider(_ status: AppProxyRuntimeStatus, generation: UUID) throws {
+        if let failure = status.failure { throw failure }
+        guard status.generation == generation else { throw PolicyCheckFailure.providerGenerationMismatch }
+        guard status.ready else { throw PolicyCheckFailure.providerNotReady }
+    }
+    static func readinessIssue(current: Bool, expectedGeneration: UUID?, rulesMatch: Bool,
+                               live: AppProxyRuntimeStatus?) -> String? {
+        guard current, let expectedGeneration else { return "configurationObsolete" }
+        guard rulesMatch else { return PolicyCheckFailure.rulesReadbackMismatch.rawValue }
+        guard let live else { return "providerUnavailable" }
+        do { try requireProvider(live, generation: expectedGeneration); return nil }
+        catch { return issueCode(error) }
     }
 
     static func makeManager() -> NEAppProxyProviderManager {
@@ -300,7 +337,26 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         }
         let matches = managers.filter { ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == extensionID }
         guard matches.count <= 1 else { throw failure("Multiple App Proxy configurations require review in System Settings.") }
-        return matches.first
+        guard let manager = matches.first else { return nil }
+        // Use a current preference read for policy decisions; do not authorize from
+        // an enumerated manager's potentially older view. Reload failure propagates.
+        let enumerated = Self.readbackObservation(manager)
+        try await reload(manager)
+        let reloaded = Self.readbackObservation(manager)
+        let observation = "enumerated=\(enumerated) reloaded=\(reloaded)"
+        if observation != lastReadbackObservation {
+            lastReadbackObservation = observation
+            AppLog.info("event=app_proxy_preference_readback \(observation)")
+        }
+        return manager
+    }
+    // Bounded, non-identifying metadata only. Never emit rules, paths, requirements,
+    // generations, bookmarks, or their fingerprints into general application logs.
+    private static func readbackObservation(_ manager: NEAppProxyProviderManager) -> String {
+        let config = (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration
+        let matches = rulesDigest(manager.appRules) == config?["rulesDigest"] as? String
+        let toolCount = manager.appRules.reduce(0) { $0 + ($1.matchTools?.count ?? 0) }
+        return "\(manager.isEnabled ? 1 : 0):\(manager.appRules.count):\(toolCount):\(matches ? 1 : 0)"
     }
     private func save(_ manager: NEAppProxyProviderManager) async throws {
         try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in

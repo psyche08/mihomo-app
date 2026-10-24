@@ -367,3 +367,64 @@ validation passed. These environment limitations must remain explicit; results
 from this clone cannot establish acceptance under a normal SIP-enabled system.
 The test uses credential-free loopback exit fixtures, with TUN and Local DoH
 off; no Claude account, chats or real proxy credentials are copied.
+
+## Mock child-process follow-up (2026-10-24)
+
+Tart Build 52 discovered both executables of an ad-hoc test bundle placed in
+`/Applications`: a parent app and a separately signed embedded helper. The
+parent launched through LaunchServices, then either forked without exec or
+executed its embedded helper. Both child cases received the expected response
+from the credential-free loopback `fixture-a` proxy. An external executable not
+in the selected snapshot returned `EAI_NONAME` for the synthetic test domain
+and received no fixture response. This negative case is not a claim that all
+unselected traffic is blocked: it follows ordinary system routing.
+
+The OS rule policy remains explicit `matchTools`, with provider validation of
+the actual source audit token and executable identity. An embedded helper is
+included by discovery; external tools must be enrolled under their owning app.
+Parent/child ancestry by itself never authorizes an unknown executable.
+
+These are short synthetic application-response results. The provider emitted
+DNS and upstream counters, but the session stopped before complete per-child
+PID receipts were captured. Do not promote those counters to process-correlated
+acceptance, stable renewal, user-home code access, or Claude API recovery. The
+VM's inherited disabled SIP is another production-acceptance limitation.
+
+`generationMismatch` still reproduces and its exact failing check is unresolved.
+The persisted rule fields recomputed to the expected digest; an in-memory
+NEAppRule round-trip also matched. Neither establishes what a newly loaded NE
+manager exposes while running. Host diagnostics now distinguish rule readback,
+configuration readback, provider generation, provider readiness and message
+availability, and retain the maintenance phase after verified shutdown. Checks
+and fail-closed shutdown remain in place. This diagnostic change requires a new
+Cloud-signed installation to identify the failing boundary; it is not a root
+cause fix or part of Build 53. Build 53 contains the consent-modal candidate,
+which also remains unverified in the installed production broker.
+
+## Build 53 consent installation result (2026-10-24)
+
+After explicit user approval to extract only inside `mihomobox-claude-test`,
+Cloud Build 53 (`487c419347899f8cfd3727064d33dcd4430545d6`) was installed and its
+version-53 system extension activated. The original ZIP SHA-256 was
+`c6e7158e1f8624150655584a1a46be43e61f184a66032985623150729898627f`.
+App, broker and extension passed strict/deep signature verification against the
+pinned Cloud leaf. The broker retained sandbox, user-selected read-only and
+app-scoped bookmark entitlements. Build 52 was retained as a VM-local rollback
+bundle. No host or m4pro installation or network changes were made.
+
+This supersedes the earlier untested-consent status for this VM/mock case:
+production Powerbox stayed open, accepted exact selection of the user-home mock
+`.app` package, and enabled a short successful flow. Mock PID 3045 / PID version
+7904 was correlated in the UI with `handleNewFlow`, `providerValidated`,
+`dnsAnswered` and `upstream_connected` under generation
+`A792F4C7-725E-47BA-AFB0-3C13519634A4`; the same process received the expected
+synthetic fixture-a response. Restarting both the host and broker reused the
+saved authorization without another panel, and new mock PID 3093 also received
+the response. This tests same-boot broker restart, not operating-system reboot.
+
+`generationMismatch` and automatic shutdown still reproduce; the new host
+boundary diagnostics are not in Build 53. The VM was left with App Proxy off.
+Gatekeeper still rejected the bundle while reporting Notarized Developer ID,
+and SIP was already disabled in the VM base; neither protection was changed for
+this installation. Normal-SIP acceptance, OS reboot, user switching, revocation
+and real Claude API recovery remain open gates.
