@@ -7,6 +7,7 @@ cp "$ROOT/Tests/Fixtures/app-proxy-configuration.swift" "$STAGE/main.swift"
 /usr/bin/swiftc -D MAIN_APP_PROXY \
   "$ROOT/experiments/DNSIdentityProbe/Extension/AIProxyConfiguration.swift" \
   "$ROOT/Sources/MihomoControl/AppProxyBypassPolicy.swift" \
+  "$ROOT/Sources/MihomoControl/AppProxyIdentitySnapshot.swift" \
   "$STAGE/main.swift" -o "$STAGE/config-test"
 "$STAGE/config-test"
 cp "$ROOT/Tests/Fixtures/app-proxy-dns.swift" "$STAGE/main.swift"

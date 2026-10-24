@@ -58,7 +58,7 @@ struct AppProxyView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Local networks and VPNs").font(.headline)
                 if model.extensionStatus.requiresReactivation {
-                    Text("Turn App Proxy off and on to activate network bypasses after this update.")
+                    Text("Turn App Proxy off and on to upgrade identity authorization and network bypass settings.")
                         .font(.callout).foregroundStyle(.orange)
                 }
                 Text(model.draft.bypass.cidrs.isEmpty
@@ -81,10 +81,34 @@ struct AppProxyView: View {
                     .font(.system(size: 24, weight: .bold))
                 Text("\(model.draft.applications.count) apps").foregroundStyle(.secondary)
                 Spacer()
-                Label(model.extensionStatus.connected ? "Connected" : (model.extensionStatus.enabled ? "Disconnected" : "Off"),
+                Label(model.extensionStatus.identityReady ? "Code access verified" : (model.extensionStatus.connected ? "Awaiting identity verification" : (model.extensionStatus.enabled ? "Disconnected" : "Off")),
                       systemImage: model.extensionStatus.connected ? "circle.fill" : "circle")
                     .font(.callout)
-                    .foregroundStyle(model.extensionStatus.connected ? Color.green : .secondary)
+                    .foregroundStyle(model.extensionStatus.identityReady ? Color.green : .orange)
+            }
+            if let issue = model.extensionStatus.identityIssue {
+                Text(issue == "rollbackUnverified" ? "App Proxy could not verify that interception was disabled. Check MihomoBox VPN status in System Settings before retrying." : "Application identity protection: \(issue). Review code access, then turn App Proxy off and on to retry.")
+                    .font(.callout).foregroundStyle(.orange)
+            }
+            if !model.extensionStatus.discoveryIssues.isEmpty {
+                Text("Discovery exclusions: " + model.extensionStatus.discoveryIssues.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)" }.joined(separator: ", "))
+                    .font(.caption).foregroundStyle(.orange)
+            }
+            if model.extensionStatus.identityReady {
+                Text("\(model.extensionStatus.verifiedTargetCount) executable identities verified. DNS and API reachability require application traffic.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if let diagnostics = model.extensionStatus.diagnostics {
+                DisclosureGroup("Recent process validation (no traffic contents)") {
+                    Text("Generation: " + (diagnostics.generation?.uuidString ?? "unknown"))
+                        .font(.caption).textSelection(.enabled)
+                    ForEach(Array(diagnostics.recentFlows.enumerated()), id: \.offset) { _, event in
+                        Text("t=\(event.uptime, specifier: "%.3f") PID \(event.pid) / PID version \(event.pidVersion): \(event.stage) · flow \(event.flow.uuidString.prefix(8)) · policy \(event.generation?.uuidString.prefix(8) ?? "unknown")")
+                            .font(.caption.monospaced()).textSelection(.enabled)
+                    }
+                    Text("These receipts prove only the listed stages. Confirm API recovery in the originating application.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             HStack {
                 Text("Running Mode")
@@ -270,7 +294,7 @@ struct AppProxyView: View {
                     }
                 }
             }
-            Text("Rescan updates this list. Enabling App Proxy always verifies signatures again.")
+            Text("Rescan updates this list. App Proxy verifies signatures before enabling and refreshes identities while enabled.")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .padding(20).frame(width: 680, height: 520)

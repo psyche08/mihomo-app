@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>dev.linsheng.mihomo-app.code-access</string>
+<key>CFBundleExecutable</key><string>MihomoCodeAccess</string>
+<key>CFBundlePackageType</key><string>XPC!</string>
+<key>CFBundleName</key><string>MihomoBox Code Access</string>
+<key>CFBundleVersion</key><string>1</string>
+<key>XPCService</key><dict><key>ServiceType</key><string>Application</string><key>RunLoopType</key><string>NSRunLoop</string></dict>
+</dict></plist>

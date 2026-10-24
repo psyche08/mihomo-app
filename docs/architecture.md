@@ -195,6 +195,12 @@ See [daemon-and-dns.md](daemon-and-dns.md) for failure and restoration rules.
 
 ## Optional App Proxy extension
 
+The v4 identity and read-only code-access protocol is specified in
+[Claude CLI identity and authorization](claude-app-proxy-identity.md), including
+evidence limits and mandatory signed-extension acceptance gates. The application
+embeds a per-user sandboxed `MihomoCodeAccess.xpc` broker with no network access;
+it does not add a privileged daemon filesystem API.
+
 The signed application additionally embeds
 `Contents/Library/SystemExtensions/dev.linsheng.mihomo-app.app-proxy.systemextension`.
 The AppKit `AppProxyCoordinator` owns user-scoped NetworkExtension preferences
@@ -239,7 +245,8 @@ credentials or packet logs are added to the UI.
 The independent App Proxy page owns the editable application list. Default
 entries migrate from the original four-route settings without losing choices.
 Changing the list requires disabling the extension first; node-only changes
-retain stable ports. The App re-discovers signatures before enabling and rejects
+retain stable ports. The App re-discovers signatures before enabling and every 20 seconds while
+enabled, refreshes provider-local code leases transactionally, and rejects
 executables assigned to more than one entry. Open an entry’s Signed executables panel to inspect paths,
 signing identifiers, Team IDs and designated requirements. LoadBalance groups
 have no current selection; route validation checks every member recursively.
@@ -260,9 +267,10 @@ explicit CIDRs for VPNs using public or CGNAT addresses. The app never exempts
 an entire VPN interface or automatically trusts its default route. DNS port 53
 continues through the shared resolver before bypass matching. Fake-IP space is
 not a local-network bypass; overlapping custom profile ranges are rejected.
-The provider's v3 preferences contain the validated CIDRs. Legacy root settings
-decode with default ranges, but saved v1/v2 VPN preferences retain their old
-forwarding behavior until reactivation installs v3; the UI marks this explicitly.
+The provider's v4 preferences bind validated CIDRs to identity and authorization
+generations. Legacy root settings decode with default ranges, but saved v1–v3
+VPN preferences require explicit reactivation to enroll read-only code access;
+the UI marks this explicitly.
 Changing bypass membership requires disabling and re-enabling the extension,
 while public node selections continue to update through the root listeners.
 This ordering is independent of the Mihomo Rule/Global/Direct mode and survives

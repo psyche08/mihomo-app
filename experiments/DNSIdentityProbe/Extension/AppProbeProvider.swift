@@ -3,6 +3,7 @@ import Darwin
 import Network
 import NetworkExtension
 import os
+import SystemConfiguration
 
 private let appLog = Logger(subsystem: "dev.linsheng.mihomo-dns-probe", category: "app-proxy")
 
@@ -13,6 +14,13 @@ final class AppProbeProvider: NEAppProxyProvider {
     private var expiry: DispatchWorkItem?
     private var active = false
     private var aiConfiguration: AIProxyConfiguration?
+    private var accessLease: AppProxyAccessLease?
+    private var pendingAccess: (AIProxyConfiguration, AppProxyAccessLease)?
+    private var generationGate: AppProxyGenerationGate?
+    private var leaseTimer: DispatchSourceTimer?
+    private var lastRenewal: TimeInterval = 0
+    private var lastFailure: AppProxyIdentityFailure?
+    private var flowEvidence: [AppProxyFlowEvidence] = []
     private var dnsRequests: [UUID: AppProxyDNSRequest] = [:]
 
     override func startProxy(options: [String: Any]?, completionHandler: @escaping (Error?) -> Void) {
@@ -23,6 +31,21 @@ final class AppProbeProvider: NEAppProxyProvider {
         if raw["mode"] as? String == "ai" {
             guard let config = try? AIProxyConfiguration(raw, now: Date().timeIntervalSince1970) else {
                 completionHandler(NSError(domain: "AppProbe", code: 1)); return
+            }
+            do {
+                #if MAIN_APP_PROXY
+                guard let snapshot = config.snapshot else { throw AppProxyIdentityFailure.needsAuthorization }
+                guard Self.consoleUID() == snapshot.ownerUID else { throw AppProxyIdentityFailure.wrongUser }
+                accessLease = try AppProxyAccessLease(snapshot)
+                generationGate = AppProxyGenerationGate(snapshot.generation)
+                lastRenewal = ProcessInfo.processInfo.systemUptime
+                #endif
+            } catch {
+                let reason = error as? AppProxyIdentityFailure ?? .permission
+                lastFailure = reason
+                appLog.error("app_code_access_failed \(reason.rawValue, privacy: .public)")
+                completionHandler(NSError(domain: "MihomoBox.AppProxy.Authorization", code: 1,
+                                          userInfo: [NSLocalizedDescriptionKey: reason.rawValue])); return
             }
             aiConfiguration = config; deadline = config.deadline
         } else {
@@ -49,6 +72,7 @@ final class AppProbeProvider: NEAppProxyProvider {
             self.queue.async {
                 guard error == nil else { completionHandler(error); return }
                 self.active = true
+                self.startLeaseTimer()
                 if let deadline {
                 let expiry = DispatchWorkItem { [weak provider = self] in
                     provider?.active = false
@@ -65,7 +89,8 @@ final class AppProbeProvider: NEAppProxyProvider {
 
     override func stopProxy(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         queue.async {
-            self.active = false; self.expiry?.cancel()
+            self.active = false; self.expiry?.cancel(); self.leaseTimer?.cancel(); self.leaseTimer = nil
+            self.accessLease = nil; self.pendingAccess = nil; self.generationGate = nil
             for close in Array(self.closers.values) { close() }
             self.closers.removeAll()
             for request in Array(self.dnsRequests.values) { request.cancel() }
@@ -76,22 +101,38 @@ final class AppProbeProvider: NEAppProxyProvider {
     }
 
     override func handleNewFlow(_ flow: NEAppProxyFlow) -> Bool {
-        let identity = aiConfiguration?.classify(flow.metaData) ?? (aiConfiguration == nil ? classifyProbeIdentity(flow.metaData) : "unknown")
         queue.async {
+            let receipt = UUID()
+            let activeIdentity = self.aiConfiguration?.classify(flow.metaData)
+            let pendingIdentity = activeIdentity == nil ? self.pendingAccess?.0.classify(flow.metaData) : nil
+            let generation = pendingIdentity != nil ? self.pendingAccess?.1.snapshot.generation : self.accessLease?.snapshot.generation
+            let identity = activeIdentity ?? pendingIdentity ?? (self.aiConfiguration == nil ? classifyProbeIdentity(flow.metaData) : "unknown")
+            self.record(receipt, flow.metaData.sourceAppAuditToken, "handleNewFlow", generation: generation)
+            if let snapshot = self.aiConfiguration?.snapshot, Self.consoleUID() != snapshot.ownerUID {
+                self.lastFailure = .wrongUser
+                self.record(receipt, flow.metaData.sourceAppAuditToken, "identity_wrongUser", generation: generation)
+                self.record(receipt, flow.metaData.sourceAppAuditToken, "providerRejected", generation: generation)
+                self.reject(flow); return
+            }
             guard self.active, (self.aiConfiguration != nil ? identity != "unknown" : ["selected", "helper"].contains(identity)), self.closers.count < (self.aiConfiguration == nil ? 128 : 1024) else {
-                self.count("rejected_identity_or_capacity")
+                if let config = self.aiConfiguration {
+                    do { _ = try config.classifyValidated(flow.metaData) }
+                    catch { self.record(receipt, flow.metaData.sourceAppAuditToken, "identity_" + (error as? AppProxyIdentityFailure ?? .runtimeIdentity).rawValue, generation: generation) }
+                }
+                self.record(receipt, flow.metaData.sourceAppAuditToken, "providerRejected", generation: generation); self.count("rejected_identity_or_capacity")
                 self.reject(flow); return
             }
             guard let proxyPort = self.aiConfiguration.map({ $0.proxyPort(for: identity) }) ?? UInt16(7897) else {
                 self.count("rejected_unattributed_tool"); self.reject(flow); return
             }
+            self.record(receipt, flow.metaData.sourceAppAuditToken, "providerValidated", generation: generation)
             self.count("flow_" + identity)
             let id = UUID()
             let finished = { self.closers.removeValue(forKey: id); return }
             if let tcp = flow as? NEAppProxyTCPFlow,
                let endpoint = tcp.remoteEndpoint as? NWHostEndpoint {
                 if endpoint.port == "53" {
-                    self.startDNS(flow, id: id, identity: identity, finished: finished)
+                    self.startDNS(flow, id: id, identity: identity, receipt: receipt, generation: generation, finished: finished)
                 } else {
                     // Prefer metadata's original name; retain numeric destinations
                     // when low-level clients have already resolved them.
@@ -108,16 +149,26 @@ final class AppProbeProvider: NEAppProxyProvider {
                     }
                     self.count("hostname_tcp_" + identity)
                     let bridge = AppProbeTCPBridge(flow: tcp, host: candidate, port: port, local: local, proxyPort: proxyPort, queue: self.queue,
-                                                   count: self.count, finished: finished)
+                                                   count: { key in
+                        self.count(key)
+                        if ["socks_rejected", "upstream_failed", "upstream_timeout", "flow_open_failed", "upstream_connected"].contains(key) {
+                            self.record(receipt, flow.metaData.sourceAppAuditToken, key, generation: generation)
+                        }
+                    }, finished: finished)
                     self.closers[id] = { bridge.close() }; bridge.start()
                 }
             } else if let udp = flow as? NEAppProxyUDPFlow {
                 if self.aiConfiguration != nil {
                     let bridge = AppProxyUDPBridge(flow: udp, proxyPort: proxyPort, bypass: self.aiConfiguration!.bypass, queue: self.queue, forwardDNS: { query, reply in
-                        self.forwardDNS(query, identity: identity, reply: reply)
-                    }, count: self.count, finished: finished)
+                        self.forwardDNS(query, identity: identity, receipt: receipt, generation: generation, token: flow.metaData.sourceAppAuditToken, reply: reply)
+                    }, count: { key in
+                        self.count(key)
+                        if ["socks_rejected", "upstream_failed", "upstream_timeout", "flow_open_failed", "upstream_connected"].contains(key) {
+                            self.record(receipt, flow.metaData.sourceAppAuditToken, key, generation: generation)
+                        }
+                    }, finished: finished)
                     self.closers[id] = { bridge.close() }; bridge.start()
-                } else { self.startDNS(flow, id: id, identity: identity, finished: finished) }
+                } else { self.startDNS(flow, id: id, identity: identity, receipt: receipt, generation: generation, finished: finished) }
             } else { self.count("rejected_flow_type"); self.reject(flow) }
         }
         // Accepted flows are bridged by policy or explicitly closed. Returning
@@ -139,27 +190,92 @@ final class AppProbeProvider: NEAppProxyProvider {
         return host.lowercased() == "localhost"
     }
 
-    private func startDNS(_ flow: NEAppProxyFlow, id: UUID, identity: String, finished: @escaping () -> Void) {
+    private func startDNS(_ flow: NEAppProxyFlow, id: UUID, identity: String, receipt: UUID, generation: UUID?, finished: @escaping () -> Void) {
         let handler = FlowHandler(flow: flow, queue: queue, forward: { query, reply in
-            self.forwardDNS(query, identity: identity, reply: reply)
+            self.forwardDNS(query, identity: identity, receipt: receipt, generation: generation, token: flow.metaData.sourceAppAuditToken, reply: reply)
         }, acceptsEndpoint: { ($0 as? NWHostEndpoint)?.port == "53" }, finished: finished)
         closers[id] = { handler.close() }; handler.start()
     }
 
-    private func forwardDNS(_ query: Data, identity: String, reply: @escaping (Data?) -> Void) {
+    private func forwardDNS(_ query: Data, identity: String, receipt: UUID, generation: UUID?, token: Data?, reply: @escaping (Data?) -> Void) {
         guard active, query.count >= 12, query.count <= 65535, query[2] & 0x80 == 0 else { reply(nil); return }
-        guard dnsRequests.count < 128 else { count("dns_overload"); reply(nil); return }
+        guard dnsRequests.count < 128 else { record(receipt, token, "dnsFailed", generation: generation); count("dns_overload"); reply(nil); return }
         count("dns_query_" + identity)
         let id = UUID()
         let request = AppProxyDNSRequest(query: query, queue: queue) { data in
             self.dnsRequests.removeValue(forKey: id)
             guard self.active, let data else {
-                self.count("dns_failed_" + identity); reply(nil); return
+                self.record(receipt, token, "dnsFailed", generation: generation); self.count("dns_failed_" + identity); reply(nil); return
             }
-            self.count("dns_answered_" + identity); reply(data)
+            self.record(receipt, token, "dnsAnswered", generation: generation); self.count("dns_answered_" + identity); reply(data)
         }
         dnsRequests[id] = request
         request.start()
+    }
+
+    private func record(_ flow: UUID, _ token: Data?, _ stage: String, generation: UUID?) {
+        flowEvidence.append(.init(flow: flow, token: token, stage: stage, generation: generation))
+        if flowEvidence.count > 64 { flowEvidence.removeFirst(flowEvidence.count - 64) }
+    }
+    private static func consoleUID() -> UInt32? {
+        var uid: uid_t = 0; var gid: gid_t = 0
+        guard SCDynamicStoreCopyConsoleUser(nil, &uid, &gid) != nil, uid != 0 else { return nil }
+        return uid
+    }
+    private func startLeaseTimer() {
+        guard accessLease != nil else { return }
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + 5, repeating: 5)
+        timer.setEventHandler { [weak self] in
+            guard let self, let snapshot = self.accessLease?.snapshot else { return }
+            if self.generationGate?.expirePrepared(now: ProcessInfo.processInfo.systemUptime) == true { self.pendingAccess = nil }
+            if Self.consoleUID() != snapshot.ownerUID || ProcessInfo.processInfo.systemUptime - self.lastRenewal > 90 {
+                self.lastFailure = Self.consoleUID() != snapshot.ownerUID ? .wrongUser : .staleAuthorization
+                self.active = false
+                self.cancelProxyWithError(NSError(domain: "MihomoBox.AppProxy.Authorization", code: 2))
+            }
+        }
+        leaseTimer = timer; timer.resume()
+    }
+    override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)? = nil) {
+        queue.async {
+            var failure: AppProxyIdentityFailure?
+            do {
+                guard messageData.count <= AppProxyIdentitySnapshot.maximumBytes + 65536,
+                      let lease = self.accessLease, self.generationGate != nil, Self.consoleUID() == lease.snapshot.ownerUID else { throw AppProxyIdentityFailure.wrongUser }
+                let message = try JSONDecoder().decode(AppProxyRuntimeMessage.self, from: messageData)
+                switch message.action {
+                case .status: break
+                case .prepare:
+                    guard let data = message.configuration, data.count <= AppProxyIdentitySnapshot.maximumBytes,
+                          let raw = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else { throw AppProxyIdentityFailure.malformed }
+                    let config = try AIProxyConfiguration(raw, now: Date().timeIntervalSince1970)
+                    guard let snapshot = config.snapshot, snapshot.ownerUID == lease.snapshot.ownerUID,
+                          config.ports == self.aiConfiguration?.ports,
+                          let expected = message.expected else { throw AppProxyIdentityFailure.malformed }
+                    let prepared = try AppProxyAccessLease(snapshot)
+                    try self.generationGate?.prepare(snapshot.generation, expected: expected, now: ProcessInfo.processInfo.systemUptime)
+                    self.pendingAccess = (config, prepared)
+                case .commit:
+                    guard let expected = message.expected, let pending = self.pendingAccess,
+                          pending.1.snapshot.generation == expected else { throw AppProxyIdentityFailure.generationMismatch }
+                    try pending.1.revalidate()
+                    try self.generationGate?.commit(expected, now: ProcessInfo.processInfo.systemUptime)
+                    self.aiConfiguration = pending.0; self.accessLease = pending.1; self.pendingAccess = nil
+                    self.lastRenewal = ProcessInfo.processInfo.systemUptime; self.lastFailure = nil
+                case .abort: self.pendingAccess = nil; self.generationGate?.abort()
+                case .renew:
+                    guard message.expected == lease.snapshot.generation else { throw AppProxyIdentityFailure.generationMismatch }
+                    try lease.revalidate()
+                    self.lastRenewal = ProcessInfo.processInfo.systemUptime
+                }
+            } catch { failure = error as? AppProxyIdentityFailure ?? .malformed }
+            let status = AppProxyRuntimeStatus(generation: self.accessLease?.snapshot.generation,
+                ready: self.active && failure == nil && self.lastFailure == nil,
+                verifiedTargets: self.accessLease?.snapshot.records.count ?? 0,
+                failure: failure ?? self.lastFailure, counters: self.counts, recentFlows: self.flowEvidence)
+            completionHandler?(try? JSONEncoder().encode(status))
+        }
     }
 
     private func reject(_ flow: NEAppProxyFlow) {
@@ -170,7 +286,7 @@ final class AppProbeProvider: NEAppProxyProvider {
     private func count(_ key: String) {
         counts[key, default: 0] += 1
         let value = counts[key]!
-        if ["udp_sent", "udp_received", "local_udp_sent", "local_udp_received"].contains(key), value > 8, value & (value - 1) != 0 { return }
+        if value > 8, value & (value - 1) != 0 { return }
         appLog.notice("app_counter \(key, privacy: .public)=\(self.counts[key]!, privacy: .public)")
     }
 }
@@ -198,7 +314,7 @@ private final class AppProbeTCPBridge {
         self.flow = flow; self.host = host; self.port = port; self.queue = queue; self.count = count; self.finished = finished
     }
     func start() {
-        let timer = DispatchWorkItem { [weak self] in self?.close() }
+        let timer = DispatchWorkItem { [weak self] in self?.count("upstream_timeout"); self?.close() }
         self.timer = timer; queue.asyncAfter(deadline: .now() + 30, execute: timer)
         connection.stateUpdateHandler = { state in
             switch state {
@@ -208,7 +324,7 @@ private final class AppProbeTCPBridge {
                 self.send(Data([5, 1, 0])) {
                     self.readExact(2) { data in
                         guard data == Data([5, 0]), let request = SOCKSConnect.request(host: self.host, port: self.port) else {
-                            self.close(); return
+                            self.count("socks_rejected"); self.close(); return
                         }
                         self.send(request) {
                             self.readExact(4) { header in
@@ -218,7 +334,7 @@ private final class AppProbeTCPBridge {
                                 if size > 0 { self.readExact(size) { _ in self.open() } }
                                 else {
                                     self.readExact(1) { length in
-                                        guard let n = length.first, n > 0 else { self.close(); return }
+                                        guard let n = length.first, n > 0 else { self.count("socks_rejected"); self.close(); return }
                                         self.readExact(Int(n) + 2) { _ in self.open() }
                                     }
                                 }
@@ -226,7 +342,8 @@ private final class AppProbeTCPBridge {
                         }
                     }
                 }
-            case .failed, .cancelled: self.close()
+            case .failed: self.count("upstream_failed"); self.close()
+            case .cancelled: self.close()
             }
         }
         connection.start(queue: queue)
@@ -234,20 +351,23 @@ private final class AppProbeTCPBridge {
     func send(_ data: Data, then: @escaping () -> Void) {
         guard !closed else { return }
         connection.send(content: data, completion: .contentProcessed { error in
-            if error != nil { self.close() } else if !self.closed { then() }
+            if error != nil { self.count("upstream_failed"); self.close() } else if !self.closed { then() }
         })
     }
     func readExact(_ length: Int, _ completion: @escaping (Data) -> Void) {
         guard !closed else { return }
         connection.receive(minimumIncompleteLength: length, maximumLength: length) { data, _, _, error in
-            guard !self.closed, error == nil, let data, data.count == length else { self.close(); return }
+            guard !self.closed else { return }
+            guard error == nil, let data, data.count == length else { self.count("upstream_failed"); self.close(); return }
             completion(data)
         }
     }
     func open() {
+        count("upstream_connected")
         flow.open(withLocalEndpoint: nil) { error in
             self.queue.async {
-                guard !self.closed, error == nil else { self.close(); return }
+                guard !self.closed else { return }
+                guard error == nil else { self.count("flow_open_failed"); self.close(); return }
                 self.timer?.cancel()
                 // The 30-second deadline covers setup only. Streaming responses
                 // and WebSockets live until EOF, error or provider shutdown.

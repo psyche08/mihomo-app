@@ -57,6 +57,14 @@ runs Swift and shell tests, builds the bundle through
 `scripts/build-macos-app.sh`, and performs structural checks on the final App.
 It never installs the LaunchDaemon and never changes the current network.
 
+The bundle also embeds `Contents/XPCServices/MihomoCodeAccess.xpc`. Its Cloud
+target uses the host signing leaf and read-only user-selected/app-scope bookmark
+entitlements, with App Sandbox and no network or temporary file exceptions.
+The signed bundle check verifies these boundaries as well as the App Proxy
+extension sandbox. Local sandbox fixture tests do not validate production XPC
+authentication or root NetworkExtension access; see the
+[identity acceptance matrix](claude-app-proxy-identity.md#validation-matrix).
+
 ## GitHub publication from Xcode Cloud
 
 Starting with 0.9.3, the formal release set contains exactly two files:

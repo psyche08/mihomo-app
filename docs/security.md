@@ -248,3 +248,17 @@ bytes to the daemon through XPC.
   self-termination.
 - Repeated child failures use bounded exponential backoff and open a circuit
   after six short-lived failures instead of looping indefinitely.
+
+## App Proxy code access
+
+[Claude CLI identity and authorization](claude-app-proxy-identity.md) documents
+the v4 trust boundary and its unverified deployment gates. A per-user sandboxed
+XPC broker receives read-only Powerbox consent, stores its own app-scoped
+bookmarks and delegates ephemeral exact-file capabilities. Both XPC peers check
+the exact signing leaf and bundle ID; the broker also checks the caller UID.
+The root provider validates actual file access before rule publication and
+retains OS designated requirements, audit-token runtime checks, code hashes,
+file stamps and console-owner leases. No arbitrary root read API or broad
+sandbox exception is introduced. New publishers and ad-hoc code replacements
+need explicit approval. Same-UID and separate root sandbox fixture success are not evidence that real
+NetworkExtension or Claude end-to-end behavior has been validated.

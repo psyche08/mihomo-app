@@ -19,12 +19,21 @@ public struct AppProxyExtensionStatus: Equatable, Sendable {
     public var enabled: Bool
     public var connected: Bool
     public var requiresReactivation: Bool
+    public var discoveryIssues: [String: Int]
+    public var identityReady: Bool
+    public var verifiedTargetCount: Int
+    public var identityIssue: String?
+    public var diagnostics: AppProxyRuntimeStatus?
     public var targetCounts: [String: Int]
     public var executables: [AppProxyExecutable]
-    public init(available: Bool, enabled: Bool = false, connected: Bool = false, requiresReactivation: Bool = false, targetCounts: [String: Int] = [:], executables: [AppProxyExecutable] = []) {
+    public init(available: Bool, enabled: Bool = false, connected: Bool = false, requiresReactivation: Bool = false, targetCounts: [String: Int] = [:], executables: [AppProxyExecutable] = [], identityReady: Bool = false, verifiedTargetCount: Int = 0,
+                identityIssue: String? = nil, diagnostics: AppProxyRuntimeStatus? = nil, discoveryIssues: [String: Int] = [:]) {
         self.available = available; self.enabled = enabled; self.connected = connected; self.targetCounts = targetCounts
         self.requiresReactivation = requiresReactivation
         self.executables = executables
+        self.discoveryIssues = discoveryIssues
+        self.identityReady = identityReady; self.verifiedTargetCount = verifiedTargetCount
+        self.identityIssue = identityIssue; self.diagnostics = diagnostics
     }
 }
 
@@ -60,6 +69,7 @@ public final class AppProxyStore: ObservableObject {
     @Published public private(set) var discoveryError: String?
     private var discoveredApplications: [AppProxyEntry]?
     private var discoveryGeneration = 0
+    private var discoveredAt = Date.distantPast
     private let gateway: any AppProxyRoutingGateway
     public convenience init() { self.init(gateway: ControlGateway()) }
     init(gateway: any AppProxyRoutingGateway) { self.gateway = gateway }
@@ -173,13 +183,14 @@ public final class AppProxyStore: ObservableObject {
         extensionStatus.executables = executables
         extensionStatus.targetCounts = Dictionary(grouping: executables, by: \.applicationID).mapValues(\.count)
         discoveredApplications = applications
+        discoveredAt = Date()
         discoveryError = nil
     }
 
     /// This cache is display-only. Activation always revalidates signatures.
     public func refreshExecutables(force: Bool = false) async {
         guard !preview, !scanning, !busy, let service,
-              force || !hasExecutableInventory else { return }
+              force || !hasExecutableInventory || Date().timeIntervalSince(discoveredAt) > 30 else { return }
         scanning = true
         discoveryGeneration += 1
         let generation = discoveryGeneration

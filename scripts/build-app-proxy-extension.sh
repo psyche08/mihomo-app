@@ -8,6 +8,7 @@ mkdir -p "$DESTINATION/Contents/MacOS"
 xcrun swiftc -O -D MAIN_APP_PROXY -target "$ARCH-apple-macos14.0" \
   -module-name MihomoAppProxy "$ROOT"/experiments/DNSIdentityProbe/Extension/*.swift \
   "$ROOT/Sources/MihomoControl/AppProxyBypassPolicy.swift" \
+  "$ROOT/Sources/MihomoControl/AppProxyIdentitySnapshot.swift" \
   -o "$DESTINATION/Contents/MacOS/MihomoAppProxy"
 /usr/bin/sed \
   -e 's/$(EXECUTABLE_NAME)/MihomoAppProxy/g' \

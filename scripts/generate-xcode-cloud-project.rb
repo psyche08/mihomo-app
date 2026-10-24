@@ -35,6 +35,7 @@ if ARGV == ["--check"]
     "MihomoAgent" => ROOT.join("Sources/MihomoAgent"),
     "MihomoBoxCLI" => ROOT.join("Sources/MihomoBoxCLI"),
     "MihomoAppProxy" => ROOT.join("experiments/DNSIdentityProbe/Extension"),
+    "MihomoCodeAccess" => ROOT.join("CodeAccessService"),
   }
   abort "unexpected Xcode Cloud targets" unless project.targets.map(&:name).sort == expected_sources.keys.sort
 
@@ -43,6 +44,7 @@ if ARGV == ["--check"]
     actual = target.source_build_phase.files_references.map { |reference| reference.real_path.to_s }.sort
     expected = directory.glob("**/*.swift").map { |source| source.expand_path.to_s }.sort
     expected = (expected + [ROOT.join("Sources/MihomoControl/AppProxyBypassPolicy.swift").to_s]).sort if target_name == "MihomoAppProxy"
+    expected = (expected + [ROOT.join("Sources/MihomoControl/AppProxyIdentitySnapshot.swift").to_s]).sort if ["MihomoAppProxy", "MihomoCodeAccess"].include?(target_name)
     abort "source membership drift for #{target_name}; regenerate the project" unless actual == expected
   end
 
@@ -55,6 +57,7 @@ if ARGV == ["--check"]
     "Embed signed helper executables",
     "Embed signed pinned Mihomo",
     "Embed App Proxy system extension",
+    "Embed code access service",
     "Assemble audited application resources",
   ]
   abort "MihomoBox archive phases drifted" unless app.build_phases.map(&:display_name) == expected_phases
@@ -266,6 +269,30 @@ resources_phase.always_out_of_date = "1"
 
 shared_bypass = project.main_group.new_file("../Sources/MihomoControl/AppProxyBypassPolicy.swift")
 extension.source_build_phase.add_file_reference(shared_bypass)
+shared_identity = project.main_group.new_file("../Sources/MihomoControl/AppProxyIdentitySnapshot.swift")
+extension.source_build_phase.add_file_reference(shared_identity)
+extension.add_system_framework(["SystemConfiguration", "CryptoKit"])
+access = project.new_target(:xpc_service, "MihomoCodeAccess", :osx, "14.0")
+configure_target(access, "MihomoCodeAccess")
+access.build_configurations.each do |configuration|
+  configuration.build_settings.merge!(
+    "PRODUCT_BUNDLE_IDENTIFIER" => "dev.linsheng.mihomo-app.code-access",
+    "INFOPLIST_FILE" => "../Config/CodeAccessService-Info.plist",
+    "CODE_SIGN_ENTITLEMENTS" => "../Config/CodeAccessService.entitlements",
+    "SKIP_INSTALL" => "YES"
+  )
+end
+add_sources(project, access, "Code access sources", ROOT.join("CodeAccessService"))
+access.source_build_phase.add_file_reference(shared_identity)
+access.add_system_framework(["AppKit", "Security", "CryptoKit"])
+app.add_dependency(access)
+access_phase = app.new_copy_files_build_phase("Embed code access service")
+access_phase.dst_subfolder_spec = "1"
+access_phase.dst_path = "Contents/XPCServices"
+access_phase.add_file_reference(access.product_reference).settings = {"ATTRIBUTES" => ["CodeSignOnCopy", "RemoveHeadersOnCopy"]}
+# Resource assembly validates the complete bundle, including the already embedded broker.
+app.build_phases.delete(resources_phase)
+app.build_phases << resources_phase
 project.save
 
 scheme = Xcodeproj::XCScheme.new

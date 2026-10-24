@@ -45,3 +45,19 @@ precondition(accepted(legacy))
 let legacyConfiguration = try AIProxyConfiguration(legacy, now: 1)
 precondition(legacyConfiguration.proxyPort(for: "chatgpt") == 17971)
 print("App Proxy configuration validation passed")
+
+let executable = try AppProxyCodeIdentity.inspect(path: "/usr/bin/curl", category: custom)
+let snapshot = AppProxyIdentitySnapshot(ownerUID: getuid(), records: [executable], grants: [Data([1])])
+var v4 = valid
+v4["routing"] = "per-application-v4"
+v4["bypassCIDRs"] = [String]()
+v4["targets"] = [["id": executable.id, "path": executable.path, "category": executable.category, "requirement": executable.requirement]]
+v4["identitySnapshot"] = try snapshot.encoded()
+v4["rulesDigest"] = String(repeating: "a", count: 64)
+precondition(accepted(v4))
+v4["rulesDigest"] = "stale"
+precondition(!accepted(v4))
+v4["rulesDigest"] = String(repeating: "a", count: 64)
+v4["targets"] = [record]
+precondition(!accepted(v4))
+print("App Proxy v4 manifest binding validation passed")

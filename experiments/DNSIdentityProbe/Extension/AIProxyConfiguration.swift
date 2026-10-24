@@ -10,6 +10,7 @@ struct AIProxyConfiguration {
         let category: String
         let requirement: SecRequirement
     }
+    let snapshot: AppProxyIdentitySnapshot?
     let identities: [Identity]
     let deadline: TimeInterval?
     let perApplicationRouting: Bool
@@ -23,12 +24,14 @@ struct AIProxyConfiguration {
     init(_ raw: [String: Any], now: TimeInterval) throws {
         let keys = Set(raw.keys)
         let routing = raw["routing"] as? String
-        let withBypass = routing == "per-application-v3"
+        let withIdentity = routing == "per-application-v4"
+        let withBypass = routing == "per-application-v3" || withIdentity
         perApplicationRouting = routing == "per-application-v1" || routing == "per-application-v2" || withBypass
         let dynamic = routing == "per-application-v2" || withBypass
         guard (keys == ["mode", "targets", "deadline"] || (keys == ["mode", "targets", "deadline", "routing"] && routing == "per-application-v1") ||
                (keys == ["mode", "targets", "deadline", "routing", "ports"] && routing == "per-application-v2") ||
-               (keys == ["mode", "targets", "deadline", "routing", "ports", "bypassCIDRs"] && withBypass)), raw["mode"] as? String == "ai",
+               (keys == ["mode", "targets", "deadline", "routing", "ports", "bypassCIDRs"] && !withIdentity && withBypass) ||
+               (keys == ["mode", "targets", "deadline", "routing", "ports", "bypassCIDRs", "identitySnapshot", "rulesDigest"] && withIdentity)), raw["mode"] as? String == "ai",
               let targets = raw["targets"] as? [[String: String]], !targets.isEmpty, targets.count <= 512,
               let number = raw["deadline"] as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
               number.doubleValue.isFinite else { throw Invalid.configuration }
@@ -65,12 +68,22 @@ struct AIProxyConfiguration {
             guard Set(decoded.values).count == decoded.count else { throw Invalid.configuration }
             ports = decoded
         } else { ports = builtin }
+        if withIdentity {
+            guard let data = raw["identitySnapshot"] as? Data,
+                  let digest = raw["rulesDigest"] as? String, digest.count == 64,
+                  digest.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else { throw Invalid.configuration }
+            snapshot = try AppProxyIdentitySnapshot.decode(data)
+            guard snapshot?.records.count == targets.count,
+                  zip(snapshot!.records, targets).allSatisfy({ identity, target in
+                      identity.id == target["id"] && identity.path == target["path"] && identity.category == target["category"] && identity.requirement == target["requirement"]
+                  }) else { throw Invalid.configuration }
+        } else { snapshot = nil }
         let acceptedCategories = Set(ports.keys).union(["cli_host"])
         identities = try targets.map { record in
             guard Set(record.keys) == ["id", "path", "category", "requirement"],
                   let id = record["id"], !id.isEmpty, id.utf8.count <= 512,
                   let path = record["path"], path.hasPrefix("/"), path.utf8.count <= 4096,
-                  URL(fileURLWithPath: path).standardizedFileURL.path == path,
+                  AppProxyFileStamp.isCanonicalPath(path),
                   let category = record["category"], acceptedCategories.contains(category),
                   let text = record["requirement"], text.utf8.count <= 8192 else { throw Invalid.configuration }
             var requirement: SecRequirement?
@@ -81,23 +94,32 @@ struct AIProxyConfiguration {
         guard Set(identities.map(\.path)).count == identities.count else { throw Invalid.configuration }
     }
 
-    func classify(_ metadata: NEFlowMetaData) -> String? {
-        guard let token = metadata.sourceAppAuditToken, token.count == 32 else { return nil }
+    func classify(_ metadata: NEFlowMetaData) -> String? { try? classifyValidated(metadata) }
+    func classifyValidated(_ metadata: NEFlowMetaData) throws -> String {
+        guard let token = metadata.sourceAppAuditToken, token.count == 32 else { throw AppProxyIdentityFailure.runtimeIdentity }
+        if let snapshot, AppProxyFlowEvidence.word(token, 1) != snapshot.ownerUID { throw AppProxyIdentityFailure.wrongUser }
         let candidates = identities.filter { $0.id == metadata.sourceAppSigningIdentifier }
-        guard !candidates.isEmpty else { return nil }
+        guard !candidates.isEmpty else { throw AppProxyIdentityFailure.undiscoveredTarget }
         var code: SecCode?
         guard SecCodeCopyGuestWithAttributes(nil, [kSecGuestAttributeAudit as String: token] as CFDictionary, [], &code) == errSecSuccess,
-              let code else { return nil }
+              let code else { throw AppProxyIdentityFailure.runtimeIdentity }
         var staticCode: SecStaticCode?
         var info: CFDictionary?
         guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode,
               SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
               let values = info as? [String: Any],
               let executable = values[kSecCodeInfoMainExecutable as String] as? URL,
-              values[kSecCodeInfoIdentifier as String] as? String == metadata.sourceAppSigningIdentifier else { return nil }
-        let path = executable.resolvingSymlinksInPath().standardizedFileURL.path
-        return candidates.first {
-            $0.path == path && SecCodeCheckValidity(code, [], $0.requirement) == errSecSuccess
-        }?.category
+              values[kSecCodeInfoIdentifier as String] as? String == metadata.sourceAppSigningIdentifier else { throw AppProxyIdentityFailure.runtimeIdentity }
+        let path = executable.standardizedFileURL.resolvingSymlinksInPath().path
+        if let snapshot {
+            guard let record = snapshot.records.first(where: { $0.path == path && $0.id == metadata.sourceAppSigningIdentifier }) else {
+                throw AppProxyIdentityFailure.undiscoveredTarget
+            }
+            guard values[kSecCodeInfoUnique as String] as? Data == record.cdHash else { throw AppProxyIdentityFailure.signature }
+            guard try AppProxyFileStamp.read(path) == record.stamp else { throw AppProxyIdentityFailure.changedFile }
+        }
+        guard let target = candidates.first(where: { $0.path == path }) else { throw AppProxyIdentityFailure.undiscoveredTarget }
+        guard SecCodeCheckValidity(code, [], target.requirement) == errSecSuccess else { throw AppProxyIdentityFailure.signature }
+        return target.category
     }
 }

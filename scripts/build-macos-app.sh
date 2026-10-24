@@ -124,6 +124,7 @@ trap cleanup EXIT
 
 "$ROOT/scripts/build-app-proxy-extension.sh" \
   "$STAGING_APP/Contents/Library/SystemExtensions/dev.linsheng.mihomo-app.app-proxy.systemextension" "$SWIFT_BUILD_ARCH"
+"$ROOT/scripts/build-code-access-service.sh" "$STAGING_APP/Contents/XPCServices/MihomoCodeAccess.xpc" "$SWIFT_BUILD_ARCH"
 
 /usr/bin/install -m 0755 "$BIN_DIR/mihomo-app" "$STAGING_APP/Contents/MacOS/mihomo-app"
 /usr/bin/install -m 0755 "$MIHOMO_BINARY" "$STAGING_APP/Contents/MacOS/mihomo"
