@@ -339,3 +339,31 @@ an old v4 ephemeral bookmark as durable authorization; leave App Proxy off until
 a fresh approved enrollment succeeds. Remove only experiment-owned fixtures and
 bounded diagnostics. Report any residual enabled extension or unresolved network
 state rather than declaring rollback complete.
+
+### Tart consent UI regression (2026-10-24)
+
+Build 52 discovers the unmodified Anthropic-signed Desktop CLI package under
+the test user's `Library/Application Support/Claude/claude-code` tree and
+starts the production sandboxed XPC broker. On macOS 26.6.2 (25G83), its
+modeless Powerbox panel appeared behind the host window and could not complete
+the selection. The host reported `needsAuthorization`; no system extension or
+interception rules were installed by these attempts. This is an authorization
+UI failure, not evidence that NetworkExtension rejected the target process.
+
+The broker's XPC `NSRunLoop` is not an `NSApplication` event loop. The candidate
+uses foreground accessory activation and `NSOpenPanel.runModal()` to pump
+AppKit events while consent is pending. An independent ad-hoc sandbox fixture
+using the same read-only user-selection entitlement completed exact-file
+selection and reading with the modal variant; its asynchronous/NSRunLoop
+control remained behind another app and did not complete. That experiment
+supports the UI fix but does not validate production XPC authentication,
+root-provider grants or actual Claude traffic. No production binary was
+re-signed or patched for this experiment.
+
+The cached Tart base has SIP disabled and no recovery partition. Gatekeeper
+was restored to enabled in the test clone, but `syspolicy_check distribution`
+reported an internal XProtect error for Build 52 while deep strict signature
+validation passed. These environment limitations must remain explicit; results
+from this clone cannot establish acceptance under a normal SIP-enabled system.
+The test uses credential-free loopback exit fixtures, with TUN and Local DoH
+off; no Claude account, chats or real proxy credentials are copied.

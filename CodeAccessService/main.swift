@@ -50,14 +50,19 @@ final class CodeAccessBroker: NSObject, NSXPCListenerDelegate, AppProxyCodeAcces
                 }
                 if !usable {
                     guard interactive else { throw AppProxyIdentityFailure.needsAuthorization }
-                    _ = NSApplication.shared
+                    let application = NSApplication.shared
+                    application.setActivationPolicy(.accessory)
                     let panel = NSOpenPanel()
                     panel.title = "Allow MihomoBox to verify application code"
                     panel.message = "Grant read-only access to this code location: \(root.path). This does not authorize access to chats or other application data."
                     panel.canChooseFiles = true; panel.canChooseDirectories = true
                     panel.allowsMultipleSelection = false; panel.treatsFilePackagesAsDirectories = true
                     panel.directoryURL = root.deletingLastPathComponent()
-                    guard await panel.begin() == .OK, let u = panel.url,
+                    // The XPC service uses NSRunLoop, not NSApplication.run().
+                    // A modeless panel has no AppKit event pump here. Give the
+                    // consent UI an AppKit modal loop and foreground activation.
+                    application.activate(ignoringOtherApps: true)
+                    guard panel.runModal() == .OK, let u = panel.url,
                           u.standardizedFileURL.path == root.path,
                           u.resolvingSymlinksInPath().path == root.path else { throw AppProxyIdentityFailure.needsAuthorization }
                     // Preserve the Powerbox URL, including its scope, rather than reconstructing it.
