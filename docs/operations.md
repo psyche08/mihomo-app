@@ -169,6 +169,26 @@ and newer daemon protocols remain rejected.
 The app name in user-facing copy, system extension metadata, DNS profiles and
 VPN configuration names is **MihomoBox**. Feature labels such as App Proxy and
 Local DoH describe functionality; Mihomo names the bundled upstream core.
+
+To install/activate just the bundled App Proxy system extension during an
+authorized remote upgrade, run the installed, Cloud-signed host as the logged-in
+user (never root):
+
+```bash
+/Applications/MihomoBox.app/Contents/MacOS/mihomo-app --activate-app-proxy-extension
+```
+
+This fixed command submits Apple's activation request only for MihomoBox's own
+extension, independently of code-access enrollment. It does not start normal
+host services, alter VPN preferences, grant code access, change DNS or start
+application interception. The command emits one JSON result: `activated` (exit
+0), `approvalRequired` (2), `rebootRequired` (3), `timedOut` (4), or
+`failed`/`unavailable` (1). Errors expose only a numeric system code. Confirm the
+actual version with `systemextensionsctl list`; activation alone is not proof
+that App Proxy is connected or Claude works. macOS approval remains an operator
+step when requested. Re-run after approval/reboot; a timeout must not be treated
+as a confirmed cancellation or success. Enabling App Proxy and granting package
+access remain separate operations in the application.
 Existing installed DNS/VPN names update when their configuration is regenerated
 and approved or re-enabled, respectively.
 The visible bundle is `MihomoBox.app`. Existing
