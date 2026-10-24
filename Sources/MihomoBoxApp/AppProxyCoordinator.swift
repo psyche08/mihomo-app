@@ -54,8 +54,8 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         if let manager, manager.connection.status == .connected {
             live = try? await message(.init(.status), to: manager)
         }
-        let current = configuration?["routing"] as? String == "per-application-v4"
         let snapshot = (configuration?["identitySnapshot"] as? Data).flatMap { try? AppProxyIdentitySnapshot.decode($0) }
+        let current = configuration?["routing"] as? String == "per-application-v4" && snapshot != nil
         let ready = current && live?.ready == true && live?.generation == snapshot?.generation
             && manager.map { Self.rulesDigest($0.appRules) == configuration?["rulesDigest"] as? String } == true
         return .init(available: isAvailable, enabled: manager?.isEnabled == true,

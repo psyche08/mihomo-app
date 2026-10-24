@@ -10,7 +10,7 @@ do {
     if args[1] == "issue" {
         let path = args[2]
         let identity = try AppProxyCodeIdentity.inspect(path: path, category: "claude")
-        let grant = try URL(fileURLWithPath: path).bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+        let grant = try AppProxyCodeIdentity.accessURL(for: path).bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
         let snapshot = AppProxyIdentitySnapshot(ownerUID: getuid(), records: [identity], grants: [grant])
         FileHandle.standardOutput.write(try snapshot.encoded())
     } else {

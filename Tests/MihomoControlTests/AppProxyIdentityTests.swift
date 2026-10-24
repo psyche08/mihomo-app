@@ -4,6 +4,16 @@ import Darwin
 @testable import MihomoControl
 
 final class AppProxyIdentityTests: XCTestCase {
+    func testCodeAccessScopeNeverIncludesVersionOrDataParent() throws {
+        let root = "/Users/test/Library/Application Support/Claude/claude-code/2.1/hash/claude.app"
+        XCTAssertEqual(try AppProxyCodeIdentity.accessURL(for: root + "/Contents/MacOS/claude").path, root)
+        let helper = root + "/Contents/Frameworks/Helper.app"
+        XCTAssertEqual(try AppProxyCodeIdentity.accessURL(for: helper + "/Contents/MacOS/Helper").path, helper)
+        let standalone = "/Users/test/.claude/remote/ccd-cli/version"
+        XCTAssertEqual(try AppProxyCodeIdentity.accessURL(for: standalone).path, standalone)
+        XCTAssertThrowsError(try AppProxyCodeIdentity.accessURL(for: root + "/data"))
+        XCTAssertThrowsError(try AppProxyCodeIdentity.accessURL(for: root + "/../escape"))
+    }
     func testSignedSystemIdentityAndWrongPublisher() throws {
         let identity = try AppProxyCodeIdentity.inspect(path: "/usr/bin/curl", category: "cli")
         XCTAssertFalse(identity.cdHash.isEmpty)
@@ -18,6 +28,9 @@ final class AppProxyIdentityTests: XCTestCase {
         XCTAssertThrowsError(try AppProxyIdentitySnapshot(ownerUID: getuid(), records: [identity], grants: []).encoded())
         let snapshot = AppProxyIdentitySnapshot(ownerUID: getuid(), records: [identity], grants: [Data([1])])
         XCTAssertEqual(try AppProxyIdentitySnapshot.decode(snapshot.encoded()), snapshot)
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: snapshot.encoded()) as? [String: Any])
+        legacy["version"] = 1
+        XCTAssertThrowsError(try AppProxyIdentitySnapshot.decode(JSONSerialization.data(withJSONObject: legacy)))
         XCTAssertThrowsError(try AppProxyAccessLease(snapshot)) // malformed/stale capability is not a path fallback
     }
     func testNoFollowAndSamePathReplacement() throws {

@@ -6,7 +6,7 @@ import Security
 /// No network entitlements and no root privileges. The host cannot mint a writable implicit grant.
 final class CodeAccessBroker: NSObject, NSXPCListenerDelegate, AppProxyCodeAccessService {
     private var busy = false
-    private let storeKey = "readOnlyCodeRoots.v1"
+    private let storeKey = "readOnlyCodePackages.v2"
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
         guard connection.effectiveUserIdentifier == getuid(), getuid() != 0,
               let requirement = try? AppProxyPeerRequirement.sameLeaf(identifier: "dev.linsheng.mihomo-app") else { return false }
@@ -39,7 +39,7 @@ final class CodeAccessBroker: NSObject, NSXPCListenerDelegate, AppProxyCodeAcces
         var result: [Data] = []
         for record in request.records {
             let root = try Self.grantRoot(record.path)
-            if !FileManager.default.isReadableFile(atPath: record.path) {
+            if !FileManager.default.isReadableFile(atPath: root.path) {
                 var usable = false
                 if let bookmark = saved[root.path] {
                     var stale = false
@@ -70,30 +70,14 @@ final class CodeAccessBroker: NSObject, NSXPCListenerDelegate, AppProxyCodeAcces
             }
             try record.validateFile()
             // Refuse to export a grant from an unexpectedly writable source sandbox.
-            let writeFD = open(record.path, O_WRONLY | O_NOFOLLOW_ANY | O_CLOEXEC)
-            if writeFD >= 0 { close(writeFD); throw AppProxyIdentityFailure.permission }
-            result.append(try URL(fileURLWithPath: record.path).bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil))
+            try record.validateAccessScope()
+            result.append(try root.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil))
         }
         UserDefaults.standard.set(saved, forKey: storeKey)
         return try AppProxyIdentitySnapshot(ownerUID: request.ownerUID, records: request.records, grants: result).encoded()
     }
     static func grantRoot(_ path: String) throws -> URL {
-        let url = URL(fileURLWithPath: path)
-        guard AppProxyFileStamp.isCanonicalPath(path) else { throw AppProxyIdentityFailure.escapedPath }
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        // Sandbox homeDirectory is the container. Use passwd, not /Users assumptions.
-        let actualHome = getpwuid(getuid()).flatMap { $0.pointee.pw_dir }.map { String(cString: $0) } ?? home
-        for suffix in ["Library/Application Support/Claude/claude-code", ".claude/remote/ccd-cli", ".local/share/claude/versions"] {
-            let root = actualHome + "/" + suffix
-            if path.hasPrefix(root + "/") { return URL(fileURLWithPath: root) }
-        }
-        // For other applications grant only the enclosing .app or the exact selected file.
-        var parent = url.deletingLastPathComponent()
-        while parent.path != "/" {
-            if parent.pathExtension == "app" { return parent }
-            parent.deleteLastPathComponent()
-        }
-        return url
+        try AppProxyCodeIdentity.accessURL(for: path)
     }
 }
 let broker = CodeAccessBroker()

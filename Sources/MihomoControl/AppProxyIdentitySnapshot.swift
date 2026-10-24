@@ -53,6 +53,43 @@ public struct AppProxyCodeIdentity: Codable, Equatable, Sendable {
     public let cdHash: Data
     public let stamp: AppProxyFileStamp
 
+    /// Security.framework treats a bundle executable as its enclosing code package.
+    /// Grant the nearest package, never an updater's version tree or user-data directory.
+    public static func accessURL(for path: String) throws -> URL {
+        guard AppProxyFileStamp.isCanonicalPath(path) else { throw AppProxyIdentityFailure.escapedPath }
+        let executable = URL(fileURLWithPath: path)
+        var parent = executable.deletingLastPathComponent()
+        while parent.path != "/" {
+            if parent.pathExtension == "app" {
+                guard path.hasPrefix(parent.path + "/Contents/") else { throw AppProxyIdentityFailure.escapedPath }
+                return parent
+            }
+            parent.deleteLastPathComponent()
+        }
+        return executable
+    }
+
+    public func validateAccessScope() throws {
+        let root = try Self.accessURL(for: path)
+        if root.path != path {
+            let fd = open(root.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY | O_CLOEXEC)
+            guard fd >= 0 else { throw AppProxyIdentityFailure.escapedPath }
+            close(fd)
+        }
+        // A capability must not give effective write access to the executable or its metadata.
+        var checked = [path]
+        if root.path != path {
+            checked += ["Contents/Info.plist", "Contents/CodeResources", "Contents/_CodeSignature/CodeResources"].map {
+                root.appendingPathComponent($0).path
+            }
+            guard access(root.path, W_OK) != 0 else { throw AppProxyIdentityFailure.permission }
+        }
+        for file in checked {
+            let fd = open(file, O_WRONLY | O_NOFOLLOW_ANY | O_CLOEXEC)
+            if fd >= 0 { close(fd); throw AppProxyIdentityFailure.permission }
+        }
+    }
+
     public static func inspect(path: String, category: String, team: String? = nil, identifier: String? = nil) throws -> Self {
         let before = try AppProxyFileStamp.read(path)
         var code: SecStaticCode?
@@ -94,10 +131,10 @@ public struct AppProxyIdentitySnapshot: Codable, Equatable, Sendable {
     public let records: [AppProxyCodeIdentity]
     public let grants: [Data]
     public init(ownerUID: UInt32, records: [AppProxyCodeIdentity], grants: [Data], generation: UUID = UUID()) {
-        version = 1; self.generation = generation; self.ownerUID = ownerUID; self.records = records; self.grants = grants
+        version = 2; self.generation = generation; self.ownerUID = ownerUID; self.records = records; self.grants = grants
     }
     public func validate() throws {
-        guard version == 1, ownerUID > 0, !records.isEmpty, records.count <= 512,
+        guard version == 2, ownerUID > 0, !records.isEmpty, records.count <= 512,
               records.count == grants.count, Set(records.map(\.path)).count == records.count,
               grants.allSatisfy({ !$0.isEmpty && $0.count <= 65536 }) else { throw AppProxyIdentityFailure.malformed }
         for r in records {
@@ -152,18 +189,21 @@ public final class AppProxyAccessLease {
                                   options: [.withoutUI, .withoutMounting, .withoutImplicitStartAccessing],
                                   bookmarkDataIsStale: &stale)
                 } catch { throw AppProxyIdentityFailure.staleAuthorization }
-                guard !stale, url.path == record.path else { throw AppProxyIdentityFailure.staleAuthorization }
+                guard !stale, url.path == (try AppProxyCodeIdentity.accessURL(for: record.path)).path else {
+                    throw AppProxyIdentityFailure.staleAuthorization
+                }
                 if url.startAccessingSecurityScopedResource() { urls.append(url) }
                 // Static sandbox access may require no dynamic scope; actual file validation is authoritative.
                 try record.validateFile()
-                let writable = open(record.path, O_WRONLY | O_NOFOLLOW_ANY | O_CLOEXEC)
-                if writable >= 0 { close(writable); throw AppProxyIdentityFailure.permission }
+                try record.validateAccessScope()
             }
         } catch {
             release(); throw error
         }
     }
-    public func revalidate() throws { for record in snapshot.records { try record.validateFile() } }
+    public func revalidate() throws {
+        for record in snapshot.records { try record.validateFile(); try record.validateAccessScope() }
+    }
     private func release() { for url in urls.reversed() { url.stopAccessingSecurityScopedResource() }; urls.removeAll() }
     deinit { release() }
 }

@@ -254,7 +254,9 @@ bytes to the daemon through XPC.
 [Claude CLI identity and authorization](claude-app-proxy-identity.md) documents
 the v4 trust boundary and its unverified deployment gates. A per-user sandboxed
 XPC broker receives read-only Powerbox consent, stores its own app-scoped
-bookmarks and delegates ephemeral exact-file capabilities. Both XPC peers check
+bookmarks and delegates ephemeral exact-code-package or standalone-file capabilities.
+Updater parent directories are never granted; new version paths may need consent.
+Both XPC peers check
 the exact signing leaf and bundle ID; the broker also checks the caller UID.
 The root provider validates actual file access before rule publication and
 retains OS designated requirements, audit-token runtime checks, code hashes,

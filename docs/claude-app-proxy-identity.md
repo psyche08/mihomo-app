@@ -25,14 +25,23 @@ read-only grant successfully; this narrows the uncertainty but does not validate
 If the public bookmark mechanism fails those gates, do not ship or weaken the
 sandbox. Take the minimal signed reproducer to Apple Developer Technical Support.
 
+On 2026-10-24, the real Claude Desktop CLI code package on m4pro passed strict
+signature validation in independent same-user and UID 0 sandbox receivers when
+the issuer delegated the exact version's `claude.app` read-only. Executable and
+Info.plist write opens and parent-directory listing remained denied. Earlier
+exact-executable plus three exact-metadata grants failed with `-67030`
+(`errSecCSInfoPlistFailed`); no failing internal syscall was captured. The issuer
+used a test-only read exception, not production Powerbox. This establishes a
+package-scope candidate, not NE framework acceptance or Claude API recovery.
+
 ## Actual pipeline and responsibilities
 
 | Stage | Owner and check | What success establishes |
 |---|---|---|
 | Discovery | Unsandboxed per-user host; bounded code trees, explicit executable selections | A candidate path exists in a selected application's inventory |
 | Static identity | `AppProxyCodeIdentity.inspect`; strict/all-architecture signature, expected ID/team, Apple anchor, designated requirement, cdhash and before/after file stamp | The inspected on-disk executable satisfies the enrollment policy |
-| Durable consent | Per-user `MihomoCodeAccess.xpc`, sandbox and user-selected **read-only** entitlement, `NSOpenPanel`, broker-owned app-scoped bookmark | This broker has consent for a specific code root/file; not root access |
-| Ephemeral delegation | Broker exports one implicit bookmark per exact executable; host transports opaque data | A candidate process-local capability, not proof the provider can consume it |
+| Durable consent | Per-user `MihomoCodeAccess.xpc`, sandbox and user-selected **read-only** entitlement, `NSOpenPanel`, broker-owned app-scoped bookmark | Consent for one version's nearest `.app` package or standalone executable |
+| Ephemeral delegation | Broker exports one implicit package/file bookmark per executable; host transports opaque data | A candidate process-local capability, not proof the provider can consume it |
 | Provider preparation | `AppProxyAccessLease` resolves/starts scope; reads and verifies every file; rejects writable access | Provider-local code access is established before interception rules are published |
 | OS rules | Exact executable paths + OS designated requirements; explicit `matchTools`; save/reload/readback + rules digest | Persisted policy matches the approved identity generation |
 | NE framework | Apple's process/flow code validation, outside our callback | A correlated `handleNewFlow` receipt proves that flow reached the provider; host verification alone does not |
@@ -51,12 +60,18 @@ Chosen candidate: a no-network, per-user sandboxed XPC broker. Host and broker
 mutually require the same Developer ID leaf and exact peer bundle identifier;
 the broker also requires the same non-root effective UID. The host never mints
 implicit file grants. The broker stores its own app-scoped read-only consent and
-mints fresh **exact-file** implicit grants for a bounded snapshot. Only code roots
-(`Claude/claude-code`, `.claude/remote/ccd-cli`, `.local/share/claude/versions`),
-the nearest selected `.app` bundle, or an explicit single file may be selected.
+mints fresh **exact-package/file** implicit grants for a bounded snapshot. Only
+the nearest enclosing `.app` code package, or an explicit standalone executable,
+may be selected. Updater version trees (`Claude/claude-code`,
+`.claude/remote/ccd-cli`, `.local/share/claude/versions`) are discovery locations,
+never authorization roots. A new version at a new path may require fresh consent.
 No home directory, entire Application Support directory, Full Disk Access,
 temporary file exception, or network entitlement is granted to production code.
-The provider has no arbitrary-path read RPC and receives no directory bookmark.
+The provider has no arbitrary-path read RPC. Its snapshot v2 accepts a package
+bookmark only when its path is the executable's exact nearest `.app`, with the
+executable under `Contents/`; standalone code still requires an exact-file grant.
+Executable and metadata write access and writable package roots are rejected.
+The broker's v2 consent store does not reuse earlier broader code-root grants.
 
 Apple describes implicit security-scoped bookmarks for cross-process delegation
 in [On File System Permissions](https://developer.apple.com/forums/thread/678819).
@@ -143,7 +158,7 @@ be exercised with real Claude processes.
 ## Generation, lease and recovery protocol
 
 The v4 provider configuration binds owner UID, generation UUID, paths/DR/hash/file
-stamps, exact-file grants, route ports, bypass policy and a canonical digest of
+stamps, snapshot-v2 package/file grants, route ports, bypass policy and a canonical digest of
 OS app rules. Both host readback and provider parsing validate the manifest.
 There is no claim of a single atomic transaction across macOS preferences and
 the provider; explicit staging and verified disable contain ambiguous outcomes.
@@ -239,7 +254,7 @@ also covers Swift, pinned Sparkle/MetaCubeXD, existing shell/transport tests,
 local development bundle assembly and installer **dry-run**; it does not grant
 permission to install, publish, or modify network settings.
 
-## Local validation record — 2026-10-24
+## Initial exact-file validation record — 2026-10-24
 
 Final `scripts/validate.sh` completed with exit status 0 on the working-tree
 implementation. Four Swift test products reported 372 cases: 365 passed,
@@ -258,6 +273,20 @@ a Powerbox-issued production grant or a live NetworkExtension flow. No reboot,
 user switch, extension installation/activation, Cloud build, Claude action or
 network configuration mutation was performed. No production artifact was signed
 or published.
+
+## Package-scope follow-up — 2026-10-24
+
+Full `scripts/validate.sh` passed again after snapshot-v2 package/file grants:
+373 Swift cases, 366 passed, the same 7 skips, no failures; shell/transport,
+pinned artifacts, development bundle and installer dry-run checks passed.
+The root-enabled sandbox suite additionally covered signed bundle metadata
+replacement and rejection of writable package grants. The production candidate
+shared implementation also passed against m4pro's real Claude CLI in same-user
+and root sandbox receivers, including denial of an existing outside file.
+Cloud Build 50 (the earlier exact-file candidate) was signed/notarized but never
+installed because its real bundled-CLI sandbox test failed. A new Cloud build
+is required for this follow-up. NE/Powerbox/actual Claude API acceptance remains
+pending; no production acceptance is inferred from these tests.
 
 ## Authorized deployment experiment (not executed)
 
