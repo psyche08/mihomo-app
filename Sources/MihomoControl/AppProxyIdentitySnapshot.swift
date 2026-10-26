@@ -123,6 +123,42 @@ public struct AppProxyCodeIdentity: Codable, Equatable, Sendable {
     }
 }
 
+/// A user-approved policy admitting code beyond the exact discovered records:
+/// everything signed by one Team ID, or everything under one directory.
+/// The OS sees one rule per discovered signing identifier; the provider
+/// enforces the scope against the running code.
+public struct AppProxyScope: Codable, Hashable, Sendable {
+    public enum Kind: String, Codable, Sendable { case team, directory }
+    public let category: String
+    public let kind: Kind
+    public let value: String
+    public init(category: String, kind: Kind, value: String) {
+        self.category = category; self.kind = kind; self.value = value
+    }
+    public static func isTeamIdentifier(_ value: String) -> Bool {
+        value.utf8.count == 10 && value.utf8.allSatisfy { (48...57).contains($0) || (65...90).contains($0) }
+    }
+    public static func isDirectory(_ value: String) -> Bool {
+        value != "/" && AppProxyFileStamp.isCanonicalPath(value)
+            && !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+    }
+    public var isValid: Bool {
+        !category.isEmpty && category.utf8.count <= 64
+            && (kind == .team ? Self.isTeamIdentifier(value) : Self.isDirectory(value))
+    }
+    /// Directory scopes admit any validly signed code (including ad-hoc); team scopes require the Apple anchor.
+    public var requirement: String? {
+        kind == .team ? "anchor apple generic and certificate leaf[subject.OU] = \"\(value)\"" : nil
+    }
+    /// The most specific scope admitting `path`: the deepest directory, then a team.
+    public static func match(path: String, team: String?, in scopes: [AppProxyScope]) -> AppProxyScope? {
+        let directories = scopes.filter { $0.kind == .directory && path.hasPrefix($0.value + "/") }
+        if let deepest = directories.max(by: { $0.value.utf8.count < $1.value.utf8.count }) { return deepest }
+        guard let team else { return nil }
+        return scopes.first { $0.kind == .team && $0.value == team }
+    }
+}
+
 public struct AppProxyIdentitySnapshot: Codable, Equatable, Sendable {
     public static let maximumBytes = 4 * 1024 * 1024
     public let version: Int
@@ -130,13 +166,33 @@ public struct AppProxyIdentitySnapshot: Codable, Equatable, Sendable {
     public let ownerUID: UInt32
     public let records: [AppProxyCodeIdentity]
     public let grants: [Data]
-    public init(ownerUID: UInt32, records: [AppProxyCodeIdentity], grants: [Data], generation: UUID = UUID()) {
+    /// Approved team/directory scopes; `scopeGrants` holds one read-only grant per directory scope, in order.
+    public let scopes: [AppProxyScope]
+    public let scopeGrants: [Data]
+    public init(ownerUID: UInt32, records: [AppProxyCodeIdentity], grants: [Data],
+                scopes: [AppProxyScope] = [], scopeGrants: [Data] = [], generation: UUID = UUID()) {
         version = 2; self.generation = generation; self.ownerUID = ownerUID; self.records = records; self.grants = grants
+        self.scopes = scopes; self.scopeGrants = scopeGrants
     }
+    private enum CodingKeys: String, CodingKey { case version, generation, ownerUID, records, grants, scopes, scopeGrants }
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        version = try values.decode(Int.self, forKey: .version)
+        generation = try values.decode(UUID.self, forKey: .generation)
+        ownerUID = try values.decode(UInt32.self, forKey: .ownerUID)
+        records = try values.decode([AppProxyCodeIdentity].self, forKey: .records)
+        grants = try values.decode([Data].self, forKey: .grants)
+        scopes = try values.decodeIfPresent([AppProxyScope].self, forKey: .scopes) ?? []
+        scopeGrants = try values.decodeIfPresent([Data].self, forKey: .scopeGrants) ?? []
+    }
+    public var directoryScopes: [AppProxyScope] { scopes.filter { $0.kind == .directory } }
     public func validate() throws {
         guard version == 2, ownerUID > 0, !records.isEmpty, records.count <= 512,
               records.count == grants.count, Set(records.map(\.path)).count == records.count,
-              grants.allSatisfy({ !$0.isEmpty && $0.count <= 65536 }) else { throw AppProxyIdentityFailure.malformed }
+              grants.allSatisfy({ !$0.isEmpty && $0.count <= 65536 }),
+              scopes.count <= 64, Set(scopes).count == scopes.count, scopes.allSatisfy(\.isValid),
+              scopeGrants.count == directoryScopes.count,
+              scopeGrants.allSatisfy({ !$0.isEmpty && $0.count <= 65536 }) else { throw AppProxyIdentityFailure.malformed }
         for r in records {
             guard r.path.hasPrefix("/"), !r.path.contains("\0"), r.path.utf8.count <= 4096,
                   AppProxyFileStamp.isCanonicalPath(r.path),
@@ -145,9 +201,12 @@ public struct AppProxyIdentitySnapshot: Codable, Equatable, Sendable {
         }
     }
     /// Automatic refresh may change vendor code, never the previously approved publisher/identity.
-    public func validateRefresh(_ next: [AppProxyCodeIdentity]) throws {
+    public func validateRefresh(_ next: [AppProxyCodeIdentity], scopes: [AppProxyScope] = []) throws {
         let priorByPath = Dictionary(uniqueKeysWithValues: records.map { ($0.path, $0) })
         for candidate in next {
+            // An approved team or directory scope covers new versions, paths and helpers.
+            if AppProxyScope.match(path: candidate.path, team: candidate.team,
+                                   in: scopes.filter { $0.category == candidate.category }) != nil { continue }
             if let prior = priorByPath[candidate.path] {
                 guard candidate.category == prior.category, candidate.id == prior.id,
                       candidate.team == prior.team, candidate.requirement == prior.requirement,
@@ -197,12 +256,34 @@ public final class AppProxyAccessLease {
                 try record.validateFile()
                 try record.validateAccessScope()
             }
+            for (scope, data) in zip(snapshot.directoryScopes, snapshot.scopeGrants) {
+                var stale = false
+                let url: URL
+                do {
+                    url = try URL(resolvingBookmarkData: data,
+                                  options: [.withoutUI, .withoutMounting, .withoutImplicitStartAccessing],
+                                  bookmarkDataIsStale: &stale)
+                } catch { throw AppProxyIdentityFailure.staleAuthorization }
+                guard !stale, url.path == scope.value else { throw AppProxyIdentityFailure.staleAuthorization }
+                if url.startAccessingSecurityScopedResource() { urls.append(url) }
+                try Self.requireReadableDirectory(scope.value)
+            }
         } catch {
             release(); throw error
         }
     }
     public func revalidate() throws {
         for record in snapshot.records { try record.validateFile(); try record.validateAccessScope() }
+        for scope in snapshot.directoryScopes { try Self.requireReadableDirectory(scope.value) }
+    }
+    /// Directory grants come only from the read-only broker; the provider still proves it can open them.
+    public static func requireReadableDirectory(_ path: String) throws {
+        let fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY | O_CLOEXEC)
+        guard fd >= 0 else {
+            throw errno == ENOENT ? AppProxyIdentityFailure.missingFile
+                : (errno == ELOOP || errno == ENOTDIR ? AppProxyIdentityFailure.escapedPath : AppProxyIdentityFailure.permission)
+        }
+        close(fd)
     }
     private func release() { for url in urls.reversed() { url.stopAccessingSecurityScopedResource() }; urls.removeAll() }
     deinit { release() }
@@ -216,7 +297,17 @@ public final class AppProxyAccessLease {
 public struct AppProxyAccessRequest: Codable, Sendable {
     public let ownerUID: UInt32
     public let records: [AppProxyCodeIdentity]
-    public init(ownerUID: UInt32, records: [AppProxyCodeIdentity]) { self.ownerUID = ownerUID; self.records = records }
+    public let scopes: [AppProxyScope]
+    public init(ownerUID: UInt32, records: [AppProxyCodeIdentity], scopes: [AppProxyScope] = []) {
+        self.ownerUID = ownerUID; self.records = records; self.scopes = scopes
+    }
+    private enum CodingKeys: String, CodingKey { case ownerUID, records, scopes }
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        ownerUID = try values.decode(UInt32.self, forKey: .ownerUID)
+        records = try values.decode([AppProxyCodeIdentity].self, forKey: .records)
+        scopes = try values.decodeIfPresent([AppProxyScope].self, forKey: .scopes) ?? []
+    }
 }
 
 public enum AppProxyPeerRequirement {

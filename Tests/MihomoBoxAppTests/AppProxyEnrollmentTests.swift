@@ -15,7 +15,7 @@ final class AppProxyEnrollmentTests: XCTestCase {
     @MainActor func testDeniedApplicationDoesNotPreventOtherApplicationAndNeverLeaksItsRules() async throws {
         var interactive: [String] = []
         let plan = try await AppProxyEnrollment.prepare(applications: [a,b], requested: [a.id,b.id], interactiveID: b.id, previous: nil,
-            discover: { try self.discover($0) }, authorize: { records, consent in
+            discover: { try self.discover($0) }, authorize: { records, _, consent in
                 let id = records.first { $0.category != "cli_host" }!.category
                 if consent { interactive.append(id) }
                 if id == self.b.id { throw AppProxyIdentityFailure.needsAuthorization }
@@ -34,14 +34,14 @@ final class AppProxyEnrollmentTests: XCTestCase {
         var visited: [String] = []
         let plan = try await AppProxyEnrollment.prepare(applications: [a,b], requested: [a.id], interactiveID: a.id, previous: nil,
             discover: { app in visited.append(app.id); return try self.discover(app) },
-            authorize: { _,_ in throw AppProxyIdentityFailure.permission })
+            authorize: { _,_,_ in throw AppProxyIdentityFailure.permission })
         XCTAssertEqual(visited, [a.id]); XCTAssertNil(plan.snapshot)
         XCTAssertTrue(plan.targets.rules.isEmpty)
         XCTAssertEqual(plan.failures, [a.id: "permission"])
     }
     @MainActor func testSharedResponsibleHostIsDeduplicatedWithoutUnrestrictedChildren() async throws {
         let plan = try await AppProxyEnrollment.prepare(applications: [a,b], requested: [a.id,b.id], interactiveID: nil, previous: nil,
-            discover: { try self.discover($0) }, authorize: { records, interactive in
+            discover: { try self.discover($0) }, authorize: { records, _, interactive in
                 XCTAssertFalse(interactive); return self.snapshot(records)
             })
         let snapshot = try XCTUnwrap(plan.snapshot)
@@ -50,7 +50,7 @@ final class AppProxyEnrollmentTests: XCTestCase {
         let terminal = try XCTUnwrap(plan.targets.rules.first { $0.matchSigningIdentifier == "com.apple.Terminal" })
         XCTAssertEqual(Set(terminal.matchTools!.compactMap(\.matchPath)), [a.path!,b.path!])
         let withoutB = try await AppProxyEnrollment.prepare(applications: [a,b], requested: [a.id], interactiveID: nil, previous: snapshot,
-            discover: { try self.discover($0) }, authorize: { records,_ in self.snapshot(records) })
+            discover: { try self.discover($0) }, authorize: { records,_,_ in self.snapshot(records) })
         XCTAssertFalse(withoutB.targets.rules.flatMap { $0.matchTools ?? [] }.contains { $0.matchPath == b.path })
     }
     @MainActor func testMalformedBrokerReplyAndMissingFileStayLocalToApplication() async throws {
@@ -58,14 +58,14 @@ final class AppProxyEnrollmentTests: XCTestCase {
             discover: { app in
                 if app.id == self.a.id { throw AppProxyIdentityFailure.missingFile }
                 return try self.discover(app)
-            }, authorize: { records,_ in .init(ownerUID: getuid()+1, records: records, grants: records.map { _ in Data([1]) }) })
+            }, authorize: { records,_,_ in .init(ownerUID: getuid()+1, records: records, grants: records.map { _ in Data([1]) }) })
         XCTAssertNil(plan.snapshot)
         XCTAssertEqual(plan.failures, [a.id: "missingFile", b.id: "malformed"])
     }
     @MainActor func testDuplicateOwnershipRejectsOnlyConflictingApplication() async throws {
         var duplicate = b; duplicate.path = a.path
         let plan = try await AppProxyEnrollment.prepare(applications: [a,duplicate], requested: [a.id,b.id], interactiveID: nil, previous: nil,
-            discover: { try self.discover($0) }, authorize: { records,_ in self.snapshot(records) })
+            discover: { try self.discover($0) }, authorize: { records,_,_ in self.snapshot(records) })
         XCTAssertEqual(plan.failures[b.id], "discoveryFailed")
         XCTAssertEqual(plan.snapshot?.records.first { $0.path == self.a.path }?.category, a.id)
     }
@@ -74,7 +74,7 @@ final class AppProxyEnrollmentTests: XCTestCase {
         var denied = true
         func prepare() async throws -> AppProxyEnrollment {
             try await AppProxyEnrollment.prepare(applications: apps, requested: [a.id,b.id], interactiveID: nil, previous: nil,
-                discover: { try self.discover($0) }, authorize: { records,_ in
+                discover: { try self.discover($0) }, authorize: { records,_,_ in
                     if denied && records.contains(where: { $0.category == self.b.id }) { throw AppProxyIdentityFailure.staleAuthorization }
                     return self.snapshot(records)
                 })

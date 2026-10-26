@@ -26,12 +26,22 @@ public struct AppProxyEntry: Codable, Equatable, Sendable, Identifiable {
     public var title: String
     public var path: String?
     public var port: UInt16
+    /// Exact CLI scope: these executables only.
     public var executablePaths: [String]
-    public init(id: String, title: String, path: String? = nil, port: UInt16, executablePaths: [String] = []) {
+    /// Team scope: all code signed by these Team IDs. Directory scope: all code under these directories.
+    public var teamIdentifiers: [String]
+    public var directories: [String]
+    public init(id: String, title: String, path: String? = nil, port: UInt16, executablePaths: [String] = [],
+                teamIdentifiers: [String] = [], directories: [String] = []) {
         self.id = id; self.title = title; self.path = path; self.port = port
         self.executablePaths = executablePaths
+        self.teamIdentifiers = teamIdentifiers; self.directories = directories
     }
-    private enum CodingKeys: String, CodingKey { case id, title, path, port, executablePaths }
+    public var scopes: [AppProxyScope] {
+        teamIdentifiers.map { .init(category: id, kind: .team, value: $0) }
+            + directories.map { .init(category: id, kind: .directory, value: $0) }
+    }
+    private enum CodingKeys: String, CodingKey { case id, title, path, port, executablePaths, teamIdentifiers, directories }
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         id = try values.decode(String.self, forKey: .id)
@@ -39,6 +49,8 @@ public struct AppProxyEntry: Codable, Equatable, Sendable, Identifiable {
         path = try values.decodeIfPresent(String.self, forKey: .path)
         port = try values.decode(UInt16.self, forKey: .port)
         executablePaths = try values.decodeIfPresent([String].self, forKey: .executablePaths) ?? []
+        teamIdentifiers = try values.decodeIfPresent([String].self, forKey: .teamIdentifiers) ?? []
+        directories = try values.decodeIfPresent([String].self, forKey: .directories) ?? []
     }
     public static var defaults: [Self] {
         AppProxyApplication.allCases.map { .init(id: $0.rawValue, title: $0.title, port: $0.port) }
@@ -55,6 +67,17 @@ public struct AppProxySettings: Codable, Equatable, Sendable {
                 bypass: AppProxyBypassPolicy = .init()) {
         self.routes = routes; self.applications = applications
         self.bypass = bypass
+    }
+    /// The settings without code scopes: exactly what AppProxyProfile writes into Mihomo's
+    /// configuration. Equal values let a scope-only change skip a runtime restart.
+    public var runtimeRouting: AppProxySettings {
+        var routing = self
+        routing.applications = applications.map {
+            var entry = $0
+            entry.executablePaths = []; entry.teamIdentifiers = []; entry.directories = []
+            return entry
+        }
+        return routing
     }
     private enum CodingKeys: String, CodingKey { case routes, applications, bypass }
     public init(from decoder: Decoder) throws {
@@ -79,6 +102,13 @@ public struct AppProxySettings: Codable, Equatable, Sendable {
                     && !path.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
                     && URL(fileURLWithPath: path).standardizedFileURL.path == path
               }) else { throw AppProxySettingsError.invalidExecutables }
+        // A Team ID or directory belongs to exactly one application route.
+        let teams = applications.flatMap(\.teamIdentifiers), directories = applications.flatMap(\.directories)
+        guard teams.count + directories.count <= 64,
+              applications.allSatisfy({ $0.teamIdentifiers.count <= 8 && $0.directories.count <= 16 }),
+              Set(teams).count == teams.count, Set(directories).count == directories.count,
+              teams.allSatisfy(AppProxyScope.isTeamIdentifier), directories.allSatisfy(AppProxyScope.isDirectory)
+        else { throw AppProxySettingsError.invalidScopes }
         guard applications.count <= 32,
               Set(applications.map(\.id)).count == applications.count,
               Set(applications.map(\.port)).count == applications.count,
@@ -107,11 +137,12 @@ public struct AppProxySettings: Codable, Equatable, Sendable {
 }
 
 public enum AppProxySettingsError: LocalizedError {
-    case invalidRoutes, unsupportedProfile, unsupportedRules, staleState, unavailableNode, invalidExecutables, overlappingFakeIP
+    case invalidRoutes, unsupportedProfile, unsupportedRules, staleState, unavailableNode, invalidExecutables, invalidScopes, overlappingFakeIP
     public var errorDescription: String? {
         switch self {
         case .overlappingFakeIP: "An App Proxy bypass overlaps this profile's Fake-IP range. Remove the overlapping bypass before applying."
         case .invalidExecutables: "Enter unique absolute executable paths (up to 32 per app and 128 total). Each executable can belong to only one app."
+        case .invalidScopes: "Enter 10-character Team IDs (up to 8 per app) and absolute directories other than / (up to 16 per app). Each Team ID or directory can belong to only one app."
         case .unavailableNode: "An App Proxy target is missing or does not currently resolve to a remote proxy. Refresh the node list and choose another target."
         case .invalidRoutes: "Choose a proxy node or proxy group for each application."
         case .unsupportedProfile: "App Proxy requires a single block-style profile without custom listeners or conflicting application listener ports."

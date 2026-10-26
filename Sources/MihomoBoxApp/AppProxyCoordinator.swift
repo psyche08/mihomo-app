@@ -14,6 +14,7 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
     private let extensionID = "dev.linsheng.mihomo-app.app-proxy"
     private var activation: CheckedContinuation<Void, Error>?
     private var busy = false
+    private let crossProcess = AppProxyMutationLock()
     private let codeAccess = AppProxyCodeAccessClient()
     private var maintenance: Task<Void, Never>?
     private var identityIssue: String?
@@ -37,8 +38,11 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         requestedIDs = Set(snapshot?.records.map(\.category).filter { $0 != "cli_host" } ?? [])
         requestedEnabled = manager?.isEnabled == true && snapshot != nil
     }
-    override init() {
+    override convenience init() { self.init(maintenance: true) }
+    /// A headless `--app-proxy` run performs one action and skips the 20-second maintenance loop.
+    init(maintenance enabled: Bool) {
         super.init()
+        guard enabled else { return }
         maintenance = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(20))
@@ -129,8 +133,21 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         guard await panel.begin() == .OK, let selected = panel.url else { return nil }
         return selected.resolvingSymlinksInPath().standardizedFileURL.path
     }
+    /// A user action waits for the 20-second maintenance pass (in this process or in the
+    /// menu-bar app while a headless run is active) instead of failing while it runs.
+    /// Returns holding the cross-process lock; no suspension separates the final checks
+    /// from the caller claiming `busy`.
+    private func waitUntilIdle(timeout: Duration = .seconds(60)) async throws {
+        let clock = ContinuousClock(), deadline = clock.now + timeout
+        while busy || !(crossProcess?.tryLock() ?? true) {
+            guard clock.now < deadline else { throw failure("App Proxy is still updating. Try again shortly.") }
+            try await Task.sleep(for: .milliseconds(200))
+        }
+    }
     func setEnabled(_ enabled: Bool, settings: AppProxySettings) async throws {
-        guard !busy, available else { throw failure("The bundled App Proxy extension is unavailable or busy.") }
+        try await waitUntilIdle()
+        defer { crossProcess?.unlock() }
+        guard available else { throw failure("The bundled App Proxy extension is unavailable.") }
         busy = true; defer { busy = false }
         let existing = try await load(); migrateSelection(existing)
         if !enabled {
@@ -144,14 +161,21 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
     }
 
     func setApplicationEnabled(_ id: String, enabled: Bool, settings: AppProxySettings) async throws {
-        guard !busy, available, settings.applications.contains(where: { $0.id == id }) else {
+        try await setApplicationEnabled(id, enabled: enabled, settings: settings, interactive: true)
+    }
+    /// `interactive` is the operator's consent to the scanned code and scopes (the confirmation
+    /// sheet or `mihomoboxctl app-proxy enable --approve`); otherwise only prior approvals apply.
+    func setApplicationEnabled(_ id: String, enabled: Bool, settings: AppProxySettings, interactive: Bool) async throws {
+        try await waitUntilIdle()
+        defer { crossProcess?.unlock() }
+        guard available, settings.applications.contains(where: { $0.id == id }) else {
             throw failure("The application or App Proxy service is unavailable.")
         }
         busy = true; defer { busy = false }
         let existing = try await load(); migrateSelection(existing)
         if enabled { requestedIDs.insert(id); requestedEnabled = true }
         else { requestedIDs.remove(id); applicationIssues.removeValue(forKey: id) }
-        do { try await reconcile(settings: settings, existing: existing, interactiveID: enabled ? id : nil) }
+        do { try await reconcile(settings: settings, existing: existing, interactiveID: enabled && interactive ? id : nil) }
         catch {
             if enabled { applicationIssues[id] = Self.issueCode(error) }
             throw error
@@ -178,7 +202,9 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
             try await AppProxyEnrollment.prepare(applications: settings.applications, requested: self.requestedIDs,
             interactiveID: interactiveID, previous: old,
             discover: { app in try await Task.detached { try AIAppTargets(requireAll: false, applications: [app]) }.value },
-            authorize: { records, interactive in try await self.codeAccess.snapshot(records: records, interactive: interactive) })
+            authorize: { records, scopes, interactive in
+                try await self.codeAccess.snapshot(records: records, scopes: scopes, interactive: interactive)
+            })
         }
         let plan: AppProxyEnrollment
         if let existing, let old, existing.isEnabled, existing.connection.status == .connected {
@@ -259,7 +285,7 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
                         manager.appRules = targets.rules
                         try await save(manager); try await reload(manager)
                     }
-                    guard sameRules(manager.appRules, targets.rules) else { throw PolicyCheckFailure.rulesReadbackMismatch }
+                    try requireSameRules(manager.appRules, targets.rules, phase: "enable")
                     try Self.requireProvider(try await message(.init(.status), to: manager), generation: snapshot.generation)
                     identityIssue = nil; return
                 }
@@ -278,7 +304,7 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
                     manager.protocolConfiguration = previous; manager.appRules = previousRules
                     try await save(manager); try await reload(manager)
                     if prepared { _ = try await message(.init(.abort), to: manager) }
-                    guard sameRules(manager.appRules, previousRules) else { throw PolicyCheckFailure.rulesReadbackMismatch }
+                    try requireSameRules(manager.appRules, previousRules, phase: "rollback")
                     try Self.requireProvider(try await message(.init(.status), to: manager), generation: old.generation)
                     restored = true
                 } catch { restored = false }
@@ -310,7 +336,8 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         }
     }
     private func maintainIdentities() async {
-        guard !busy, available else { return }
+        guard !busy, available, crossProcess?.tryLock() ?? true else { return }
+        defer { crossProcess?.unlock() }
         busy = true; defer { busy = false }
         var managed: NEAppProxyProviderManager?
         do {
@@ -454,6 +481,95 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
     private func sameRules(_ actual: [NEAppRule], _ expected: [NEAppRule]) -> Bool {
         Self.rulesDigest(actual) == Self.rulesDigest(expected)
     }
+    private func requireSameRules(_ actual: [NEAppRule], _ expected: [NEAppRule], phase: String) throws {
+        guard !sameRules(actual, expected) else { return }
+        AppLog.error("event=app_proxy_rules_diff phase=\(phase) \(Self.rulesDifference(actual: actual, expected: expected).summary)")
+        throw PolicyCheckFailure.rulesReadbackMismatch
+    }
+
+    /// Count-only comparison of generated and read-back rules. Like the readback
+    /// observation, it never carries identifiers, paths or requirements.
+    struct RuleDifference: Equatable {
+        var expectedRules = 0, actualRules = 0, missingRules = 0, extraRules = 0
+        var requirementText = 0, requirementCanonical = 0, requirementCleared = 0, domains = 0, toolScope = 0
+        var expectedTools = 0, actualTools = 0, missingTools = 0, extraTools = 0
+        var toolRequirementText = 0, toolRequirementCanonical = 0, toolRequirementCleared = 0
+        var movedPaths = 0, pathCaseOnly = 0, pathResolvesEqual = 0, pathCleared = 0
+        var summary: String {
+            "rules=\(expectedRules)/\(actualRules) missing=\(missingRules) extra=\(extraRules)"
+                + " dr=\(requirementText) drCanon=\(requirementCanonical) drCleared=\(requirementCleared)"
+                + " domains=\(domains) toolScope=\(toolScope)"
+                + " tools=\(expectedTools)/\(actualTools) toolMissing=\(missingTools) toolExtra=\(extraTools)"
+                + " toolDr=\(toolRequirementText) toolDrCanon=\(toolRequirementCanonical) toolDrCleared=\(toolRequirementCleared)"
+                + " moved=\(movedPaths) caseOnly=\(pathCaseOnly) resolved=\(pathResolvesEqual) pathCleared=\(pathCleared)"
+        }
+    }
+    static func rulesDifference(actual: [NEAppRule], expected: [NEAppRule]) -> RuleDifference {
+        var d = RuleDifference(expectedRules: expected.count, actualRules: actual.count)
+        let rules = pair(expected: expected, actual: actual)
+        d.missingRules = rules.missing.count; d.extraRules = rules.extra.count
+        classifyMoved(missing: rules.missing, extra: rules.extra, into: &d)
+        for (wanted, found) in rules.pairs {
+            compareRequirement(wanted, found, text: &d.requirementText, canonical: &d.requirementCanonical, cleared: &d.requirementCleared)
+            let wantedDomains = wanted.matchDomains?.map { "\($0)" }.sorted(), foundDomains = found.matchDomains?.map { "\($0)" }.sorted()
+            if wantedDomains != foundDomains { d.domains += 1 }
+            d.expectedTools += wanted.matchTools?.count ?? 0; d.actualTools += found.matchTools?.count ?? 0
+            guard let wantedTools = wanted.matchTools, let foundTools = found.matchTools else {
+                if (wanted.matchTools == nil) != (found.matchTools == nil) { d.toolScope += 1 }
+                continue
+            }
+            let tools = pair(expected: wantedTools, actual: foundTools)
+            d.missingTools += tools.missing.count; d.extraTools += tools.extra.count
+            classifyMoved(missing: tools.missing, extra: tools.extra, into: &d)
+            for (wantedTool, foundTool) in tools.pairs {
+                compareRequirement(wantedTool, foundTool, text: &d.toolRequirementText,
+                                   canonical: &d.toolRequirementCanonical, cleared: &d.toolRequirementCleared)
+            }
+        }
+        return d
+    }
+    private static func pair(expected: [NEAppRule], actual: [NEAppRule])
+        -> (pairs: [(NEAppRule, NEAppRule)], missing: [NEAppRule], extra: [NEAppRule]) {
+        func key(_ rule: NEAppRule) -> String { rule.matchSigningIdentifier + "\u{0}" + (rule.matchPath ?? "") }
+        var available = Dictionary(grouping: actual, by: key)
+        var pairs: [(NEAppRule, NEAppRule)] = [], missing: [NEAppRule] = []
+        for rule in expected {
+            if var candidates = available[key(rule)], !candidates.isEmpty {
+                pairs.append((rule, candidates.removeFirst())); available[key(rule)] = candidates
+            } else { missing.append(rule) }
+        }
+        return (pairs, missing, available.values.flatMap { $0 })
+    }
+    /// An expected entry whose signing ID survives under another path: say how the path changed.
+    private static func classifyMoved(missing: [NEAppRule], extra: [NEAppRule], into d: inout RuleDifference) {
+        var pool = extra
+        for rule in missing {
+            guard let index = pool.firstIndex(where: { $0.matchSigningIdentifier == rule.matchSigningIdentifier }) else { continue }
+            let other = pool.remove(at: index)
+            d.movedPaths += 1
+            guard let wanted = rule.matchPath, let found = other.matchPath else { d.pathCleared += 1; continue }
+            if wanted.lowercased() == found.lowercased() { d.pathCaseOnly += 1 }
+            if URL(fileURLWithPath: wanted).resolvingSymlinksInPath().path == URL(fileURLWithPath: found).resolvingSymlinksInPath().path {
+                d.pathResolvesEqual += 1
+            }
+        }
+    }
+    private static func compareRequirement(_ wanted: NEAppRule, _ found: NEAppRule,
+                                           text: inout Int, canonical: inout Int, cleared: inout Int) {
+        guard wanted.matchDesignatedRequirement != found.matchDesignatedRequirement else { return }
+        text += 1
+        if found.matchDesignatedRequirement.isEmpty { cleared += 1; return }
+        if let a = canonicalRequirement(wanted.matchDesignatedRequirement),
+           a == canonicalRequirement(found.matchDesignatedRequirement) { canonical += 1 }
+    }
+    private static func canonicalRequirement(_ text: String?) -> String? {
+        guard let text else { return nil }
+        var requirement: SecRequirement?
+        guard SecRequirementCreateWithString(text as CFString, [], &requirement) == errSecSuccess, let requirement else { return nil }
+        var canonical: CFString?
+        guard SecRequirementCopyString(requirement, [], &canonical) == errSecSuccess else { return nil }
+        return canonical as String?
+    }
     private func activate() async throws {
         try await withCheckedThrowingContinuation { c in
             activation = c
@@ -484,4 +600,20 @@ private final class AppProxyMessageCompletion: @unchecked Sendable {
     func finish(_ result: Result<AppProxyRuntimeStatus, Error>) {
         lock.lock(); let c = continuation; continuation = nil; lock.unlock(); c?.resume(with: result)
     }
+}
+
+/// Serializes App Proxy mutations between the menu-bar app and a headless `--app-proxy`
+/// run, which share the NetworkExtension configuration and the requested selection.
+final class AppProxyMutationLock {
+    private let descriptor: Int32
+    init?() {
+        guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
+        let directory = base.appendingPathComponent("MihomoBox", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        descriptor = open(directory.appendingPathComponent("app-proxy.lock").path, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0o600)
+        guard descriptor >= 0 else { return nil }
+    }
+    deinit { close(descriptor) }
+    func tryLock() -> Bool { flock(descriptor, LOCK_EX | LOCK_NB) == 0 }
+    func unlock() { flock(descriptor, LOCK_UN) }
 }

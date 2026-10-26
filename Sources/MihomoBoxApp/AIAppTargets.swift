@@ -50,7 +50,7 @@ struct AIAppTargets {
             if let prior = found[path.path], prior.category != category { duplicate = true; return }
             found[path.path] = target
         }
-        func scan(_ root: URL, category: String, team: String?, identifier: String? = nil) {
+        func scan(_ root: URL, category: String, team: String?, identifier: String? = nil, excludingAppleCode: Bool = false) {
             let canonical = root.standardizedFileURL.resolvingSymlinksInPath()
             guard canonical.path == root.standardizedFileURL.path else {
                 if issues.count < 64 { issues.append(.init(category: category, failure: .escapedPath)) }; return
@@ -74,7 +74,8 @@ struct AIAppTargets {
                 let header = try? file.read(upToCount: 4)
                 try? file.close()
                 guard let header, [Data([0xcf,0xfa,0xed,0xfe]), Data([0xce,0xfa,0xed,0xfe]),
-                                   Data([0xca,0xfe,0xba,0xbe]), Data([0xbe,0xba,0xfe,0xca])].contains(header) else { continue }
+                                   Data([0xca,0xfe,0xba,0xbe]), Data([0xbe,0xba,0xfe,0xca])].contains(header),
+                      !(excludingAppleCode && Self.isAppleCode(path)) else { continue }
                 add(path, category: category, team: team, identifier: identifier)
             }
         }
@@ -110,7 +111,34 @@ struct AIAppTargets {
         }
         var toolCategories: Set<String> = ["codex_cli", "claude_cli"]
         var explicitToolPaths = Set<String>()
+        let cliDirectories = [URL(fileURLWithPath: "/opt/homebrew/bin"), URL(fileURLWithPath: "/usr/local/bin"),
+                              home.appendingPathComponent(".local/bin")]
         for entry in applications {
+            // Team scope: apps and conventional CLIs signed by the team. Code elsewhere needs a directory scope.
+            for team in entry.teamIdentifiers {
+                for base in applicationDirectories ?? [URL(fileURLWithPath: "/Applications"), home.appendingPathComponent("Applications")] {
+                    for app in (try? fm.contentsOfDirectory(at: base, includingPropertiesForKeys: nil)) ?? [] where app.pathExtension == "app" {
+                        guard let executable = Bundle(url: app)?.executableURL, Self.teamIdentifier(executable) == team else { continue }
+                        scan(app, category: entry.id, team: team)
+                    }
+                }
+                for base in cliDirectories {
+                    for file in (try? fm.contentsOfDirectory(at: base, includingPropertiesForKeys: nil)) ?? [] {
+                        let url = file.standardizedFileURL.resolvingSymlinksInPath()
+                        guard fm.isExecutableFile(atPath: url.path), Self.teamIdentifier(url) == team else { continue }
+                        add(url, category: entry.id, team: team)
+                        explicitToolPaths.insert(url.path)
+                    }
+                }
+            }
+            // Directory scope: every signed executable below it; code outside an .app is a CLI tool.
+            // Apple's own code is skipped: its requirement also matches the system original, so the
+            // OS rule would capture e.g. /usr/bin/curl and the provider would close it as out of scope.
+            for directory in entry.directories {
+                scan(URL(fileURLWithPath: directory, isDirectory: true), category: entry.id, team: nil, excludingAppleCode: true)
+                for target in found.values where target.category == entry.id && target.path.hasPrefix(directory + "/")
+                    && !target.path.contains(".app/") { explicitToolPaths.insert(target.path) }
+            }
             for path in entry.executablePaths {
                 let url = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath()
                 var isDirectory: ObjCBool = false
@@ -141,8 +169,8 @@ struct AIAppTargets {
               found.values.contains(where: { $0.category == "claude" }),
               Set(tools.map(\.category)).isSuperset(of: ["codex_cli", "claude_cli"]) else { throw Failure.missingTarget }
         }
-        // Publish the exact verified version/path set to both OS and provider.
-        // Multiple versions sharing one signing identifier remain separate records.
+        // The provider receives every exact version/path as a separate record.
+        // NE keeps one app rule per signing identifier, so the OS gets one rule each.
         var roots = Array(found.values)
         if ruleSet == "apps" {
             roots = roots.filter { ["com.openai.codex", "com.openai.chat", "com.anthropic.claudefordesktop"].contains($0.id) }
@@ -151,9 +179,13 @@ struct AIAppTargets {
         } else if ruleSet == "cli" { roots = tools }
         // nil matchTools inherits *all* child processes, including newly downloaded, unauthorized code.
         // Bound responsible-app inheritance to this verified snapshot, including the app itself.
-        var rules = roots.sorted { $0.path < $1.path }.map { target in
-            let rule = target.rule
-            rule.matchTools = roots.filter { $0.category == target.category }.map(\.rule)
+        let byIdentifier = Dictionary(grouping: roots, by: \.id)
+        var rules: [NEAppRule] = byIdentifier.keys.sorted().map { id in
+            let members = byIdentifier[id] ?? []
+            let rule = NEAppRule(signingIdentifier: id, designatedRequirement: Self.requirement(members.map(\.requirement)))
+            if members.count == 1 { rule.matchPath = members[0].path }
+            let categories = Set(members.map(\.category))
+            rule.matchTools = roots.filter { categories.contains($0.category) }.sorted { $0.path < $1.path }.map(\.rule)
             return rule
         }
         guard rules.reduce(0, { $0 + ($1.matchTools?.count ?? 0) }) <= 8192 else { throw Failure.tooManyTargets }
@@ -166,7 +198,12 @@ struct AIAppTargets {
                   let terminal = Self.inspect(executable.resolvingSymlinksInPath(), category: "cli_host", team: nil) else { continue }
             let rule = NEAppRule(signingIdentifier: terminal.id, designatedRequirement: terminal.requirement)
             rule.matchTools = tools.map(\.rule)
-            if ruleSet != "apps" { rules.append(rule) }
+            if ruleSet != "apps" {
+                // A terminal chosen as an application already owns its identifier's single rule.
+                if let existing = rules.first(where: { $0.matchSigningIdentifier == terminal.id }) {
+                    existing.matchTools = Self.uniqueByPath((existing.matchTools ?? []) + tools.map(\.rule))
+                } else { rules.append(rule) }
+            }
             // A terminal explicitly selected as an application retains its
             // own category; matchTools host records must not overwrite it.
             if found[terminal.path] == nil { found[terminal.path] = terminal }
@@ -181,8 +218,8 @@ struct AIAppTargets {
     /// hosts merge only their explicit tools; nil must never expand inheritance.
     init(combining groups: [AIAppTargets]) throws {
         var identities: [String: Target] = [:]
-        struct RuleKey: Hashable { let id: String; let requirement: String; let path: String? }
-        var merged: [RuleKey: NEAppRule] = [:]
+        var tools: [String: [NEAppRule]] = [:], requirements: [String: [String]] = [:], paths: [String: Set<String>] = [:]
+        var pathless = Set<String>()
         for group in groups {
             for target in group.targets {
                 if let existing = identities[target.path], existing.identity != target.identity {
@@ -191,21 +228,21 @@ struct AIAppTargets {
                 identities[target.path] = target
             }
             for rule in group.rules {
-                guard let tools = rule.matchTools, !tools.isEmpty else { throw Failure.unsignedTarget }
-                let key = RuleKey(id: rule.matchSigningIdentifier, requirement: rule.matchDesignatedRequirement, path: rule.matchPath)
-                let copy = merged[key] ?? NEAppRule(signingIdentifier: key.id, designatedRequirement: key.requirement)
-                copy.matchPath = key.path
-                var byPath: [String: NEAppRule] = [:]
-                for tool in (copy.matchTools ?? []) + tools {
-                    guard let path = tool.matchPath else { throw Failure.unsignedTarget }
-                    byPath[path] = tool
-                }
-                copy.matchTools = byPath.keys.sorted().compactMap { byPath[$0] }
-                merged[key] = copy
+                guard let ruleTools = rule.matchTools, !ruleTools.isEmpty,
+                      ruleTools.allSatisfy({ $0.matchPath != nil }) else { throw Failure.unsignedTarget }
+                let id = rule.matchSigningIdentifier
+                tools[id, default: []] += ruleTools
+                requirements[id, default: []].append(rule.matchDesignatedRequirement)
+                if let path = rule.matchPath { paths[id, default: []].insert(path) } else { pathless.insert(id) }
             }
         }
         targets = identities.values.sorted { $0.path < $1.path }
-        rules = Array(merged.values)
+        rules = tools.keys.sorted().map { id in
+            let rule = NEAppRule(signingIdentifier: id, designatedRequirement: Self.requirement(requirements[id] ?? []))
+            if !pathless.contains(id), let only = paths[id], only.count == 1 { rule.matchPath = only.first }
+            rule.matchTools = Self.uniqueByPath(tools[id] ?? [])
+            return rule
+        }
         issues = groups.flatMap(\.issues)
         guard targets.count <= 512, rules.reduce(0, { $0 + ($1.matchTools?.count ?? 0) }) <= 8192 else { throw Failure.tooManyTargets }
     }
@@ -227,6 +264,31 @@ struct AIAppTargets {
         (".claude/remote/ccd-cli", "claude"),
         (".local/share/claude/versions", "claude_cli"),
     ]
+
+    /// One OS rule may stand for several approved copies of an identifier: match any of their requirements.
+    static func requirement(_ texts: [String]) -> String {
+        let unique = Array(Set(texts)).sorted()
+        return unique.count == 1 ? unique[0] : unique.map { "(\($0))" }.joined(separator: " or ")
+    }
+    static func uniqueByPath(_ tools: [NEAppRule]) -> [NEAppRule] {
+        var byPath: [String: NEAppRule] = [:]
+        for tool in tools { if let path = tool.matchPath { byPath[path] = tool } }
+        return byPath.keys.sorted().compactMap { byPath[$0] }
+    }
+    /// A cheap, unvalidated Team ID read used only to pick candidates; matches are fully inspected afterwards.
+    private static func teamIdentifier(_ url: URL) -> String? {
+        var code: SecStaticCode?; var info: CFDictionary?
+        guard SecStaticCodeCreateWithPath(url as CFURL, [], &code) == errSecSuccess, let code,
+              SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess else { return nil }
+        return (info as? [String: Any])?[kSecCodeInfoTeamIdentifier as String] as? String
+    }
+
+    private static func isAppleCode(_ url: URL) -> Bool {
+        var code: SecStaticCode?; var requirement: SecRequirement?
+        guard SecStaticCodeCreateWithPath(url as CFURL, [], &code) == errSecSuccess, let code,
+              SecRequirementCreateWithString("anchor apple" as CFString, [], &requirement) == errSecSuccess else { return false }
+        return SecStaticCodeCheckValidity(code, [], requirement) == errSecSuccess
+    }
 
     private static func inspect(_ path: URL, category: String, team: String?, identifier: String? = nil) -> Target? {
         guard let identity = try? AppProxyCodeIdentity.inspect(path: path.path, category: category, team: team, identifier: identifier) else { return nil }

@@ -40,7 +40,7 @@ package-scope candidate, not NE framework acceptance or Claude API recovery.
 |---|---|---|
 | Discovery | Unsandboxed per-user host; bounded code trees, explicit executable selections | A candidate path exists in a selected application's inventory |
 | Static identity | `AppProxyCodeIdentity.inspect`; strict/all-architecture signature, expected ID/team, Apple anchor, designated requirement, cdhash and before/after file stamp | The inspected on-disk executable satisfies the enrollment policy |
-| Durable consent | Per-user `MihomoCodeAccess.xpc`, sandbox and user-selected **read-only** entitlement, `NSOpenPanel`, broker-owned app-scoped bookmark | Consent for one version's nearest `.app` package or standalone executable |
+| Durable consent | Host confirmation sheet listing the scanned signatures; per-user `MihomoCodeAccess.xpc` with read-only home and CLI-prefix exceptions (Powerbox only as fallback), broker-owned identity pins | Consent for one application's verified code set |
 | Ephemeral delegation | Broker exports one implicit package/file bookmark per executable; host transports opaque data | A candidate process-local capability, not proof the provider can consume it |
 | Provider preparation | `AppProxyAccessLease` resolves/starts scope; reads and verifies every file; rejects writable access | Provider-local code access is established before interception rules are published |
 | OS rules | Exact executable paths + OS designated requirements; explicit `matchTools`; save/reload/readback + rules digest | Persisted policy matches the approved identity generation |
@@ -64,9 +64,12 @@ mints fresh **exact-package/file** implicit grants for a bounded snapshot. Only
 the nearest enclosing `.app` code package, or an explicit standalone executable,
 may be selected. Updater version trees (`Claude/claude-code`,
 `.claude/remote/ccd-cli`, `.local/share/claude/versions`) are discovery locations,
-never authorization roots. A new version at a new path may require fresh consent.
-No home directory, entire Application Support directory, Full Disk Access,
-temporary file exception, or network entitlement is granted to production code.
+never authorization roots. A new version is accepted without prompting only when
+its signing identifier, Team ID and designated requirement match a pinned identity.
+Since 2026-10-26 only the broker holds read-only temporary exceptions for the
+home directory, `/opt/homebrew/` and `/usr/local/` (see *Scan-and-confirm consent*).
+The provider holds no file exception; nothing is writable; no Full Disk Access or
+network entitlement is granted to production code.
 The provider has no arbitrary-path read RPC. Its snapshot v2 accepts a package
 bookmark only when its path is the executable's exact nearest `.app`, with the
 executable under `Contents/`; standalone code still requires an exact-file grant.
@@ -507,8 +510,8 @@ verified identity pins, so a paused application cannot silently accept a changed
 publisher or ad-hoc replacement after its old generation disappears. Both stores
 are limited to 512 entries; capacity exhaustion is explicit, never an excuse to
 widen authorization. No parent-directory grant or root file-reading service is
-introduced. File pickers show hidden code locations and select packages as units;
-the canonical exact-root guard remains mandatory.
+introduced. The fallback file picker shows hidden code locations and selects packages
+as units; the canonical exact-root guard remains mandatory.
 
 Per-application failures withdraw that application's interception; system-wide
 failures such as console-owner changes or unverifiable policy publication remain
@@ -533,3 +536,93 @@ including Swift suites, same-UID real sandbox read-only delegation fixtures,
 installer dry-run and the ad-hoc development bundle. No production App was
 locally signed or installed for these checks. The exact new row/lease tests
 are `AppProxyEnrollmentTests` and the independent-enable `AppProxyStoreTests`.
+
+## Scan-and-confirm consent (owner decision, 2026-10-26)
+
+The owner chose to remove the file picker from normal authorization. **Authorize &
+Enable** now rescans the application's signed executables and shows them (path,
+signing ID, Team ID, designated requirement) in a confirmation sheet; one click
+authorizes. `MihomoCodeAccess.xpc` gained
+`temporary-exception.files.home-relative-path.read-only = ["/"]` and
+`temporary-exception.files.absolute-path.read-only = ["/opt/homebrew/", "/usr/local/"]`,
+so it reads code in the home directory without Powerbox. Powerbox remains only for
+code the broker still cannot read, such as external volumes.
+
+When rule readback fails, `event=app_proxy_rules_diff` logs count-only field
+differences (rules, tools, missing/extra, requirement text vs canonical form,
+moved/case-only/resolved paths); it never logs paths, identifiers or requirements.
+User enable actions wait for the 20-second maintenance pass instead of failing as
+unavailable.
+
+This deliberately reverses the earlier "no home directory, no temporary file
+exception" rule for the broker. Cost: a compromised broker could read any user file.
+Retained limits: the broker has no network entitlement, accepts only the same-leaf
+host at the same non-root UID, writes nothing, and still exports only exact
+`.app`-package or exact-file read-only grants with identity pins and writable-grant
+rejection. The NetworkExtension provider gains no exception
+(`check-app-proxy-bundle.sh --signed` enforces both). Applications are added by
+dragging bundles or executables onto the list, typing or pasting a path, or the
+optional picker; the CLI executable editor also accepts drops and `file://` lines.
+
+## Team, directory and exact-CLI scopes (owner decision, 2026-10-26)
+
+**Cause.** On m4pro, `event=app_proxy_rules_diff` reported `rules=27/21 missing=6`
+with every other field matching. The 27 generated targets held six signing
+identifiers twice, each a copy bundled in `ChatGPT.app` plus a copy installed under
+the home directory (`node`, `com.openai.sky.CUAService` and its helpers), with
+identical requirements. NetworkExtension keeps one app rule per signing identifier,
+so six rules vanished on save and readback failed closed.
+
+**OS rules.** The host now publishes one `NEAppRule` per signing identifier. A
+unique identifier keeps its exact `matchPath`; a shared one omits the path and
+matches every approved requirement joined with `or`. `init(combining:)` merges
+across applications the same way. The provider still receives every exact record.
+
+**Scopes.** Each application may add Team IDs (at most 8), directories (at most 16)
+and exact executables. A Team ID or directory belongs to one application. Team
+discovery covers `.app` bundles in `/Applications` and `~/Applications` whose main
+executable carries the team, and CLIs in the conventional bin directories; code
+elsewhere needs a directory scope. Directory discovery takes every signed Mach-O
+below the folder within the existing scan bounds, except Apple's own code
+(`anchor apple`). A copy of an Apple binary has the same identifier, requirement and
+Mach-O UUID as the system original: with its rule installed, `/usr/bin/curl`
+launched over SSH failed with `EPERM` on m4pro. Such copies are also killed by launch
+constraints.
+
+**Launch context (m4pro, 2026-10-26).** A scoped tool is captured when it is its own
+responsible process (launchd job, double-click) or runs under a listed terminal host.
+Launched from a context with no rule, such as an SSH session, a tool whose OS rule
+carries a `matchPath` fails `connect()` with `EPERM` before the provider sees the flow,
+and a tool whose identifier is shared (no `matchPath`) connects directly. Verified:
+directory-scoped ad-hoc probe and Team-scoped `packer` as launchd jobs reached Mihomo
+through `mihomobox-app-chatgpt`; an identical probe copy outside the directory
+connected directly; `/usr/bin/curl` stayed direct.
+
+**Scope edits do not restart Mihomo.** Scopes are not part of the generated Mihomo
+configuration (`AppProxySettings.runtimeRouting`), so the daemon stores a scope-only
+change without re-activating the profile. Re-activation in Global mode under heavy
+load (load average ~40) missed the agent readiness window twice and failed closed.
+
+**Provider enforcement.** A flow whose executable is an exact record keeps the
+cdhash and file-stamp checks. Otherwise the provider admits it only through the
+most specific approved scope (deepest directory, then team) and only after
+`SecCodeCheckValidity` against that scope: `anchor apple generic` plus the leaf
+OU for a team, any valid signature for a directory. Anything else is
+`undiscoveredTarget` and the flow is closed, not bypassed.
+
+**Consent and grants.** The confirmation sheet approves the application's scopes;
+the broker stores them and maintenance reuses them, so code covered by an approved
+scope refreshes without new approval. Each directory scope carries one read-only
+grant minted by the broker; the provider must open it. This reverses the earlier
+"no parent-directory grant" rule for directory scopes only.
+
+**Limits.** A new signing identifier reaches the OS rules only after the next scan.
+Directories below the `/tmp`, `/var` and `/etc` symlinks are rejected by the
+no-follow checks.
+
+**Command line.** `mihomoboxctl app-proxy policy` edits scopes through the daemon.
+Authorization and enabling stay in the host: the CLI runs the signed host executable
+headlessly after checking it carries the CLI's own Developer ID leaf, so the broker
+still accepts only the host. `enable --approve` is the operator's consent; any process
+running as the user can invoke it, which is weaker than a UI click and was accepted
+by the owner for headless operation.

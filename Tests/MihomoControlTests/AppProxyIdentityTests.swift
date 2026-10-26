@@ -81,6 +81,65 @@ final class AppProxyIdentityTests: XCTestCase {
         XCTAssertNil(identity.team) // system code has no third-party Team ID; changed hash needs approval
         XCTAssertThrowsError(try snapshot.validateRefresh([replacing(hash: Data([9]))]))
     }
+    func testScopesMatchMostSpecificAndCoverRefresh() throws {
+        let team = AppProxyScope(category: "app_a", kind: .team, value: "2DC432GLL2")
+        let wide = AppProxyScope(category: "app_b", kind: .directory, value: "/Users/me/.codex")
+        let deep = AppProxyScope(category: "app_c", kind: .directory, value: "/Users/me/.codex/computer-use")
+        let scopes = [team, wide, deep]
+        XCTAssertEqual(AppProxyScope.match(path: "/Users/me/.codex/computer-use/x/bin", team: "2DC432GLL2", in: scopes), deep)
+        XCTAssertEqual(AppProxyScope.match(path: "/Users/me/.codex/bin/node", team: nil, in: scopes), wide)
+        XCTAssertEqual(AppProxyScope.match(path: "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT", team: "2DC432GLL2", in: scopes), team)
+        XCTAssertNil(AppProxyScope.match(path: "/Users/me/.codexfoo/bin", team: "OTHERTEAM1", in: scopes))
+        XCTAssertNil(AppProxyScope.match(path: "/Users/me/.codex", team: nil, in: scopes), "the directory itself is not code under it")
+        XCTAssertFalse(AppProxyScope(category: "a", kind: .team, value: "lower12345").isValid)
+        XCTAssertFalse(AppProxyScope(category: "a", kind: .directory, value: "/").isValid)
+        XCTAssertFalse(AppProxyScope(category: "a", kind: .directory, value: "/tmp/../etc").isValid)
+        XCTAssertEqual(team.requirement, "anchor apple generic and certificate leaf[subject.OU] = \"2DC432GLL2\"")
+        XCTAssertNil(wide.requirement)
+
+        let identity = try AppProxyCodeIdentity.inspect(path: "/usr/bin/curl", category: "app_test")
+        let snapshot = AppProxyIdentitySnapshot(ownerUID: getuid(), records: [identity], grants: [Data([1])])
+        let moved = AppProxyCodeIdentity(id: identity.id, path: "/opt/tools/curl", category: "app_test", requirement: identity.requirement,
+                                         team: nil, cdHash: Data([9]), stamp: identity.stamp)
+        XCTAssertThrowsError(try snapshot.validateRefresh([moved].map { AppProxyCodeIdentity(id: $0.id, path: $0.path, category: "app_x",
+            requirement: $0.requirement, team: $0.team, cdHash: $0.cdHash, stamp: $0.stamp) }))
+        try snapshot.validateRefresh([moved], scopes: [.init(category: "app_test", kind: .directory, value: "/opt/tools")])
+        XCTAssertThrowsError(try snapshot.validateRefresh([moved], scopes: [.init(category: "app_other", kind: .directory, value: "/opt/tools")]))
+    }
+    func testSnapshotScopesDecodeCompatiblyAndRequireOneGrantPerDirectory() throws {
+        let identity = try AppProxyCodeIdentity.inspect(path: "/usr/bin/curl", category: "app_test")
+        let old = AppProxyIdentitySnapshot(ownerUID: getuid(), records: [identity], grants: [Data([1])])
+        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(old)) as! [String: Any]
+        json.removeValue(forKey: "scopes"); json.removeValue(forKey: "scopeGrants")
+        let decoded = try AppProxyIdentitySnapshot.decode(try JSONSerialization.data(withJSONObject: json))
+        XCTAssertEqual(decoded.scopes, []); XCTAssertEqual(decoded, old)
+        let directory = AppProxyScope(category: "app_test", kind: .directory, value: "/opt/tools")
+        let team = AppProxyScope(category: "app_test", kind: .team, value: "2DC432GLL2")
+        XCTAssertNoThrow(try AppProxyIdentitySnapshot(ownerUID: getuid(), records: [identity], grants: [Data([1])],
+                                                      scopes: [team, directory], scopeGrants: [Data([2])]).validate())
+        XCTAssertThrowsError(try AppProxyIdentitySnapshot(ownerUID: getuid(), records: [identity], grants: [Data([1])],
+                                                          scopes: [team, directory], scopeGrants: []).validate())
+        XCTAssertThrowsError(try AppProxyIdentitySnapshot(ownerUID: getuid(), records: [identity], grants: [Data([1])],
+                                                          scopes: [directory, directory], scopeGrants: [Data([2]), Data([2])]).validate())
+    }
+    func testSettingsScopesAreValidatedAndOwnedByOneApplication() throws {
+        var entry = AppProxyEntry.defaults[1]
+        entry.teamIdentifiers = ["2DC432GLL2"]; entry.directories = ["/Users/me/.codex"]
+        let decoded = try JSONDecoder().decode(AppProxyEntry.self, from: JSONEncoder().encode(entry))
+        XCTAssertEqual(decoded, entry)
+        XCTAssertEqual(entry.scopes.map(\.kind), [.team, .directory])
+        XCTAssertNoThrow(try AppProxySettings(applications: [entry]).validate())
+        let legacy = try JSONDecoder().decode(AppProxyEntry.self, from: Data(#"{"id":"chatgpt","title":"T","port":17971}"#.utf8))
+        XCTAssertEqual(legacy.teamIdentifiers, []); XCTAssertEqual(legacy.directories, [])
+        var other = AppProxyEntry.defaults[2]
+        other.teamIdentifiers = ["2DC432GLL2"]
+        XCTAssertThrowsError(try AppProxySettings(applications: [entry, other]).validate())
+        for (teams, directories) in [(["2dc432gll2"], []), ([], ["/"]), ([], ["relative"]), (Array(repeating: "2DC432GLL2", count: 2), [])] {
+            var invalid = AppProxyEntry.defaults[1]
+            invalid.teamIdentifiers = teams; invalid.directories = directories
+            XCTAssertThrowsError(try AppProxySettings(applications: [invalid]).validate(), "\(teams) \(directories)")
+        }
+    }
     func testAuditReceiptPreservesPIDVersionWithoutTrafficData() {
         var words: [UInt32] = [501,501,20,501,20,123,10,7]
         let token = words.withUnsafeMutableBytes { Data($0) }

@@ -12,10 +12,11 @@ struct AppProxyEnrollment {
     @MainActor static func prepare(applications: [AppProxyEntry], requested: Set<String>,
         interactiveID: String?, previous: AppProxyIdentitySnapshot?,
         discover: (AppProxyEntry) async throws -> AIAppTargets,
-        authorize: ([AppProxyCodeIdentity], Bool) async throws -> AppProxyIdentitySnapshot
+        authorize: ([AppProxyCodeIdentity], [AppProxyScope], Bool) async throws -> AppProxyIdentitySnapshot
     ) async throws -> Self {
         var groups: [AIAppTargets] = []
         var grants: [String: (AppProxyCodeIdentity, Data)] = [:]
+        var scopes: [AppProxyScope] = [], scopeGrants: [AppProxyScope: Data] = [:]
         var failures: [String: String] = [:]
         for app in applications where requested.contains(app.id) {
             do {
@@ -25,15 +26,18 @@ struct AppProxyEnrollment {
                 if interactiveID != app.id {
                     // After loss of a prior generation, only durable broker consent
                     // can restore files; never silently approve a changed publisher.
-                    if let previous { try previous.validateRefresh(records) }
+                    if let previous { try previous.validateRefresh(records, scopes: app.scopes) }
                 }
-                let snapshot = try await authorize(records, interactiveID == app.id)
+                let snapshot = try await authorize(records, app.scopes, interactiveID == app.id)
                 try snapshot.validate()
-                guard snapshot.ownerUID == getuid(), snapshot.records == records else { throw AppProxyIdentityFailure.malformed }
+                guard snapshot.ownerUID == getuid(), snapshot.records == records,
+                      snapshot.scopes == app.scopes else { throw AppProxyIdentityFailure.malformed }
                 for record in records {
                     if let old = grants[record.path], old.0 != record { throw AIAppTargets.Failure.duplicateTarget }
                 }
                 for (record, grant) in zip(records, snapshot.grants) { grants[record.path] = (record, grant) }
+                for (scope, grant) in zip(snapshot.directoryScopes, snapshot.scopeGrants) { scopeGrants[scope] = grant }
+                scopes += app.scopes
                 groups.append(targets)
             } catch {
                 failures[app.id] = (error as? AppProxyIdentityFailure)?.rawValue
@@ -46,6 +50,11 @@ struct AppProxyEnrollment {
             grants: try records.map { record in
                 guard let grant = grants[record.path], grant.0 == record else { throw AppProxyIdentityFailure.malformed }
                 return grant.1
+            },
+            scopes: scopes,
+            scopeGrants: try scopes.filter { $0.kind == .directory }.map { scope in
+                guard let grant = scopeGrants[scope] else { throw AppProxyIdentityFailure.malformed }
+                return grant
             })
         try snapshot?.validate()
         return Self(targets: targets, snapshot: snapshot, failures: failures)

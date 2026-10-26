@@ -1,4 +1,5 @@
 import Foundation
+import Security
 import MihomoControl
 
 public struct AppProxyExecutable: Equatable, Sendable, Identifiable {
@@ -234,12 +235,53 @@ public final class AppProxyStore: ObservableObject {
     }
 
     public func addApplication() async {
+        guard let service else { return }
+        await add { port in try await service.chooseApplication(port: port) }
+    }
+
+    /// Adds a dropped or typed `.app` bundle or executable without a file picker.
+    public func addApplication(path text: String) async {
+        let path = Self.normalizedPath(text)
+        let url = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL
+        var directory: ObjCBool = false
+        guard path.hasPrefix("/"), FileManager.default.fileExists(atPath: url.path, isDirectory: &directory),
+              directory.boolValue ? url.pathExtension == "app" : FileManager.default.isExecutableFile(atPath: url.path) else {
+            error = "Enter the absolute path of a signed .app or executable file."
+            return
+        }
+        guard !draft.applications.contains(where: { $0.path == url.path }) else {
+            error = "\(url.path) is already in the list."
+            return
+        }
+        let title = url.pathExtension == "app" ? url.deletingPathExtension().lastPathComponent : url.lastPathComponent
+        await add { port in .init(id: "app_" + UUID().uuidString.lowercased(), title: title, path: url.path, port: port) }
+    }
+
+    /// The Team ID of a dropped app or executable, read from its code signature.
+    public nonisolated static func teamIdentifier(ofCodeAt path: String) -> String? {
+        var code: SecStaticCode?; var info: CFDictionary?
+        guard SecStaticCodeCreateWithPath(URL(fileURLWithPath: path) as CFURL, [], &code) == errSecSuccess, let code,
+              SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess else { return nil }
+        return (info as? [String: Any])?[kSecCodeInfoTeamIdentifier as String] as? String
+    }
+
+    /// Accepts typed paths, quoted paths, `~` and dropped `file://` URLs.
+    public nonisolated static func normalizedPath(_ text: String) -> String {
+        var value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if value.count >= 2, let first = value.first, first == value.last, first == "\"" || first == "'" {
+            value = String(value.dropFirst().dropLast())
+        }
+        if value.hasPrefix("file://"), let url = URL(string: value), url.isFileURL { value = url.path }
+        return (value as NSString).expandingTildeInPath
+    }
+
+    private func add(_ makeEntry: (UInt16) async throws -> AppProxyEntry?) async {
         guard !busy, !refreshing, !extensionStatus.enabled, let service,
               let port = (UInt16(17975)...UInt16(18002)).first(where: { value in !draft.applications.contains { $0.port == value } }),
               draft.applications.count < 32 else { return }
         editingApplications = true; defer { editingApplications = false }
         do {
-            guard let entry = try await service.chooseApplication(port: port) else { return }
+            guard let entry = try await makeEntry(port) else { return }
             var candidate = draft
             candidate.applications.append(entry)
             // Discover before accepting: overlapping signed executables cannot
@@ -265,6 +307,14 @@ public final class AppProxyStore: ObservableObject {
 
     /// Edit membership in the draft; Apply persists it through authenticated XPC.
     public func setExecutablePaths(_ paths: [String], for applicationID: String) async throws {
+        guard let entry = draft.applications.first(where: { $0.id == applicationID }) else { throw AppProxySettingsError.staleState }
+        try await setPolicy(executablePaths: paths, teamIdentifiers: entry.teamIdentifiers,
+                            directories: entry.directories, for: applicationID)
+    }
+
+    /// Exact CLIs, whole Team IDs and whole directories for one application; validated by a fresh scan.
+    public func setPolicy(executablePaths paths: [String], teamIdentifiers teams: [String], directories: [String],
+                          for applicationID: String) async throws {
         guard !busy, !refreshing, !extensionStatus.enabled, !hasConflict, routing != nil, let service,
               let index = draft.applications.firstIndex(where: { $0.id == applicationID }) else {
             throw AppProxySettingsError.staleState
@@ -272,10 +322,13 @@ public final class AppProxyStore: ObservableObject {
         editingApplications = true; defer { editingApplications = false }
         var candidate = draft
         candidate.applications[index].executablePaths = paths
+        candidate.applications[index].teamIdentifiers = teams.map { $0.trimmingCharacters(in: .whitespaces).uppercased() }
+        // A typed folder may carry a trailing slash or `..`; executables must already be exact.
+        candidate.applications[index].directories = directories.map { URL(fileURLWithPath: $0).standardizedFileURL.path }
         try AppProxySettings(applications: candidate.applications).validate()
-        candidate.applications[index].executablePaths = paths.map {
-            URL(fileURLWithPath: $0).resolvingSymlinksInPath().standardizedFileURL.path
-        }
+        func canonical(_ path: String) -> String { URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path }
+        candidate.applications[index].executablePaths = paths.map(canonical)
+        candidate.applications[index].directories = directories.map(canonical)
         try AppProxySettings(applications: candidate.applications).validate()
         let executables = try await service.discoverExecutables(applications: candidate.applications)
         discoveryGeneration += 1

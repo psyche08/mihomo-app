@@ -2,7 +2,9 @@ import AppKit
 import Foundation
 import Security
 
-/// Per-user, sandboxed XPC service. Only this process receives read-only Powerbox grants.
+/// Per-user, sandboxed XPC service. It reads the home directory and the conventional CLI
+/// prefixes read-only, so scanned code is approved in the host UI without a file picker;
+/// Powerbox remains only for code it still cannot read (for example external volumes).
 /// No network entitlements and no root privileges. The host cannot mint a writable implicit grant.
 final class CodeAccessBroker: NSObject, NSXPCListenerDelegate, AppProxyCodeAccessService {
     private var busy = false
@@ -39,10 +41,24 @@ final class CodeAccessBroker: NSObject, NSXPCListenerDelegate, AppProxyCodeAcces
         guard pinned.count <= 512 else { throw AppProxyIdentityFailure.capacity }
         var activeURLs: [URL] = []
         defer { for u in activeURLs.reversed() { u.stopAccessingSecurityScopedResource() } }
+        // Team/directory scopes are approved once in the host's confirmation sheet; maintenance reuses them.
+        let scopesKey = "readOnlyCodeScopes.v1"
+        var approvedScopes = Set(UserDefaults.standard.stringArray(forKey: scopesKey) ?? [])
+        let categories = Set(request.records.map(\.category))
+        guard request.scopes.count <= 64, Set(request.scopes).count == request.scopes.count,
+              request.scopes.allSatisfy({ $0.isValid && categories.contains($0.category) }) else { throw AppProxyIdentityFailure.malformed }
+        func scopeKey(_ scope: AppProxyScope) -> String { [scope.category, scope.kind.rawValue, scope.value].joined(separator: "\u{0}") }
+        for scope in request.scopes where !approvedScopes.contains(scopeKey(scope)) {
+            guard interactive else { throw AppProxyIdentityFailure.needsAuthorization }
+            approvedScopes.insert(scopeKey(scope))
+        }
+        guard approvedScopes.count <= 512 else { throw AppProxyIdentityFailure.capacity }
         var result: [Data] = []
         for record in request.records {
             let root = try Self.grantRoot(record.path)
-            if !interactive {
+            let scoped = AppProxyScope.match(path: record.path, team: record.team,
+                                             in: request.scopes.filter { $0.category == record.category }) != nil
+            if !interactive && !scoped {
                 let approved = pinned.values.compactMap { try? JSONDecoder().decode(AppProxyCodeIdentity.self, from: $0) }
                 if let prior = approved.first(where: { $0.path == record.path }) {
                     try AppProxyIdentitySnapshot(ownerUID: getuid(), records: [prior], grants: []).validateRefresh([record])
@@ -100,7 +116,16 @@ final class CodeAccessBroker: NSObject, NSXPCListenerDelegate, AppProxyCodeAcces
             result.append(try root.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil))
         }
         UserDefaults.standard.set(saved, forKey: storeKey)
-        return try AppProxyIdentitySnapshot(ownerUID: request.ownerUID, records: request.records, grants: result).encoded()
+        // One read-only grant per directory scope. The broker's own access is read-only, so the grant is too.
+        var scopeGrants: [Data] = []
+        for scope in request.scopes where scope.kind == .directory {
+            try AppProxyAccessLease.requireReadableDirectory(scope.value)
+            scopeGrants.append(try URL(fileURLWithPath: scope.value, isDirectory: true)
+                .bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil))
+        }
+        UserDefaults.standard.set(Array(approvedScopes).sorted(), forKey: scopesKey)
+        return try AppProxyIdentitySnapshot(ownerUID: request.ownerUID, records: request.records, grants: result,
+                                            scopes: request.scopes, scopeGrants: scopeGrants).encoded()
     }
     static func grantRoot(_ path: String) throws -> URL {
         try AppProxyCodeIdentity.accessURL(for: path)

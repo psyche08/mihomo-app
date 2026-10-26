@@ -53,8 +53,9 @@ Named proxy definitions must use block mappings with explicit names and types;
 named direct/reject/DNS adapters are preserved. Original profile rules remain
 unchanged for traffic outside App Proxy.
 
-Open **App Proxy** in the sidebar (Command-8). Use **Add App or CLI…** to select
-a signed application bundle or executable. Embedded signed helpers follow the
+Open **App Proxy** in the sidebar (Command-8). Drag a signed application bundle or
+executable onto the list, or use **Add App or CLI…** to paste its path (Choose…
+still opens a picker). Embedded signed helpers follow the
 application's route. Open **Signed executables** to inspect the discovered
 paths, Signing IDs, Team IDs and designated requirements in a separate panel.
 Refresh Nodes reads routing, available targets and extension status concurrently,
@@ -70,7 +71,9 @@ An external settings change preserves the draft but blocks Apply until Discard
 loads the latest saved settings, preventing accidental overwrites.
 Choose a node or proxy group for every entry, then **Apply Changes**. Each row
 has **Authorize & Enable**, **Retry Authorization** and **Disable** actions.
-Only the selected row can open code-consent panels. Other rows and their node
+Authorize rescans that application's signed executables and lists them for one-click
+confirmation; no file picker is needed for code in the home directory,
+`/Applications`, `/opt/homebrew` or `/usr/local`. Other rows and their node
 choices remain saved; declining one application's consent does not discard or
 block other authorized applications. An application publishes rules only after
 all of its discovered code and responsible hosts pass read-only access and
@@ -97,13 +100,40 @@ Disable App Proxy before adding or removing entries. Removing an entry only
 removes its proxy routing, never the installed application. Apply saves these
 changes; Restore Default Apps brings back the four initial categories.
 
-Each entry's **CLI executables** editor accepts additional signed binaries that
-share that entry's node. Enter one absolute path per line or use **Choose
-Executable…**, then **Update Draft**, **Apply Changes**, and enable App Proxy.
-Turn App Proxy off before editing membership. Removing a line removes that
-explicit assignment; automatically discovered app helpers remain included.
-The assignment follows the exact executable, regardless of its launcher;
-it does not automatically include all descendants of Codex or any other app.
+Each entry's **Policy** editor adds code that shares that entry's node, in three
+scopes, one entry per line (type, paste or drag in):
+
+- **Team IDs**: every signed app in `/Applications` and `~/Applications`, and every
+  CLI in `/opt/homebrew/bin`, `/usr/local/bin` and `~/.local/bin`, signed by the team.
+  Dropping an app fills in its Team ID.
+- **Directories**: every signed executable below the folder, including versions
+  installed later.
+- **CLI executables**: exactly these executables (or **Choose Executable…**).
+
+Then **Update Draft**, **Apply Changes**, and authorize the app. Turn App Proxy off
+before editing a policy. A Team ID or directory belongs to one app. A scope follows
+the code regardless of its launcher; it does not include every descendant of an app.
+New tools under a scope are picked up by the next background scan (within about
+20 seconds).
+
+The same operations are available from a shell, run as the logged-in user:
+
+```bash
+mihomoboxctl app-proxy policy show chatgpt
+mihomoboxctl app-proxy policy set chatgpt --team 2DC432GLL2 --directory ~/.codex
+mihomoboxctl app-proxy targets chatgpt
+mihomoboxctl app-proxy enable chatgpt --approve
+mihomoboxctl app-proxy runtime
+```
+
+`policy set` replaces all three scopes of one application in the daemon-owned
+settings. `targets`, `runtime`, `enable`, `disable`, `on` and `off` run the signed
+MihomoBox host headlessly (`mihomo-app --app-proxy …`); the CLI first verifies that
+host against its own Developer ID leaf. `--approve` consents to the scanned code and
+scopes exactly as the confirmation sheet does; without it only earlier approvals
+apply. A headless run and the menu-bar app serialize their App Proxy changes with a
+per-user lock. `runtime` also prints the provider's recent process-validation stages
+and counters (PIDs only, no paths or traffic), the same receipts the app shows.
 For scripts, select the signed interpreter, which also covers its other uses.
 Limits are 32 additional executables per entry and 128 total. Duplicate ownership,
 missing files, unsigned programs and directories are rejected before accepting

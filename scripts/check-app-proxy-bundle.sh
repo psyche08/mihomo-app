@@ -36,7 +36,12 @@ if [[ "${2:-}" == --signed ]]; then
   ! /usr/libexec/PlistBuddy -c 'Print :com.apple.security.network.server' "$AUDIT_DIR/access-entitlements.plist" >/dev/null 2>&1
   ! /usr/libexec/PlistBuddy -c 'Print :com.apple.security.network.client' "$AUDIT_DIR/access-entitlements.plist" >/dev/null 2>&1
   ! /usr/libexec/PlistBuddy -c 'Print :com.apple.security.files.user-selected.read-write' "$AUDIT_DIR/access-entitlements.plist" >/dev/null 2>&1
-  ! grep -q 'temporary-exception' "$AUDIT_DIR/access-entitlements.plist"
+  # The broker may read code without Powerbox: exactly the home directory and
+  # the two conventional CLI prefixes, read-only. Nothing writable, nothing else.
+  ! grep -q 'read-write' "$AUDIT_DIR/access-entitlements.plist"
+  test "$(grep -o 'temporary-exception' "$AUDIT_DIR/access-entitlements.plist" | wc -l | tr -d ' ')" = 2
+  test "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.temporary-exception.files.home-relative-path.read-only' "$AUDIT_DIR/access-entitlements.plist" | tr -d ' \n')" = 'Array{/}'
+  test "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.temporary-exception.files.absolute-path.read-only' "$AUDIT_DIR/access-entitlements.plist" | tr -d ' \n')" = 'Array{/opt/homebrew//usr/local/}'
   for code in "$APP" "$EXT"; do
     codesign -d --entitlements :- "$code" > "$AUDIT_DIR/entitlements.plist" 2>/dev/null
     /usr/libexec/PlistBuddy -c 'Print :com.apple.developer.networking.networkextension' "$AUDIT_DIR/entitlements.plist" | grep -q app-proxy-provider-systemextension

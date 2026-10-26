@@ -35,6 +35,52 @@ final class AppProxyCoordinatorTests: XCTestCase {
         var unsigned = entry; unsigned.path = "/etc/hosts"
         XCTAssertThrowsError(try AIAppTargets(requireAll: false, applications: [unsigned]))
     }
+    func testDirectoryScopeAndOneOSRulePerSigningIdentifier() throws {
+        let fm = FileManager.default
+        // Temporary directories sit below the /var symlink, which no-follow checks reject by design.
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent(".build/scope-test-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: root) }
+        for name in ["a", "b"] {
+            try fm.createDirectory(at: root.appendingPathComponent(name), withIntermediateDirectories: true)
+            let copy = root.appendingPathComponent("\(name)/fixture")
+            try fm.copyItem(atPath: "/usr/bin/true", toPath: copy.path)
+            let sign = Process()
+            sign.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+            sign.arguments = ["--force", "--sign", "-", "--identifier", "dev.linsheng.mihomo.scope-fixture", copy.path]
+            try sign.run(); sign.waitUntilExit()
+            XCTAssertEqual(sign.terminationStatus, 0)
+        }
+        // An unmodified copy of Apple's code would make its OS rule capture the system original.
+        try fm.createDirectory(at: root.appendingPathComponent("apple"), withIntermediateDirectories: true)
+        try fm.copyItem(atPath: "/usr/bin/curl", toPath: root.appendingPathComponent("apple/curl").path)
+        var entry = AppProxyEntry.defaults[1]
+        entry.directories = [root.path]
+        let discovered = try AIAppTargets(requireAll: false, applications: [entry])
+        let copies = discovered.targets.filter { $0.path.hasPrefix(root.path + "/") }
+        XCTAssertEqual(copies.map(\.path).sorted(), ["a", "b"].map { root.appendingPathComponent("\($0)/fixture").path })
+        XCTAssertFalse(discovered.rules.contains { $0.matchSigningIdentifier == "com.apple.curl" })
+        guard copies.count == 2 else { return }
+        XCTAssertEqual(Set(copies.map(\.category)), [entry.id])
+        XCTAssertEqual(Set(discovered.rules.map(\.matchSigningIdentifier)).count, discovered.rules.count,
+                       "NE keeps one app rule per signing identifier")
+        let shared = try XCTUnwrap(discovered.rules.first { $0.matchSigningIdentifier == copies[0].id })
+        XCTAssertNil(shared.matchPath, "a shared identifier leaves the exact path to the provider")
+        XCTAssertEqual(Set(shared.matchTools?.compactMap(\.matchPath) ?? []).isSuperset(of: copies.map(\.path)), true)
+
+        // Two applications owning copies of one identifier still publish a single OS rule.
+        var first = AppProxyEntry.defaults[1]; first.directories = [root.appendingPathComponent("a").path]
+        var second = AppProxyEntry.defaults[3]; second.directories = [root.appendingPathComponent("b").path]
+        let one = try AIAppTargets(requireAll: false, applications: [first])
+        let two = try AIAppTargets(requireAll: false, applications: [second])
+        XCTAssertNotNil(one.rules.first { $0.matchSigningIdentifier == copies[0].id }?.matchPath)
+        let combined = try AIAppTargets(combining: [one, two])
+        XCTAssertEqual(Set(combined.rules.map(\.matchSigningIdentifier)).count, combined.rules.count)
+        let merged = try XCTUnwrap(combined.rules.first { $0.matchSigningIdentifier == copies[0].id })
+        XCTAssertNil(merged.matchPath)
+        XCTAssertEqual(AIAppTargets.requirement(["b", "a", "a"]), "(a) or (b)")
+        XCTAssertEqual(AIAppTargets.requirement(["a", "a"]), "a")
+    }
     @MainActor func testNewManagerUsesAppProxyProviderAndPerApplicationRouting() {
         let manager: NETunnelProviderManager = AppProxyCoordinator.makeManager()
         XCTAssertTrue(manager is NEAppProxyProviderManager)
@@ -88,6 +134,28 @@ extension AppProxyCoordinatorTests {
         a.matchTools = nil
         XCTAssertNotEqual(onlyApp, AppProxyCoordinator.rulesDigest([a,b]))
         XCTAssertNotEqual(expected, AppProxyCoordinator.rulesDigest([a,b]))
+    }
+    @MainActor func testRuleDifferenceCountsFieldChangesWithoutContent() {
+        func rule(_ id: String, _ path: String, _ requirement: String) -> NEAppRule {
+            let value = NEAppRule(signingIdentifier: id, designatedRequirement: requirement)
+            value.matchPath = path
+            return value
+        }
+        let app = rule("a", "/Users/me/App", "identifier a and anchor apple generic")
+        app.matchTools = [rule("t", "/x/tool", "identifier t")]
+        let other = rule("b", "/b", "identifier b")
+        // Read back: the requirement is only re-serialized, a tool path changes case, a rule is dropped.
+        let appBack = rule("a", "/Users/me/App", "identifier \"a\" and anchor apple generic")
+        appBack.matchTools = [rule("t", "/X/tool", "identifier t")]
+        let d = AppProxyCoordinator.rulesDifference(actual: [appBack], expected: [app, other])
+        XCTAssertEqual([d.expectedRules, d.actualRules, d.missingRules, d.extraRules], [2, 1, 1, 0])
+        XCTAssertEqual([d.requirementText, d.requirementCanonical, d.requirementCleared], [1, 1, 0])
+        XCTAssertEqual([d.expectedTools, d.actualTools, d.missingTools, d.extraTools], [1, 1, 1, 1])
+        XCTAssertEqual([d.movedPaths, d.pathCaseOnly, d.pathResolvesEqual, d.pathCleared], [1, 1, 0, 0])
+        // Counts only: every token is name=N or name=N/N, so no path or requirement can leak.
+        XCTAssertNotNil(d.summary.range(of: #"^[A-Za-z]+=[0-9]+(/[0-9]+)?( [A-Za-z]+=[0-9]+(/[0-9]+)?)*$"#, options: .regularExpression))
+        XCTAssertEqual(AppProxyCoordinator.rulesDifference(actual: [app, other], expected: [other, app]),
+                       .init(expectedRules: 2, actualRules: 2, expectedTools: 1, actualTools: 1))
     }
 }
 

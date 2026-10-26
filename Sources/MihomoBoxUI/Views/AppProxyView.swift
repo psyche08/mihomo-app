@@ -8,8 +8,15 @@ struct AppProxyView: View {
     @State private var inspecting: AppProxyEntry?
     @State private var editingExecutables: AppProxyEntry?
     @State private var editingBypass = false
+    @State private var confirming: AppProxyEntry?
+    @State private var addingPath = false
+    @State private var newPath = ""
+    @State private var dropTargeted = false
 
     private var busy: Bool { dashboard.configAction != nil || model.busy }
+    private var canAdd: Bool {
+        !busy && !model.refreshing && !model.extensionStatus.enabled && model.routing != nil && model.draft.applications.count < 32
+    }
     private var changeSummary: String {
         if busy { return "Updating App Proxy…" }
         if model.routing == nil { return model.refreshing ? "Loading settings…" : "Refresh to verify saved settings" }
@@ -42,11 +49,23 @@ struct AppProxyView: View {
                 }
                 .padding(16)
             }
+            .overlay {
+                if dropTargeted {
+                    RoundedRectangle(cornerRadius: 8).stroke(Color.accentColor, lineWidth: 2).padding(6)
+                        .allowsHitTesting(false)
+                }
+            }
+            .dropDestination(for: URL.self) { urls, _ in
+                guard canAdd, !urls.isEmpty else { return false }
+                Task { for url in urls where url.isFileURL { await model.addApplication(path: url.path) } }
+                return true
+            } isTargeted: { dropTargeted = $0 && canAdd }
             Divider()
             actionBar
         }
         .background(DashboardTheme.background)
         .sheet(item: $inspecting) { app in executableDetails(app) }
+        .sheet(item: $confirming) { app in authorizationConfirmation(app) }
         .sheet(item: $editingExecutables) { app in
             AppProxyExecutableEditor(model: model, application: app)
         }
@@ -133,9 +152,10 @@ struct AppProxyView: View {
                 TextField("Search apps", text: $search)
                     .textFieldStyle(.roundedBorder).frame(maxWidth: 260)
                     .accessibilityLabel("Search applications")
-                Button("Add App or CLI…", systemImage: "plus") { Task { await model.addApplication() } }
-                    .disabled(busy || model.refreshing || model.extensionStatus.enabled || model.routing == nil || model.draft.applications.count >= 32)
-                    .help(model.extensionStatus.enabled ? "Turn off App Proxy to change the application list" : "Add a signed app or CLI executable")
+                Button("Add App or CLI…", systemImage: "plus") { newPath = ""; addingPath = true }
+                    .disabled(!canAdd)
+                    .help(model.extensionStatus.enabled ? "Turn off App Proxy to change the application list" : "Add a signed app or CLI executable, or drag one onto the list")
+                    .popover(isPresented: $addingPath, arrowEdge: .bottom) { addPathPopover }
                 Menu {
                     Button("Restore Default Apps") { model.restoreDefaults() }
                         .disabled(model.extensionStatus.enabled || model.routing == nil || model.refreshing)
@@ -192,10 +212,10 @@ struct AppProxyView: View {
                 }
                 .buttonStyle(.plain).foregroundStyle(Color.accentColor)
                 .accessibilityLabel("Inspect signed executables for \(app.title)")
-                Button("CLI executables · \(app.executablePaths.count)") { editingExecutables = app }
+                Button("Policy · \(app.teamIdentifiers.count) teams · \(app.directories.count) folders · \(app.executablePaths.count) CLIs") { editingExecutables = app }
                     .font(.caption).buttonStyle(.plain).foregroundStyle(Color.accentColor)
                     .disabled(busy || model.routing == nil)
-                    .accessibilityLabel("Edit CLI executables for \(app.title)")
+                    .accessibilityLabel("Edit routing policy for \(app.title)")
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 5) {
@@ -204,9 +224,7 @@ struct AppProxyView: View {
                     .accessibilityLabel("\(app.title): \(state.summary)")
                 HStack {
                     if !state.active {
-                        Button(state.requested ? "Retry Authorization" : "Authorize & Enable") {
-                            Task { await dashboard.setAppProxyApplicationEnabled(app.id, enabled: true) }
-                        }
+                        Button(state.requested ? "Retry Authorization" : "Authorize & Enable") { confirming = app }
                     }
                     if state.requested || state.active {
                         Button("Disable") { Task { await dashboard.setAppProxyApplicationEnabled(app.id, enabled: false) } }
@@ -275,6 +293,93 @@ struct AppProxyView: View {
         .background(DashboardTheme.surface)
     }
 
+    private var addPathPopover: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Add App or CLI").font(.headline)
+            TextField("/Applications/Example.app or /usr/local/bin/tool", text: $newPath)
+                .textFieldStyle(.roundedBorder).font(.system(.body, design: .monospaced)).frame(width: 400)
+                .onSubmit(addTypedPath)
+                .dropDestination(for: URL.self) { urls, _ in
+                    guard let url = urls.first(where: \.isFileURL) else { return false }
+                    newPath = url.path; return true
+                }
+                .accessibilityLabel("Application or executable path")
+            Text("Paste a path, drag an app or executable here, or drop it straight onto the list.")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Button("Choose…") { addingPath = false; Task { await model.addApplication() } }
+                Spacer()
+                Button("Cancel") { addingPath = false }.keyboardShortcut(.cancelAction)
+                Button("Add", action: addTypedPath)
+                    .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                    .disabled(AppProxyStore.normalizedPath(newPath).isEmpty)
+            }
+        }
+        .padding(16)
+    }
+
+    private func addTypedPath() {
+        let path = newPath
+        guard !AppProxyStore.normalizedPath(path).isEmpty else { return }
+        addingPath = false
+        Task { await model.addApplication(path: path) }
+    }
+
+    /// Scan, show what will be routed, then authorize on one click. No file picker:
+    /// the code-access broker reads code locations read-only by itself.
+    private func authorizationConfirmation(_ app: AppProxyEntry) -> some View {
+        let executables = model.extensionStatus.executables.filter { $0.applicationID == app.id }
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Authorize \(app.title)").font(.title2.bold())
+                    Text("App Proxy will route these signed executables and read only their code to verify them.")
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if model.scanning { ProgressView().controlSize(.small) }
+            }
+            if let error = model.discoveryError { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    if executables.isEmpty {
+                        Text(model.scanning ? "Scanning signatures…" : "No matching signed executables found. Install the app, then try again.")
+                            .foregroundStyle(.secondary).padding(.vertical)
+                    }
+                    ForEach(executables) { executableRow($0) }
+                }
+            }
+            HStack {
+                Text("\(executables.count) signed \(executables.count == 1 ? "executable" : "executables")")
+                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("Cancel") { confirming = nil }.keyboardShortcut(.cancelAction)
+                Button("Authorize & Enable") {
+                    confirming = nil
+                    Task { await dashboard.setAppProxyApplicationEnabled(app.id, enabled: true) }
+                }
+                .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                .disabled(busy || model.scanning || executables.isEmpty)
+            }
+        }
+        .padding(20).frame(width: 680, height: 520)
+        .background(DashboardTheme.background)
+        .task { await model.refreshExecutables(force: true) }
+    }
+
+    private func executableRow(_ executable: AppProxyExecutable) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(executable.path).font(.system(.callout, design: .monospaced))
+            Text("Signing ID: \(executable.signingIdentifier)").font(.caption)
+            Text("Team ID: \(executable.teamIdentifier ?? "None")").font(.caption).foregroundStyle(.secondary)
+            DisclosureGroup("Designated requirement") {
+                Text(executable.requirement).font(.system(.caption, design: .monospaced))
+            }.font(.caption)
+        }
+        .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12).background(DashboardTheme.surface, in: RoundedRectangle(cornerRadius: 8))
+    }
+
     private func executableDetails(_ app: AppProxyEntry) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -296,18 +401,7 @@ struct AppProxyView: View {
                         Text(model.scanning ? "Checking signatures…" : "No matching signed executables found. Install the app, then rescan.")
                             .foregroundStyle(.secondary).padding(.vertical)
                     }
-                    ForEach(executables) { executable in
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(executable.path).font(.system(.callout, design: .monospaced))
-                            Text("Signing ID: \(executable.signingIdentifier)").font(.caption)
-                            Text("Team ID: \(executable.teamIdentifier ?? "None")").font(.caption).foregroundStyle(.secondary)
-                            DisclosureGroup("Designated requirement") {
-                                Text(executable.requirement).font(.system(.caption, design: .monospaced))
-                            }.font(.caption)
-                        }
-                        .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(12).background(DashboardTheme.surface, in: RoundedRectangle(cornerRadius: 8))
-                    }
+                    ForEach(executables) { executableRow($0) }
                 }
             }
             Text("Rescan updates this list. App Proxy verifies signatures before enabling and refreshes identities while enabled.")
@@ -359,33 +453,51 @@ private struct AppProxyExecutableEditor: View {
     let application: AppProxyEntry
     @Environment(\.dismiss) private var dismiss
     @State private var paths: String
+    @State private var teams: String
+    @State private var directories: String
     @State private var error: String?
     @State private var saving = false
 
     init(model: AppProxyStore, application: AppProxyEntry) {
         self.model = model; self.application = application
         _paths = State(initialValue: application.executablePaths.joined(separator: "\n"))
+        _teams = State(initialValue: application.teamIdentifiers.joined(separator: "\n"))
+        _directories = State(initialValue: application.directories.joined(separator: "\n"))
     }
     private var locked: Bool { model.busy || model.refreshing || model.extensionStatus.enabled || model.hasConflict }
-    private var entries: [String] { paths.components(separatedBy: .newlines).filter { !$0.isEmpty } }
+    private func lines(_ text: String) -> [String] {
+        text.components(separatedBy: .newlines).map(AppProxyStore.normalizedPath).filter { !$0.isEmpty }
+    }
+    private var entries: [String] { lines(paths) }
+    private var directoryEntries: [String] { lines(directories) }
+    private var teamEntries: [String] {
+        teams.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces).uppercased() }.filter { !$0.isEmpty }
+    }
+    private var unchanged: Bool {
+        entries == application.executablePaths && teamEntries == application.teamIdentifiers
+            && directoryEntries == application.directories
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("CLI executables").font(.title2.bold())
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Routing policy").font(.title2.bold())
             Text(application.title).font(.headline)
-            Text("These executables use this app’s selected node, regardless of which app launches them. Other child processes are not included automatically.")
+            Text("Code matched here uses this app’s selected node, regardless of which app launches it. One entry per line; type, paste or drag items in.")
                 .foregroundStyle(.secondary)
-            Text("Enter one absolute path per line. Add or remove lines to edit the list.").font(.callout)
-            TextEditor(text: $paths)
-                .font(.system(.body, design: .monospaced))
-                .padding(6).frame(minHeight: 160)
-                .overlay(RoundedRectangle(cornerRadius: 6).stroke(.quaternary))
-                .disabled(locked || saving)
-                .accessibilityLabel("CLI executable paths")
-            Text("For example: /usr/bin/curl. Select signed binaries; scripts require their interpreter. Each executable can belong to only one app.")
-                .font(.caption).foregroundStyle(.secondary)
+            scopeSection("Team IDs", hint: "All signed apps in Applications and CLIs in the usual bin folders from these developers. Drop an app to add its Team ID.",
+                         text: $teams, label: "Team IDs") { urls in
+                urls.compactMap { AppProxyStore.teamIdentifier(ofCodeAt: Bundle(url: $0)?.executableURL?.path ?? $0.path) }
+            }
+            scopeSection("Directories", hint: "All signed executables under these folders, including versions installed later.",
+                         text: $directories, label: "Directories") { urls in
+                urls.map { $0.resolvingSymlinksInPath().standardizedFileURL.path }
+            }
+            scopeSection("CLI executables", hint: "Exactly these executables, for example /usr/bin/curl. Scripts require their interpreter.",
+                         text: $paths, label: "CLI executable paths") { urls in
+                urls.map { $0.resolvingSymlinksInPath().standardizedFileURL.path }
+            }
             if model.extensionStatus.enabled {
-                Label("Turn off App Proxy before editing this list.", systemImage: "info.circle")
+                Label("Turn off App Proxy before editing this policy.", systemImage: "info.circle")
                     .font(.callout).foregroundStyle(.orange)
             }
             if model.hasConflict { Text("Discard conflicting changes on the App Proxy page before editing.").foregroundStyle(.orange) }
@@ -408,19 +520,42 @@ private struct AppProxyExecutableEditor: View {
                     Task {
                         defer { saving = false }
                         do {
-                            try await model.setExecutablePaths(entries, for: application.id)
+                            try await model.setPolicy(executablePaths: entries, teamIdentifiers: teamEntries,
+                                                      directories: directoryEntries, for: application.id)
                             dismiss()
                         } catch { self.error = error.localizedDescription }
                     }
                 }
                 .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
-                .disabled(locked || saving || entries == application.executablePaths)
+                .disabled(locked || saving || unchanged)
             }
-            Text("Update Draft verifies signatures. Apply Changes on the App Proxy page saves the configuration; then enable App Proxy.")
+            Text("Update Draft scans and verifies signatures. Apply Changes on the App Proxy page saves the policy; then authorize the app.")
                 .font(.caption).foregroundStyle(.secondary)
         }
-        .padding(20).frame(width: 640, height: 540)
+        .padding(20).frame(width: 680, height: 700)
         .interactiveDismissDisabled(saving || model.busy)
+    }
+
+    private func scopeSection(_ title: String, hint: String, text: Binding<String>, label: String,
+                              dropped: @escaping ([URL]) -> [String]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.headline)
+            TextEditor(text: text)
+                .font(.system(.body, design: .monospaced))
+                .padding(4).frame(minHeight: 72)
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(.quaternary))
+                .disabled(locked || saving)
+                .dropDestination(for: URL.self) { urls, _ in
+                    guard !locked, !saving else { return false }
+                    var current = text.wrappedValue.components(separatedBy: .newlines)
+                        .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+                    for value in dropped(urls.filter(\.isFileURL)) where !current.contains(value) { current.append(value) }
+                    text.wrappedValue = current.joined(separator: "\n")
+                    return true
+                }
+                .accessibilityLabel(label)
+            Text(hint).font(.caption).foregroundStyle(.secondary)
+        }
     }
 }
 

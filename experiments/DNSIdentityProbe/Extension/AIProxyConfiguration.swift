@@ -79,6 +79,8 @@ struct AIProxyConfiguration {
                   }) else { throw Invalid.configuration }
         } else { snapshot = nil }
         let acceptedCategories = Set(ports.keys).union(["cli_host"])
+        let routedCategories = Set(ports.keys)
+        guard snapshot?.scopes.allSatisfy({ routedCategories.contains($0.category) }) ?? true else { throw Invalid.configuration }
         identities = try targets.map { record in
             guard Set(record.keys) == ["id", "path", "category", "requirement"],
                   let id = record["id"], !id.isEmpty, id.utf8.count <= 512,
@@ -113,7 +115,20 @@ struct AIProxyConfiguration {
         let path = executable.standardizedFileURL.resolvingSymlinksInPath().path
         if let snapshot {
             guard let record = snapshot.records.first(where: { $0.path == path && $0.id == metadata.sourceAppSigningIdentifier }) else {
-                throw AppProxyIdentityFailure.undiscoveredTarget
+                // Not an exact discovered copy: admit it only through the most specific approved
+                // team/directory scope, checked against the running code's own signature.
+                let team = values[kSecCodeInfoTeamIdentifier as String] as? String
+                guard let scope = AppProxyScope.match(path: path, team: team, in: snapshot.scopes) else {
+                    throw AppProxyIdentityFailure.undiscoveredTarget
+                }
+                var requirement: SecRequirement?
+                if let text = scope.requirement {
+                    guard SecRequirementCreateWithString(text as CFString, [], &requirement) == errSecSuccess else {
+                        throw AppProxyIdentityFailure.signature
+                    }
+                }
+                guard SecCodeCheckValidity(code, [], requirement) == errSecSuccess else { throw AppProxyIdentityFailure.signature }
+                return scope.category
             }
             guard values[kSecCodeInfoUnique as String] as? Data == record.cdHash else { throw AppProxyIdentityFailure.signature }
             guard try AppProxyFileStamp.read(path) == record.stamp else { throw AppProxyIdentityFailure.changedFile }

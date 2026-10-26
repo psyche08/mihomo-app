@@ -64,6 +64,12 @@ final class ProfileBroker: @unchecked Sendable {
             let before = try appProxyState()
             guard before.revision == update.expectedRevision else { throw AppProxySettingsError.staleState }
             try update.settings.validate()
+            // Code scopes only change what the App Proxy admits, not Mihomo's configuration:
+            // store them without re-activating, which would restart (and could fail-close) the runtime.
+            if before.settings.runtimeRouting == update.settings.runtimeRouting {
+                try writePrivate(try JSONEncoder().encode(update.settings), to: root.appendingPathComponent("app-proxy.json"), permissions: 0o600)
+                return try JSONEncoder().encode(appProxyState())
+            }
             let data = try readStoredProfile(root.appendingPathComponent("profiles").appendingPathComponent(before.profile))
             try activateProfile(name: before.profile, data: data, appProxySettings: update.settings)
             return try JSONEncoder().encode(appProxyState())

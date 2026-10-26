@@ -17,6 +17,17 @@ final class AppProxyProfileTests: XCTestCase {
         var disabled = settings; disabled.bypass = .init(cidrs: [])
         XCTAssertNoThrow(try AppProxyProfile.applying(disabled, to: "dns:\n  fake-ip-range: 10.0.0.1/16\nrules: []\n"))
     }
+    func testCodeScopesDoNotChangeTheMihomoConfiguration() throws {
+        let source = "dns:\n  fake-ip-range: 198.18.0.1/16\nrules: []\n"
+        var scoped = settings
+        scoped.applications[0].teamIdentifiers = ["D38WU7D763"]
+        scoped.applications[0].directories = ["/Users/example/tools"]
+        scoped.applications[0].executablePaths = ["/opt/homebrew/bin/packer"]
+        XCTAssertEqual(scoped.runtimeRouting, settings.runtimeRouting, "the daemon stores this change without a restart")
+        XCTAssertEqual(try AppProxyProfile.applying(scoped, to: source), try AppProxyProfile.applying(settings, to: source))
+        var rerouted = scoped; rerouted.applications[0].port += 1
+        XCTAssertNotEqual(rerouted.runtimeRouting, settings.runtimeRouting)
+    }
     func testExecutableMembershipMigrationPersistenceAndBounds() throws {
         let legacy = try JSONDecoder().decode(AppProxyEntry.self, from: Data(#"{"id":"chatgpt","title":"Codex","port":17971}"#.utf8))
         XCTAssertEqual(legacy.executablePaths, [])

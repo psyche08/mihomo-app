@@ -150,6 +150,44 @@ final class AppProxyStoreTests: XCTestCase {
         XCTAssertTrue(model.draft.applications.isEmpty)
         do { try await model.setEnabled(true); XCTFail("Empty list must not enable") } catch {}
     }
+    func testTypedAndDroppedPathsNormalize() {
+        XCTAssertEqual(AppProxyStore.normalizedPath("  '/usr/bin/curl'\n"), "/usr/bin/curl")
+        XCTAssertEqual(AppProxyStore.normalizedPath("\"/usr/bin/curl\""), "/usr/bin/curl")
+        XCTAssertEqual(AppProxyStore.normalizedPath("file:///Applications/My%20App.app"), "/Applications/My App.app")
+        XCTAssertEqual(AppProxyStore.normalizedPath("~/bin/tool"), NSHomeDirectory() + "/bin/tool")
+        XCTAssertEqual(AppProxyStore.normalizedPath("   "), "")
+    }
+    @MainActor func testAddByPathNeedsNoPickerAndRejectsInvalidPaths() async throws {
+        let gateway = RoutingGateway(); let model = AppProxyStore(gateway: gateway); let service = ExtensionService()
+        model.configure(service); await model.refresh()
+        let count = model.draft.applications.count
+        for invalid in ["usr/bin/curl", "/nonexistent/tool", "/usr/bin", "/etc/hosts"] {
+            await model.addApplication(path: invalid)
+            XCTAssertEqual(model.draft.applications.count, count, invalid)
+            XCTAssertNotNil(model.error, invalid)
+        }
+        await model.addApplication(path: "file:///usr/bin/curl")
+        let entry = try XCTUnwrap(model.draft.applications.last)
+        XCTAssertEqual(entry.title, "curl"); XCTAssertEqual(entry.path, "/usr/bin/curl")
+        XCTAssertEqual(entry.port, 17975); XCTAssertTrue(entry.id.hasPrefix("app_"))
+        XCTAssertNil(model.error)
+        await model.addApplication(path: "/usr/bin/curl")
+        XCTAssertEqual(model.draft.applications.count, count + 1)
+        XCTAssertNotNil(model.error)
+    }
+    @MainActor func testPolicyNormalizesTeamsAndDirectoriesAndRejectsInvalidScopes() async throws {
+        let gateway = RoutingGateway(); let model = AppProxyStore(gateway: gateway); let service = ExtensionService()
+        model.configure(service); await model.refresh()
+        try await model.setPolicy(executablePaths: ["/usr/bin/curl"], teamIdentifiers: [" 2dc432gll2 "],
+                                  directories: ["/usr/local/../bin/"], for: "chatgpt")
+        let entry = try XCTUnwrap(model.draft.applications.first { $0.id == "chatgpt" })
+        XCTAssertEqual(entry.teamIdentifiers, ["2DC432GLL2"])
+        XCTAssertEqual(entry.directories, ["/usr/bin"], "directories are stored canonically")
+        XCTAssertEqual(entry.executablePaths, ["/usr/bin/curl"])
+        do { try await model.setPolicy(executablePaths: [], teamIdentifiers: ["SHORT"], directories: [], for: "chatgpt"); XCTFail() } catch {}
+        do { try await model.setPolicy(executablePaths: [], teamIdentifiers: ["2DC432GLL2"], directories: [], for: "claude"); XCTFail("team owned by chatgpt") } catch {}
+        XCTAssertEqual(AppProxyStore.teamIdentifier(ofCodeAt: "/usr/bin/curl"), nil, "platform code has no Team ID")
+    }
     @MainActor func testEnabledExtensionPreventsApplicationTopologyChanges() async throws {
         let gateway = RoutingGateway(); let model = AppProxyStore(gateway: gateway); let service = ExtensionService()
         service.enabled = true; model.configure(service); await model.refresh()

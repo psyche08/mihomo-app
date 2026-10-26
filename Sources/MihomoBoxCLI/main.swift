@@ -1,3 +1,4 @@
+import CoreServices
 import Darwin
 import Foundation
 import MihomoControl
@@ -921,6 +922,91 @@ private func printProfiles(json: Bool) throws {
     }
 }
 
+private let appProxyUsage = """
+    usage: mihomoboxctl app-proxy status | set-all PROXY
+           mihomoboxctl app-proxy policy show [APP]
+           mihomoboxctl app-proxy policy set APP [--team ID]... [--directory PATH]... [--executable PATH]...
+           mihomoboxctl app-proxy targets APP | runtime | enable APP [--approve] | disable APP | on | off
+    """
+
+/// Show or replace one application's routing policy in the daemon-owned settings.
+/// `set` replaces all three scopes; it takes effect at the next enable (or approval).
+private func appProxyPolicy(_ arguments: [String]) throws -> Int32 {
+    guard let data = try sendControl(.appProxyStatus) else { throw CLIError(message: "missing App Proxy state") }
+    let state = try JSONDecoder().decode(AppProxyRoutingState.self, from: data)
+    func policy(_ entry: AppProxyEntry) -> [String: Any] {
+        ["id": entry.id, "title": entry.title, "teamIdentifiers": entry.teamIdentifiers,
+         "directories": entry.directories, "executablePaths": entry.executablePaths]
+    }
+    func canonical(_ path: String) -> String {
+        URL(fileURLWithPath: (path as NSString).expandingTildeInPath).standardizedFileURL.resolvingSymlinksInPath().path
+    }
+    switch arguments.first {
+    case "show" where arguments.count <= 2:
+        let id = arguments.count == 2 ? arguments[1] : nil
+        let entries = state.settings.applications.filter { id == nil || $0.id == id }
+        guard !entries.isEmpty else { throw CLIError(message: "Unknown App Proxy application: \(id ?? "")") }
+        try printJSON(entries.map(policy))
+        return 0
+    case "set" where arguments.count >= 2:
+        guard let index = state.settings.applications.firstIndex(where: { $0.id == arguments[1] }) else {
+            throw CLIError(message: "Unknown App Proxy application: \(arguments[1])")
+        }
+        var teams: [String] = [], directories: [String] = [], executables: [String] = []
+        var rest = Array(arguments.dropFirst(2))
+        while !rest.isEmpty {
+            guard rest.count >= 2 else { throw CLIError(message: appProxyUsage) }
+            switch rest[0] {
+            case "--team": teams.append(rest[1].trimmingCharacters(in: .whitespaces).uppercased())
+            case "--directory": directories.append(canonical(rest[1]))
+            case "--executable": executables.append(canonical(rest[1]))
+            default: throw CLIError(message: appProxyUsage)
+            }
+            rest.removeFirst(2)
+        }
+        var settings = state.settings
+        settings.applications[index].teamIdentifiers = teams
+        settings.applications[index].directories = directories
+        settings.applications[index].executablePaths = executables
+        try settings.validate()
+        let update = AppProxyRoutingUpdate(settings: settings, expectedRevision: state.revision)
+        _ = try sendControl(.setAppProxyRouting, payload: JSONEncoder().encode(update))
+        try printJSON(policy(settings.applications[index]))
+        return 0
+    default:
+        throw CLIError(message: appProxyUsage)
+    }
+}
+
+/// The MihomoBox host signed with this CLI's own Developer ID leaf, run as the logged-in user.
+private func appProxyHostExecutable() throws -> URL {
+    let identifier = "dev.linsheng.mihomo-app"
+    guard getuid() != 0 else { throw CLIError(message: "Run App Proxy commands as the logged-in user, not as root.") }
+    var candidates: [URL] = []
+    if let bundle = try? appBundleURL() { candidates.append(bundle) }
+    if let urls = LSCopyApplicationURLsForBundleIdentifier(identifier as CFString, nil)?.takeRetainedValue() as? [URL] {
+        candidates += urls
+    }
+    candidates += [URL(fileURLWithPath: "/Applications/MihomoBox.app"),
+                   FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications/MihomoBox.app")]
+    var requirement: SecRequirement?
+    guard SecRequirementCreateWithString(try AppProxyPeerRequirement.sameLeaf(identifier: identifier) as CFString, [], &requirement) == errSecSuccess,
+          let requirement else { throw CLIError(message: "Cannot derive this CLI's signing requirement.", exitCode: 1) }
+    for app in candidates where isDirectoryNonSymlink(app) {
+        var code: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(app as CFURL, [], &code) == errSecSuccess, let code,
+              SecStaticCodeCheckValidity(code, SecCSFlags(rawValue: kSecCSStrictValidate), requirement) == errSecSuccess,
+              // Not Bundle.executableURL: for the bundle that contains this CLI, Foundation returns
+              // Bundle.main, whose executable is mihomoboxctl itself.
+              let info = NSDictionary(contentsOf: app.appendingPathComponent("Contents/Info.plist")),
+              let name = info["CFBundleExecutable"] as? String, !name.isEmpty, !name.contains("/"), name != "..",
+              case let executable = app.appendingPathComponent("Contents/MacOS").appendingPathComponent(name),
+              isRegularExecutable(executable) else { continue }
+        return executable
+    }
+    throw CLIError(message: "No MihomoBox.app signed with this CLI's certificate was found.", exitCode: 1)
+}
+
 private func usage() {
     print("""
     usage: mihomoboxctl COMMAND
@@ -931,6 +1017,16 @@ private func usage() {
                                       finish profile approval in System Settings
       app-proxy status               Show saved applications and routes
       app-proxy set-all PROXY         Route all saved apps through one node/group
+      app-proxy policy show [APP]     Show Team ID, directory and executable scopes
+      app-proxy policy set APP [--team ID]... [--directory PATH]... [--executable PATH]...
+                                      Replace one app's scopes (applies at next enable)
+      app-proxy targets APP           List the signed executables the policy captures
+      app-proxy runtime               Show interception state per application
+      app-proxy enable APP [--approve]
+                                      Authorize and enable one app; --approve consents
+                                      to its scanned code and scopes like the app's sheet
+      app-proxy disable APP | on | off
+                                      Disable one app, or resume/turn off App Proxy
       profile list [--json]           List imported local YAML profiles
       profile import PATH [--activate]
                                       Validate and import a local YAML profile
@@ -1075,8 +1171,14 @@ private func main() throws -> Int32 {
             try settings.validate()
             let update = AppProxyRoutingUpdate(settings: settings, expectedRevision: state.revision)
             try writePayload(try sendControl(.setAppProxyRouting, payload: JSONEncoder().encode(update)))
+        } else if arguments.first == "policy" {
+            return try appProxyPolicy(Array(arguments.dropFirst()))
+        } else if let action = arguments.first, ["targets", "runtime", "enable", "disable", "on", "off"].contains(action) {
+            // Only the signed host owns the NetworkExtension configuration and the broker's consent.
+            let host = try appProxyHostExecutable()
+            return try runInteractive(host.path, ["--app-proxy", action == "runtime" ? "status" : action] + arguments.dropFirst())
         } else {
-            throw CLIError(message: "usage: mihomoboxctl app-proxy status|set-all PROXY")
+            throw CLIError(message: appProxyUsage)
         }
         return 0
     case "profiles":

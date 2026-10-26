@@ -22,6 +22,17 @@ struct MihomoBoxMain {
       withExtendedLifetime(command) {}
       return
     }
+    if ProcessInfo.processInfo.arguments.dropFirst().contains(AppProxyCommand.argument) {
+      let invocation: AppProxyCommand.Invocation
+      do { invocation = try AppProxyCommand.parse(Array(ProcessInfo.processInfo.arguments.dropFirst())) } catch {
+        FileHandle.standardError.write(Data((error.localizedDescription + "\n").utf8)); exit(64)
+      }
+      // Headless: no tray, window, component sync or maintenance loop.
+      application.setActivationPolicy(.accessory)
+      Task { @MainActor in exit(await AppProxyCommand.run(invocation)) }
+      application.run()
+      return
+    }
     let delegate = AppDelegate(coordinator: AppComposition.live())
 
     // MihomoBox is a menu-bar application. Creating the NSApplication here,

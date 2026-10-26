@@ -2,8 +2,8 @@ import Foundation
 import MihomoControl
 
 final class AppProxyCodeAccessClient {
-    func snapshot(records: [AppProxyCodeIdentity], interactive: Bool) async throws -> AppProxyIdentitySnapshot {
-        let request = AppProxyAccessRequest(ownerUID: getuid(), records: records)
+    func snapshot(records: [AppProxyCodeIdentity], scopes: [AppProxyScope] = [], interactive: Bool) async throws -> AppProxyIdentitySnapshot {
+        let request = AppProxyAccessRequest(ownerUID: getuid(), records: records, scopes: scopes)
         let data = try JSONEncoder().encode(request)
         let requirement = try AppProxyPeerRequirement.sameLeaf(identifier: "dev.linsheng.mihomo-app.code-access")
         return try await withCheckedThrowingContinuation { continuation in
@@ -21,7 +21,8 @@ final class AppProxyCodeAccessClient {
                 do {
                     guard let data else { throw AppProxyIdentityFailure(rawValue: error ?? "") ?? .permission }
                     let snapshot = try AppProxyIdentitySnapshot.decode(data)
-                    guard snapshot.ownerUID == request.ownerUID, snapshot.records == request.records else { throw AppProxyIdentityFailure.malformed }
+                    guard snapshot.ownerUID == request.ownerUID, snapshot.records == request.records,
+                          snapshot.scopes == request.scopes else { throw AppProxyIdentityFailure.malformed }
                     completion.finish(.success(snapshot))
                 } catch { completion.finish(.failure(error)) }
             }
