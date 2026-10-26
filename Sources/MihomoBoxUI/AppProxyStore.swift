@@ -14,6 +14,30 @@ public struct AppProxyExecutable: Equatable, Sendable, Identifiable {
     }
 }
 
+/// A saved routing entry is distinct from consent, requested enablement and
+/// actual OS interception. Never label a pending entry as connected.
+public struct AppProxyApplicationStatus: Equatable, Sendable {
+    public var requested: Bool
+    public var active: Bool
+    public var issue: String?
+    public var servicePaused: Bool
+    public init(requested: Bool = false, active: Bool = false, issue: String? = nil, servicePaused: Bool = false) {
+        self.requested = requested; self.active = active; self.issue = issue; self.servicePaused = servicePaused
+    }
+    public var summary: String {
+        if active { return "Intercepted · DNS and API not yet verified" }
+        if !requested { return "Off · Not intercepted by App Proxy" }
+        if servicePaused { return "Paused · Not intercepted by App Proxy" }
+        if let issue {
+            if ["needsAuthorization", "staleAuthorization", "permission"].contains(issue) {
+                return "Code access required · Not intercepted by App Proxy"
+            }
+            return "Not intercepted · " + issue
+        }
+        return "Waiting for provider verification · Not intercepted"
+    }
+}
+
 public struct AppProxyExtensionStatus: Equatable, Sendable {
     public var available: Bool
     public var enabled: Bool
@@ -23,11 +47,13 @@ public struct AppProxyExtensionStatus: Equatable, Sendable {
     public var identityReady: Bool
     public var verifiedTargetCount: Int
     public var identityIssue: String?
+    public var applications: [String: AppProxyApplicationStatus]
     public var diagnostics: AppProxyRuntimeStatus?
     public var targetCounts: [String: Int]
     public var executables: [AppProxyExecutable]
     public init(available: Bool, enabled: Bool = false, connected: Bool = false, requiresReactivation: Bool = false, targetCounts: [String: Int] = [:], executables: [AppProxyExecutable] = [], identityReady: Bool = false, verifiedTargetCount: Int = 0,
-                identityIssue: String? = nil, diagnostics: AppProxyRuntimeStatus? = nil, discoveryIssues: [String: Int] = [:]) {
+                identityIssue: String? = nil, diagnostics: AppProxyRuntimeStatus? = nil, discoveryIssues: [String: Int] = [:], applications: [String: AppProxyApplicationStatus] = [:]) {
+        self.applications = applications
         self.available = available; self.enabled = enabled; self.connected = connected; self.targetCounts = targetCounts
         self.requiresReactivation = requiresReactivation
         self.executables = executables
@@ -42,6 +68,7 @@ public protocol DashboardAppProxyService: AnyObject {
     func status(settings: AppProxySettings) async throws -> AppProxyExtensionStatus
     func discoverExecutables(applications: [AppProxyEntry]) async throws -> [AppProxyExecutable]
     func setEnabled(_ enabled: Bool, settings: AppProxySettings) async throws
+    func setApplicationEnabled(_ id: String, enabled: Bool, settings: AppProxySettings) async throws
     func chooseApplication(port: UInt16) async throws -> AppProxyEntry?
     func chooseExecutable() async throws -> String?
 }
@@ -304,6 +331,21 @@ public final class AppProxyStore: ObservableObject {
             // and require a fresh read before another write or enable.
             self.routing = nil; self.error = error.localizedDescription
             throw error
+        }
+    }
+
+    public func setApplicationEnabled(_ id: String, enabled: Bool) async throws {
+        guard !preview else { return }
+        guard !busy, !refreshing, !hasConflict, !dirty, valid, let service, let routing,
+              routing.settings.applications.contains(where: { $0.id == id }),
+              try await gateway.fetchAppProxyRouting() == routing else { throw AppProxySettingsError.staleState }
+        mutating = true; defer { mutating = false }
+        do {
+            try await service.setApplicationEnabled(id, enabled: enabled, settings: routing.settings)
+            updateStatus(try await service.status(settings: routing.settings)); error = nil
+        } catch {
+            if let status = try? await service.status(settings: routing.settings) { updateStatus(status) }
+            self.error = error.localizedDescription; throw error
         }
     }
 

@@ -428,3 +428,108 @@ Gatekeeper still rejected the bundle while reporting Notarized Developer ID,
 and SIP was already disabled in the VM base; neither protection was changed for
 this installation. Normal-SIP acceptance, OS reboot, user switching, revocation
 and real Claude API recovery remain open gates.
+
+## Preference enumeration false mismatch — Cloud 54, 2026-10-24
+
+Cloud Build 54 (`70b291f504c2045d194ceb3c205f24845809a9af`) was installed
+only in the authorized `mihomobox-claude-test` VM, preserving Build 53 for
+rollback. The original stapled Cloud ZIP SHA-256 was
+`61d950cd3fa10bb6dc73da148b05a22af97c2937e0789bee33ac3b2d1eb9bcb3`.
+
+The signed host directly observed an enabled manager returned by
+`NEAppProxyProviderManager.loadAllFromPreferences` with **zero app rules**.
+Calling the public `loadFromPreferences` on that same manager returned **two
+rules and two tool entries**, whose digest exactly matched the published
+expected digest. A newly launched host reproduced the same before/after
+observation. This is evidence on macOS 26.6.2 (25G83), not a claim that Apple's
+API behaves identically on every supported OS.
+
+The old maintenance path compared the enumeration's empty rule list against
+the expected nonempty digest and disabled interception, reporting the generic
+`generationMismatch`. The corrected path explicitly reloads before status,
+maintenance or enable/disable decisions. It propagates reload failures and
+retains exact rule-digest, provider-generation, readiness and authorization
+checks; it never treats missing rules as a match. Fixed diagnostics now separate
+rule readback, configuration readback, provider generation, provider readiness
+and explicit identity failures, with the failing transaction phase.
+
+Unified logging records only a changed tuple of enabled/rule-count/tool-count/
+digest-match before and after reload, plus fixed failure codes. It does not log
+rules, paths, designated requirements, generation IDs, bookmark capabilities or
+identity fingerprints. Real-flow receipts remain in the existing bounded local
+UI diagnostic inventory.
+
+The initial mock run completed 16/16 requests over 150.453 seconds with rules
+remaining enabled, DNS success and the expected fixture-a response, exceeding
+both the 20-second maintenance interval and 90-second provider lease. The UI
+correlated mock PID 6420 with callback entry, provider validation, DNS response
+and upstream connection in generation D8538740-01D0-4447-867B-D1C50167566A.
+This establishes mock application response, not real Claude API recovery.
+
+The VM's inherited SIP-disabled state and Gatekeeper rejection (despite
+Notarized Developer ID source and successful strict signature checks) remain
+acceptance limitations. No security bypass was applied. Normal-SIP physical
+machines, OS reboot/user switching, and actual Claude upgrade/API behavior
+remain separate acceptance work.
+
+The follow-up host/broker termination and normal host relaunch preserved the
+active provider and passed another 16/16 fixture-a requests over 150.427 seconds.
+Changing only the mock entry to fixture-b through the App Proxy page and applying
+it passed 16/16 requests over 150.612 seconds; every response identified fixture-b
+and not fixture-a. All 48 requests had DNS/connect success with capture rules
+still enabled. Captured fixed-field logs contained no policy failure event.
+This host restart test does not establish provider-process or OS-reboot recovery.
+
+At completion, fixture-a was restored through the UI, App Proxy was explicitly
+disabled and the saved NE enabled flag was verified false. Build 54 remains in
+the VM with the Build 53 rollback App. The bounded diagnostic collector was
+stopped. No host or m4pro network/application changes were made. Local evidence:
+`/private/tmp/mihomobox-build54-test/acceptance.json` and the three per-request
+JSONL records. The source build had passed `scripts/validate.sh` and the nine
+AppProxyCoordinator tests before Cloud submission.
+
+
+## Per-application consent and activation (implementation; signed acceptance pending)
+
+The host now distinguishes the complete daemon-owned routing list, per-user
+requested application selections, broker consent, and the provider's actual
+verified subset. A per-row action is the only interactive authorization entry.
+The global resume and periodic reconciliation never show consent panels.
+Discovery and broker validation run separately per selected application; failed
+applications contribute neither target records nor OS matchTools. Shared hosts
+are deduplicated and their tool lists are explicitly merged. Provider generations
+still use the existing prepare/save/readback/commit transaction and exact digest,
+console UID, file stamp, signature, audit token and readiness gates.
+
+The sandbox broker retains successful exact-root bookmarks across requests for
+other applications and across partial cancellation. It also keeps bounded
+verified identity pins, so a paused application cannot silently accept a changed
+publisher or ad-hoc replacement after its old generation disappears. Both stores
+are limited to 512 entries; capacity exhaustion is explicit, never an excuse to
+widen authorization. No parent-directory grant or root file-reading service is
+introduced. File pickers show hidden code locations and select packages as units;
+the canonical exact-root guard remains mandatory.
+
+Per-application failures withdraw that application's interception; system-wide
+failures such as console-owner changes or unverifiable policy publication remain
+fail-closed. Waiting at Powerbox renews the previous generation without admitting
+new code; that renewal task is joined before rules change. Changing the active
+subset may affect flows owned by removed applications. All discovered versions
+of one application remain one authorization unit; a newly downloaded version
+needing consent currently pauses that entry until reauthorization. Preserving a
+partially authorized version set is not claimed by this implementation.
+
+Validation added: independent denial/recovery, disabled-entry exclusion, no rule
+leakage, shared-terminal tool bounds, duplicate ownership, malformed broker reply,
+missing file, consent-wait lease renewal, failed lease propagation, saved-route
+preservation and stale/dirty UI refusal. These tests use system-signed local test
+executables and opaque fake grants for assembly; they are not NetworkExtension or
+Claude end-to-end evidence. Signed m4pro acceptance must still prove exact Claude
+process receipts, DNS response and actual API recovery, with the other entries
+retained and no new ChatGPT/Codex file consent.
+
+Local validation on 2026-10-26: `scripts/validate.sh` completed with exit 0,
+including Swift suites, same-UID real sandbox read-only delegation fixtures,
+installer dry-run and the ad-hoc development bundle. No production App was
+locally signed or installed for these checks. The exact new row/lease tests
+are `AppProxyEnrollmentTests` and the independent-enable `AppProxyStoreTests`.

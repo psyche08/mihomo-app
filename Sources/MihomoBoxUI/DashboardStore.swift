@@ -284,6 +284,10 @@ public final class DashboardStore: ObservableObject {
     await performConfigAction(.updatingAppProxy) { try await self.appProxy.apply() }
   }
 
+  public func setAppProxyApplicationEnabled(_ id: String, enabled: Bool) async {
+    await performConfigAction(.updatingAppProxy) { try await self.appProxy.setApplicationEnabled(id, enabled: enabled) }
+  }
+
   public func setAppProxyEnabled(_ enabled: Bool) async {
     await performConfigAction(.updatingAppProxy) { try await self.appProxy.setEnabled(enabled) }
   }

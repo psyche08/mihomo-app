@@ -31,14 +31,28 @@ final class CodeAccessBroker: NSObject, NSXPCListenerDelegate, AppProxyCodeAcces
         guard request.ownerUID == getuid(), request.ownerUID > 0,
               !request.records.isEmpty, request.records.count <= 512 else { throw AppProxyIdentityFailure.wrongUser }
         var saved = UserDefaults.standard.dictionary(forKey: storeKey) as? [String: Data] ?? [:]
-        let desiredRoots = try Set(request.records.map { try Self.grantRoot($0.path).path })
-        saved = saved.filter { desiredRoots.contains($0.key) }
-        UserDefaults.standard.set(saved, forKey: storeKey)
+        // Each request now belongs to one application. Never revoke another
+        // application's durable consent merely because it is absent here.
+        guard saved.count <= 512 else { throw AppProxyIdentityFailure.capacity }
+        let identitiesKey = "readOnlyCodeIdentities.v1"
+        var pinned = UserDefaults.standard.dictionary(forKey: identitiesKey) as? [String: Data] ?? [:]
+        guard pinned.count <= 512 else { throw AppProxyIdentityFailure.capacity }
         var activeURLs: [URL] = []
         defer { for u in activeURLs.reversed() { u.stopAccessingSecurityScopedResource() } }
         var result: [Data] = []
         for record in request.records {
             let root = try Self.grantRoot(record.path)
+            if !interactive {
+                let approved = pinned.values.compactMap { try? JSONDecoder().decode(AppProxyCodeIdentity.self, from: $0) }
+                if let prior = approved.first(where: { $0.path == record.path }) {
+                    try AppProxyIdentitySnapshot(ownerUID: getuid(), records: [prior], grants: []).validateRefresh([record])
+                } else {
+                    guard let team = record.team, approved.contains(where: {
+                        $0.category == record.category && $0.team == team && $0.id == record.id && $0.requirement == record.requirement
+                    }) else { throw AppProxyIdentityFailure.needsAuthorization }
+                }
+            }
+            guard pinned[record.path] != nil || pinned.count < 512 else { throw AppProxyIdentityFailure.capacity }
             if !FileManager.default.isReadableFile(atPath: root.path) {
                 var usable = false
                 if let bookmark = saved[root.path] {
@@ -55,9 +69,12 @@ final class CodeAccessBroker: NSObject, NSXPCListenerDelegate, AppProxyCodeAcces
                     let panel = NSOpenPanel()
                     panel.title = "Allow MihomoBox to verify application code"
                     panel.message = "Grant read-only access to this code location: \(root.path). This does not authorize access to chats or other application data."
-                    panel.canChooseFiles = true; panel.canChooseDirectories = true
-                    panel.allowsMultipleSelection = false; panel.treatsFilePackagesAsDirectories = true
+                    panel.canChooseFiles = true; panel.canChooseDirectories = root.pathExtension == "app"
+                    panel.allowsMultipleSelection = false; panel.treatsFilePackagesAsDirectories = false
+                    panel.showsHiddenFiles = true
                     panel.directoryURL = root.deletingLastPathComponent()
+                    panel.nameFieldStringValue = root.lastPathComponent
+                    guard saved[root.path] != nil || saved.count < 512 else { throw AppProxyIdentityFailure.capacity }
                     // The XPC service uses NSRunLoop, not NSApplication.run().
                     // A modeless panel has no AppKit event pump here. Give the
                     // consent UI an AppKit modal loop and foreground activation.
@@ -76,6 +93,10 @@ final class CodeAccessBroker: NSObject, NSXPCListenerDelegate, AppProxyCodeAcces
             try record.validateFile()
             // Refuse to export a grant from an unexpectedly writable source sandbox.
             try record.validateAccessScope()
+            // Keep successful exact-code consent even if a later package is cancelled.
+            pinned[record.path] = try JSONEncoder().encode(record)
+            UserDefaults.standard.set(pinned, forKey: identitiesKey)
+            UserDefaults.standard.set(saved, forKey: storeKey)
             result.append(try root.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil))
         }
         UserDefaults.standard.set(saved, forKey: storeKey)

@@ -68,8 +68,30 @@ Search applications or search inside each node picker. The fixed bottom bar
 shows unsaved edits and keeps Apply, Discard and the extension switch visible.
 An external settings change preserves the draft but blocks Apply until Discard
 loads the latest saved settings, preventing accidental overwrites.
-Choose a node or proxy group for every entry, then **Apply Changes** and
-**Enable App Proxy…**. A LoadBalance group is accepted only when every candidate
+Choose a node or proxy group for every entry, then **Apply Changes**. Each row
+has **Authorize & Enable**, **Retry Authorization** and **Disable** actions.
+Only the selected row can open code-consent panels. Other rows and their node
+choices remain saved; declining one application's consent does not discard or
+block other authorized applications. An application publishes rules only after
+all of its discovered code and responsible hosts pass read-only access and
+signature checks. Missing/new code requiring consent withdraws that application's
+rules and displays a pending state; it is not labeled connected. Unselected or
+pending applications follow the remaining macOS network configuration, including
+TUN when applicable. No direct fallback is added by App Proxy.
+
+**Turn Off** pauses the shared service while preserving row selections;
+**Resume Selected Apps** rechecks selected applications without opening consent
+panels. A fresh installation and legacy configurations without a verified
+identity snapshot start with no selected applications. Existing v4 identities
+seed selections; old bookmarks without durable publisher pins require one
+explicit per-row reauthorization. Preferences belong to the logged-in user;
+root profile settings still retain the complete application/node list.
+An open consent panel continues renewing only the previous verified generation;
+new rules are committed together after provider validation, with verified
+rollback or complete shutdown on an ambiguous system-wide failure. Shared
+Terminal rules contain only the admitted executables, never all child processes.
+
+A LoadBalance group is accepted only when every candidate
 resolves to a remote proxy. macOS may require Network Extension and VPN approval.
 Disable App Proxy before adding or removing entries. Removing an entry only
 removes its proxy routing, never the installed application. Apply saves these

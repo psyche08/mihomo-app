@@ -198,6 +198,22 @@ struct AppProxyView: View {
                     .accessibilityLabel("Edit CLI executables for \(app.title)")
             }
             Spacer(minLength: 8)
+            VStack(alignment: .trailing, spacing: 5) {
+                let state = model.extensionStatus.applications[app.id] ?? .init()
+                Text(state.summary).font(.caption).foregroundStyle(state.active ? Color.green : Color.secondary)
+                    .accessibilityLabel("\(app.title): \(state.summary)")
+                HStack {
+                    if !state.active {
+                        Button(state.requested ? "Retry Authorization" : "Authorize & Enable") {
+                            Task { await dashboard.setAppProxyApplicationEnabled(app.id, enabled: true) }
+                        }
+                    }
+                    if state.requested || state.active {
+                        Button("Disable") { Task { await dashboard.setAppProxyApplicationEnabled(app.id, enabled: false) } }
+                    }
+                }
+                .disabled(busy || model.refreshing || model.hasConflict || model.routing == nil || model.dirty || !model.valid || !model.extensionStatus.available)
+            }.frame(maxWidth: 280, alignment: .trailing)
             AppProxyTargetPicker(title: app.title, selection: model.draft.routes[app.id] ?? "",
                                  nodes: model.nodes, groups: model.groups) {
                 model.selectTarget($0, for: app.id)
@@ -247,8 +263,8 @@ struct AppProxyView: View {
                         .disabled(busy || model.refreshing)
                         .accessibilityLabel("Disable App Proxy")
                 } else {
-                    Button("Enable App Proxy") { Task { await dashboard.setAppProxyEnabled(true) } }
-                        .disabled(busy || model.refreshing || model.hasConflict || !model.extensionStatus.available || model.routing == nil || model.dirty || !model.valid || model.draft.routes.isEmpty)
+                    Button("Resume Selected Apps") { Task { await dashboard.setAppProxyEnabled(true) } }
+                        .disabled(busy || model.refreshing || model.hasConflict || !model.extensionStatus.available || model.routing == nil || model.dirty || !model.valid || model.draft.routes.isEmpty || !model.extensionStatus.applications.values.contains(where: \.requested))
                 }
             }
             if !model.extensionStatus.available {

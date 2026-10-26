@@ -177,6 +177,39 @@ struct AIAppTargets {
         self.rules = rules
     }
 
+    /// Union already verified per-application discoveries. Shared responsible
+    /// hosts merge only their explicit tools; nil must never expand inheritance.
+    init(combining groups: [AIAppTargets]) throws {
+        var identities: [String: Target] = [:]
+        struct RuleKey: Hashable { let id: String; let requirement: String; let path: String? }
+        var merged: [RuleKey: NEAppRule] = [:]
+        for group in groups {
+            for target in group.targets {
+                if let existing = identities[target.path], existing.identity != target.identity {
+                    throw Failure.duplicateTarget
+                }
+                identities[target.path] = target
+            }
+            for rule in group.rules {
+                guard let tools = rule.matchTools, !tools.isEmpty else { throw Failure.unsignedTarget }
+                let key = RuleKey(id: rule.matchSigningIdentifier, requirement: rule.matchDesignatedRequirement, path: rule.matchPath)
+                let copy = merged[key] ?? NEAppRule(signingIdentifier: key.id, designatedRequirement: key.requirement)
+                copy.matchPath = key.path
+                var byPath: [String: NEAppRule] = [:]
+                for tool in (copy.matchTools ?? []) + tools {
+                    guard let path = tool.matchPath else { throw Failure.unsignedTarget }
+                    byPath[path] = tool
+                }
+                copy.matchTools = byPath.keys.sorted().compactMap { byPath[$0] }
+                merged[key] = copy
+            }
+        }
+        targets = identities.values.sorted { $0.path < $1.path }
+        rules = Array(merged.values)
+        issues = groups.flatMap(\.issues)
+        guard targets.count <= 512, rules.reduce(0, { $0 + ($1.matchTools?.count ?? 0) }) <= 8192 else { throw Failure.tooManyTargets }
+    }
+
     enum Failure: LocalizedError {
         case missingTarget, tooManyTargets, unsignedTarget, duplicateTarget
         var errorDescription: String? {

@@ -35,7 +35,7 @@ private final class RoutingGateway: AppProxyRoutingGateway, @unchecked Sendable 
     var enableStarted: (() -> Void)?
     var enableContinuation: CheckedContinuation<Void, Error>?
     var suspendEnable = false
-    func status(settings: AppProxySettings) async throws -> AppProxyExtensionStatus { .init(available: true, enabled: enabled, connected: enabled) }
+    func status(settings: AppProxySettings) async throws -> AppProxyExtensionStatus { .init(available: true, enabled: enabled, connected: enabled, applications: applicationStates) }
     func discoverExecutables(applications: [AppProxyEntry]) async throws -> [AppProxyExecutable] {
         scans += 1
         if failScan { throw AppProxySettingsError.invalidExecutables }
@@ -48,6 +48,12 @@ private final class RoutingGateway: AppProxyRoutingGateway, @unchecked Sendable 
             .init(applicationID: $0.id, path: "/test/" + $0.id, signingIdentifier: $0.id,
                   teamIdentifier: nil, requirement: "test")
         }
+    }
+    var applicationCalls: [(String, Bool)] = []
+    var applicationStates: [String: AppProxyApplicationStatus] = [:]
+    func setApplicationEnabled(_ id: String, enabled: Bool, settings: AppProxySettings) async throws {
+        applicationCalls.append((id, enabled))
+        applicationStates[id] = .init(requested: enabled, active: enabled)
     }
     func setEnabled(_ enabled: Bool, settings: AppProxySettings) async throws {
         if suspendEnable {
@@ -274,4 +280,37 @@ final class AppProxyStoreTests: XCTestCase {
         XCTAssertTrue(model.extensionStatus.connected)
     }
 
+}
+
+
+extension AppProxyStoreTests {
+    @MainActor func testIndependentEnablePreservesAllEntriesAndNodeSelections() async throws {
+        let gateway = RoutingGateway(); let service = ExtensionService(); let model = AppProxyStore(gateway: gateway)
+        model.configure(service); await model.refresh()
+        let settings = model.draft
+        try await model.setApplicationEnabled("claude", enabled: true)
+        XCTAssertEqual(service.applicationCalls.count, 1)
+        XCTAssertEqual(service.applicationCalls.first?.0, "claude")
+        XCTAssertEqual(model.draft, settings); XCTAssertEqual(gateway.writes, 0)
+        XCTAssertEqual(model.extensionStatus.applications["claude"]?.active, true)
+        XCTAssertNil(model.extensionStatus.applications["chatgpt"])
+        try await model.setApplicationEnabled("claude", enabled: false)
+        XCTAssertEqual(model.draft, settings)
+        XCTAssertEqual(model.extensionStatus.applications["claude"]?.requested, false)
+    }
+    @MainActor func testIndependentEnableRejectsUnsavedOrStaleRoutesBeforeConsent() async throws {
+        let gateway = RoutingGateway(); let service = ExtensionService(); let model = AppProxyStore(gateway: gateway)
+        model.configure(service); await model.refresh()
+        model.selectTarget("two", for: "claude")
+        do { try await model.setApplicationEnabled("claude", enabled: true); XCTFail("unsaved") } catch {}
+        XCTAssertTrue(service.applicationCalls.isEmpty)
+        model.discardChanges(); gateway.state.revision = "external"
+        do { try await model.setApplicationEnabled("claude", enabled: true); XCTFail("stale") } catch {}
+        XCTAssertTrue(service.applicationCalls.isEmpty)
+    }
+    func testPendingAndPausedEntriesNeverClaimInterception() {
+        XCTAssertTrue(AppProxyApplicationStatus(requested: true, issue: "needsAuthorization").summary.contains("Not intercepted"))
+        XCTAssertTrue(AppProxyApplicationStatus(requested: true, servicePaused: true).summary.contains("Not intercepted"))
+        XCTAssertTrue(AppProxyApplicationStatus(requested: true, active: true).summary.contains("API not yet verified"))
+    }
 }
