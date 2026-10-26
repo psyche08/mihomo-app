@@ -189,3 +189,59 @@ extension AppProxyCoordinatorTests {
         }
     }
 }
+
+extension AppProxyCoordinatorTests {
+    func testLaunchHostRulesCarryPathsAndOnlyVerifiedToolsWithoutBecomingRecords() throws {
+        let entry = AppProxyEntry(id: "app_00000000-0000-0000-0000-000000000001", title: "Tools", path: "/bin/ls", port: 17975, executablePaths: ["/usr/bin/curl"])
+        let discovered = try AIAppTargets(requireAll: false, applications: [entry], applicationDirectories: [])
+        XCTAssertEqual(Set(discovered.targets.map(\.path)), ["/bin/ls", "/usr/bin/curl"], "hosts are not authorized records")
+        let hosts = AIAppTargets.launchHosts(applicationDirectories: [])
+        XCTAssertTrue(hosts.contains { $0.id == "com.apple.Terminal" })
+        if FileManager.default.fileExists(atPath: "/usr/libexec/sshd-session") {
+            XCTAssertEqual(hosts.first { $0.id == "com.apple.sshd-session" }?.path, "/usr/libexec/sshd-session")
+        }
+        for host in hosts {
+            // A path-less rule would never match sshd-session, which LaunchServices does not know.
+            let rule = try XCTUnwrap(discovered.rules.first { $0.matchSigningIdentifier == host.id })
+            XCTAssertEqual(rule.matchPath, host.path)
+            XCTAssertEqual(rule.matchDesignatedRequirement, host.requirement)
+            XCTAssertEqual(Set(rule.matchTools?.compactMap(\.matchPath) ?? []), ["/bin/ls", "/usr/bin/curl"])
+        }
+    }
+    func testLaunchHostsAreChosenByBundleIdentifier() throws {
+        let fm = FileManager.default
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent(".build/host-test-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: root) }
+        for (name, id) in [("IDE", "com.jetbrains.mihomo-fixture"), ("Other", "dev.linsheng.mihomo.other-fixture")] {
+            let contents = root.appendingPathComponent("\(name).app/Contents")
+            try fm.createDirectory(at: contents.appendingPathComponent("MacOS"), withIntermediateDirectories: true)
+            try fm.copyItem(atPath: "/usr/bin/true", toPath: contents.appendingPathComponent("MacOS/\(name)").path)
+            try (["CFBundleIdentifier": id, "CFBundleExecutable": name, "CFBundlePackageType": "APPL"] as NSDictionary)
+                .write(to: contents.appendingPathComponent("Info.plist"))
+            let sign = Process()
+            sign.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+            sign.arguments = ["--force", "--sign", "-", root.appendingPathComponent("\(name).app").path]
+            try sign.run(); sign.waitUntilExit()
+            XCTAssertEqual(sign.terminationStatus, 0)
+        }
+        let hosts = AIAppTargets.launchHosts(applicationDirectories: [root])
+        XCTAssertEqual(hosts.first { $0.id == "com.jetbrains.mihomo-fixture" }?.path,
+                       root.appendingPathComponent("IDE.app/Contents/MacOS/IDE").path)
+        XCTAssertFalse(hosts.contains { $0.id == "dev.linsheng.mihomo.other-fixture" })
+    }
+    func testApplicationsRouteOtherApplicationsLaunchedCLIsUnlessDisabled() throws {
+        let launcher = AppProxyEntry(id: "app_00000000-0000-0000-0000-000000000001", title: "Launcher", path: "/bin/ls", port: 17975)
+        let cli = AppProxyEntry(id: "app_00000000-0000-0000-0000-000000000002", title: "CLI", path: "/usr/bin/curl", port: 17976)
+        func launcherTools(_ launcher: AppProxyEntry) throws -> Set<String> {
+            let combined = try AIAppTargets(combining: [
+                AIAppTargets(requireAll: false, applications: [launcher], applicationDirectories: []),
+                AIAppTargets(requireAll: false, applications: [cli], applicationDirectories: [])])
+            let rule = try XCTUnwrap(combined.rules.first { $0.matchPath == "/bin/ls" })
+            return Set(rule.matchTools?.compactMap(\.matchPath) ?? [])
+        }
+        XCTAssertEqual(try launcherTools(launcher), ["/bin/ls", "/usr/bin/curl"])
+        var direct = launcher; direct.capturesLaunchedCLIs = false
+        XCTAssertEqual(try launcherTools(direct), ["/bin/ls"])
+    }
+}

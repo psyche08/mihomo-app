@@ -254,10 +254,12 @@ have no current selection; route validation checks every member recursively.
 Each entry may persist additional `executablePaths` through the same typed XPC
 settings transaction. These are discovery metadata, never root-executed paths.
 The host resolves and verifies each signed executable, assigns it to the entry's
-existing listener, and includes it in the restricted terminal `matchTools` rules.
+existing listener, and includes it in the restricted launch-host `matchTools` rules.
 The provider still requires the audit-token identity, canonical path and signing
 requirement to agree. There is no process-name matching or parent-process
-inheritance: explicitly selected tools use the assigned route from any launcher.
+inheritance: explicitly selected tools use the assigned route from a listed
+terminal, editor or SSH login, a selected application, or when run on their own
+(see `claude-app-proxy-identity.md`, Launch context).
 Legacy entries decode with an empty list. Membership edits require the extension
 to be off and are rejected if a binary belongs to another entry.
 

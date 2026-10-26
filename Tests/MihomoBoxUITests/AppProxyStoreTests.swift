@@ -184,6 +184,12 @@ final class AppProxyStoreTests: XCTestCase {
         XCTAssertEqual(entry.teamIdentifiers, ["2DC432GLL2"])
         XCTAssertEqual(entry.directories, ["/usr/bin"], "directories are stored canonically")
         XCTAssertEqual(entry.executablePaths, ["/usr/bin/curl"])
+        XCTAssertTrue(entry.capturesLaunchedCLIs)
+        try await model.setPolicy(executablePaths: ["/usr/bin/curl"], teamIdentifiers: ["2DC432GLL2"], directories: ["/usr/bin"],
+                                  capturesLaunchedCLIs: false, for: "chatgpt")
+        XCTAssertEqual(model.draft.applications.first { $0.id == "chatgpt" }?.capturesLaunchedCLIs, false)
+        try await model.setExecutablePaths(["/usr/bin/curl"], for: "chatgpt")
+        XCTAssertEqual(model.draft.applications.first { $0.id == "chatgpt" }?.capturesLaunchedCLIs, false, "kept when not given")
         do { try await model.setPolicy(executablePaths: [], teamIdentifiers: ["SHORT"], directories: [], for: "chatgpt"); XCTFail() } catch {}
         do { try await model.setPolicy(executablePaths: [], teamIdentifiers: ["2DC432GLL2"], directories: [], for: "claude"); XCTFail("team owned by chatgpt") } catch {}
         XCTAssertEqual(AppProxyStore.teamIdentifier(ofCodeAt: "/usr/bin/curl"), nil, "platform code has no Team ID")

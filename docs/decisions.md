@@ -422,3 +422,19 @@ validation: verify unselected system DNS with App Proxy both enabled and
 disabled, and separately prove Claude and both CLIs reach their own listeners.
 Successful ChatGPT traffic or explicit listener probes cannot substitute for
 those checks. No DNS cache flush was used for this diagnosis.
+
+### App Proxy launch hosts (2026-10-26)
+
+A CLI is attributed to its session's responsible process, and flow divert refuses a
+diverted flow with `EPERM` when that process's signing identifier has no rule
+(`claude-app-proxy-identity.md`, Launch context). Decision: capture through
+launch-host rules for SSH logins and known terminals and editors, each restricted
+to the verified tools and carrying `matchPath`. Applications also select other
+selected applications' CLIs unless their `capturesLaunchedCLIs` switch is off.
+Rejected: removing the tools' own rules (unlisted hosts would connect directly, but
+self-responsible tools and Claude Desktop's own Claude Code would lose capture);
+a transparent proxy that sees every flow (system-wide interception for a per-app
+feature); a wrapper that disclaims responsibility (private SPI, opt-in per command,
+kept as a possible addition for unlisted launchers); hosts as authorized records
+(sealed-resource validation of IDEs and Xcode every 20 seconds, and a host failure
+would fail its application).

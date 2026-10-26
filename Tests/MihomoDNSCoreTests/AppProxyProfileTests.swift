@@ -23,6 +23,7 @@ final class AppProxyProfileTests: XCTestCase {
         scoped.applications[0].teamIdentifiers = ["D38WU7D763"]
         scoped.applications[0].directories = ["/Users/example/tools"]
         scoped.applications[0].executablePaths = ["/opt/homebrew/bin/packer"]
+        scoped.applications[0].capturesLaunchedCLIs = false
         XCTAssertEqual(scoped.runtimeRouting, settings.runtimeRouting, "the daemon stores this change without a restart")
         XCTAssertEqual(try AppProxyProfile.applying(scoped, to: source), try AppProxyProfile.applying(settings, to: source))
         var rerouted = scoped; rerouted.applications[0].port += 1

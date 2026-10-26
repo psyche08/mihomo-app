@@ -31,17 +31,20 @@ public struct AppProxyEntry: Codable, Equatable, Sendable, Identifiable {
     /// Team scope: all code signed by these Team IDs. Directory scope: all code under these directories.
     public var teamIdentifiers: [String]
     public var directories: [String]
+    /// CLIs of other selected applications launched by this one keep their own routes. Off, they connect directly.
+    public var capturesLaunchedCLIs: Bool
     public init(id: String, title: String, path: String? = nil, port: UInt16, executablePaths: [String] = [],
-                teamIdentifiers: [String] = [], directories: [String] = []) {
+                teamIdentifiers: [String] = [], directories: [String] = [], capturesLaunchedCLIs: Bool = true) {
         self.id = id; self.title = title; self.path = path; self.port = port
         self.executablePaths = executablePaths
         self.teamIdentifiers = teamIdentifiers; self.directories = directories
+        self.capturesLaunchedCLIs = capturesLaunchedCLIs
     }
     public var scopes: [AppProxyScope] {
         teamIdentifiers.map { .init(category: id, kind: .team, value: $0) }
             + directories.map { .init(category: id, kind: .directory, value: $0) }
     }
-    private enum CodingKeys: String, CodingKey { case id, title, path, port, executablePaths, teamIdentifiers, directories }
+    private enum CodingKeys: String, CodingKey { case id, title, path, port, executablePaths, teamIdentifiers, directories, capturesLaunchedCLIs }
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         id = try values.decode(String.self, forKey: .id)
@@ -51,6 +54,7 @@ public struct AppProxyEntry: Codable, Equatable, Sendable, Identifiable {
         executablePaths = try values.decodeIfPresent([String].self, forKey: .executablePaths) ?? []
         teamIdentifiers = try values.decodeIfPresent([String].self, forKey: .teamIdentifiers) ?? []
         directories = try values.decodeIfPresent([String].self, forKey: .directories) ?? []
+        capturesLaunchedCLIs = try values.decodeIfPresent(Bool.self, forKey: .capturesLaunchedCLIs) ?? true
     }
     public static var defaults: [Self] {
         AppProxyApplication.allCases.map { .init(id: $0.rawValue, title: $0.title, port: $0.port) }
@@ -68,13 +72,14 @@ public struct AppProxySettings: Codable, Equatable, Sendable {
         self.routes = routes; self.applications = applications
         self.bypass = bypass
     }
-    /// The settings without code scopes: exactly what AppProxyProfile writes into Mihomo's
+    /// The settings without code scopes or OS-rule options: exactly what AppProxyProfile writes into Mihomo's
     /// configuration. Equal values let a scope-only change skip a runtime restart.
     public var runtimeRouting: AppProxySettings {
         var routing = self
         routing.applications = applications.map {
             var entry = $0
             entry.executablePaths = []; entry.teamIdentifiers = []; entry.directories = []
+            entry.capturesLaunchedCLIs = true
             return entry
         }
         return routing

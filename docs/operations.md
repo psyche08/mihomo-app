@@ -92,7 +92,9 @@ root profile settings still retain the complete application/node list.
 An open consent panel continues renewing only the previous verified generation;
 new rules are committed together after provider validation, with verified
 rollback or complete shutdown on an ambiguous system-wide failure. Shared
-Terminal rules contain only the admitted executables, never all child processes.
+terminal, editor and SSH rules contain only the admitted executables, never all
+child processes. A CLI launched elsewhere (cron, a launchd job running a script, an
+unlisted app) fails with `EPERM`; run it from a listed host.
 
 A LoadBalance group is accepted only when every candidate
 resolves to a remote proxy. macOS may require Network Extension and VPN approval.
@@ -121,13 +123,16 @@ The same operations are available from a shell, run as the logged-in user:
 ```bash
 mihomoboxctl app-proxy policy show chatgpt
 mihomoboxctl app-proxy policy set chatgpt --team 2DC432GLL2 --directory ~/.codex
+mihomoboxctl app-proxy policy set claude --launched-clis off
 mihomoboxctl app-proxy targets chatgpt
 mihomoboxctl app-proxy enable chatgpt --approve
 mihomoboxctl app-proxy runtime
 ```
 
 `policy set` replaces all three scopes of one application in the daemon-owned
-settings. `targets`, `runtime`, `enable`, `disable`, `on` and `off` run the signed
+settings. `--launched-clis on|off` decides whether other applications' CLIs that this
+application launches keep their own routes (default on) or connect directly; it is
+kept when omitted. `targets`, `runtime`, `enable`, `disable`, `on` and `off` run the signed
 MihomoBox host headlessly (`mihomo-app --app-proxy …`); the CLI first verifies that
 host against its own Developer ID leaf. `--approve` consents to the scanned code and
 scopes exactly as the confirmation sheet does; without it only earlier approvals

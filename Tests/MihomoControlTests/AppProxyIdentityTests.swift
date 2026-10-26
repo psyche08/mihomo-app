@@ -131,6 +131,9 @@ final class AppProxyIdentityTests: XCTestCase {
         XCTAssertNoThrow(try AppProxySettings(applications: [entry]).validate())
         let legacy = try JSONDecoder().decode(AppProxyEntry.self, from: Data(#"{"id":"chatgpt","title":"T","port":17971}"#.utf8))
         XCTAssertEqual(legacy.teamIdentifiers, []); XCTAssertEqual(legacy.directories, [])
+        XCTAssertTrue(legacy.capturesLaunchedCLIs, "older settings capture launched CLIs")
+        var direct = entry; direct.capturesLaunchedCLIs = false
+        XCTAssertEqual(try JSONDecoder().decode(AppProxyEntry.self, from: JSONEncoder().encode(direct)), direct)
         var other = AppProxyEntry.defaults[2]
         other.teamIdentifiers = ["2DC432GLL2"]
         XCTAssertThrowsError(try AppProxySettings(applications: [entry, other]).validate())

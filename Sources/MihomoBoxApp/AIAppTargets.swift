@@ -29,6 +29,10 @@ struct AIAppTargets {
     let issues: [DiscoveryIssue]
     let targets: [Target]
     let rules: [NEAppRule]
+    /// Verified CLIs: launch hosts select them, and so do applications that capture the CLIs they launch.
+    let tools: [NEAppRule]
+    /// Rules of applications whose `capturesLaunchedCLIs` admits other applications' CLIs when combined.
+    let launcherIdentifiers: Set<String>
 
     init(ruleSet: String = "all", requireAll: Bool = true, applications: [AppProxyEntry] = AppProxyEntry.defaults, homeDirectory: URL? = nil, applicationDirectories: [URL]? = nil) throws {
         try AppProxySettings(applications: applications).validate()
@@ -179,39 +183,52 @@ struct AIAppTargets {
         } else if ruleSet == "cli" { roots = tools }
         // nil matchTools inherits *all* child processes, including newly downloaded, unauthorized code.
         // Bound responsible-app inheritance to this verified snapshot, including the app itself.
+        let launching = Set(applications.filter(\.capturesLaunchedCLIs).map(\.id))
         let byIdentifier = Dictionary(grouping: roots, by: \.id)
+        var launchers = Set<String>()
         var rules: [NEAppRule] = byIdentifier.keys.sorted().map { id in
             let members = byIdentifier[id] ?? []
             let rule = NEAppRule(signingIdentifier: id, designatedRequirement: Self.requirement(members.map(\.requirement)))
             if members.count == 1 { rule.matchPath = members[0].path }
             let categories = Set(members.map(\.category))
-            rule.matchTools = roots.filter { categories.contains($0.category) }.sorted { $0.path < $1.path }.map(\.rule)
+            var matched = roots.filter { categories.contains($0.category) }.map(\.rule)
+            // An application may launch another application's CLI (Claude Code running codex).
+            // macOS attributes it to the launching application; the provider routes the CLI by
+            // its own identity, so it still uses the CLI's own application route.
+            if !categories.isDisjoint(with: launching) { launchers.insert(id); matched += tools.map(\.rule) }
+            rule.matchTools = Self.uniqueByPath(matched)
             return rule
         }
         guard rules.reduce(0, { $0 + ($1.matchTools?.count ?? 0) }) <= 8192 else { throw Failure.tooManyTargets }
-        // The responsible application can be the terminal/editor. Restrict
-        // those rules to the verified tools; never select the whole terminal.
-        for path in ["/System/Applications/Utilities/Terminal.app", "/Applications/iTerm.app",
-                     "/Applications/Warp.app", "/Applications/Ghostty.app", "/Applications/kitty.app",
-                     "/Applications/Alacritty.app", "/Applications/Visual Studio Code.app"] {
-            guard !tools.isEmpty, let executable = Bundle(url: URL(fileURLWithPath: path))?.executableURL,
-                  let terminal = Self.inspect(executable.resolvingSymlinksInPath(), category: "cli_host", team: nil) else { continue }
-            let rule = NEAppRule(signingIdentifier: terminal.id, designatedRequirement: terminal.requirement)
-            rule.matchTools = tools.map(\.rule)
-            if ruleSet != "apps" {
-                // A terminal chosen as an application already owns its identifier's single rule.
-                if let existing = rules.first(where: { $0.matchSigningIdentifier == terminal.id }) {
+        // A CLI started from a shell belongs to the session's responsible process: the
+        // terminal, editor or SSH login. NetworkExtension checks that process against the
+        // rules' signing identifiers and fails connect() with EPERM when none matches, before
+        // the provider sees the flow. Restrict these rules to the verified tools; never select
+        // the whole host. Hosts are never routed, so they are not authorized records.
+        if !tools.isEmpty, ruleSet != "apps" {
+            let hosts = Dictionary(grouping: Self.launchHosts(applicationDirectories: applicationDirectories
+                ?? [URL(fileURLWithPath: "/Applications"), home.appendingPathComponent("Applications")]), by: \.id)
+            for id in hosts.keys.sorted() {
+                // A host chosen as an application already owns its identifier's single rule.
+                if let existing = rules.first(where: { $0.matchSigningIdentifier == id }) {
                     existing.matchTools = Self.uniqueByPath((existing.matchTools ?? []) + tools.map(\.rule))
-                } else { rules.append(rule) }
+                    continue
+                }
+                let members = hosts[id] ?? []
+                let rule = NEAppRule(signingIdentifier: id, designatedRequirement: Self.requirement(members.map(\.requirement)))
+                // NetworkExtension resolves a path-less rule only through LaunchServices,
+                // which does not know sshd-session.
+                if members.count == 1 { rule.matchPath = members[0].path }
+                rule.matchTools = tools.map(\.rule)
+                rules.append(rule)
             }
-            // A terminal explicitly selected as an application retains its
-            // own category; matchTools host records must not overwrite it.
-            if found[terminal.path] == nil { found[terminal.path] = terminal }
         }
         guard found.count <= 512, rules.reduce(0, { $0 + ($1.matchTools?.count ?? 0) }) <= 8192 else { throw Failure.tooManyTargets }
         self.issues = issues
         self.targets = found.values.sorted { $0.path < $1.path }
         self.rules = rules
+        self.tools = tools.map(\.rule)
+        self.launcherIdentifiers = launchers
     }
 
     /// Union already verified per-application discoveries. Shared responsible
@@ -236,6 +253,11 @@ struct AIAppTargets {
                 if let path = rule.matchPath { paths[id, default: []].insert(path) } else { pathless.insert(id) }
             }
         }
+        // Applications that capture the CLIs they launch also select the other applications' CLIs.
+        let allTools = groups.flatMap(\.tools)
+        launcherIdentifiers = Set(groups.flatMap(\.launcherIdentifiers))
+        for id in launcherIdentifiers { tools[id, default: []] += allTools }
+        self.tools = Self.uniqueByPath(allTools)
         targets = identities.values.sorted { $0.path < $1.path }
         rules = tools.keys.sorted().map { id in
             let rule = NEAppRule(signingIdentifier: id, designatedRequirement: Self.requirement(requirements[id] ?? []))
@@ -264,6 +286,53 @@ struct AIAppTargets {
         (".claude/remote/ccd-cli", "claude"),
         (".local/share/claude/versions", "claude_cli"),
     ]
+
+    /// Responsible processes that start CLIs: SSH logins, terminals and editors. tmux, screen
+    /// and shells inherit the process that started them, so they need no rule of their own.
+    static let launchHostExecutables = ["/usr/libexec/sshd-session", "/usr/sbin/sshd"]
+    static let launchHostBundles: Set<String> = [
+        "com.apple.Terminal", "com.googlecode.iterm2", "dev.warp.Warp-Stable", "com.mitchellh.ghostty",
+        "net.kovidgoyal.kitty", "org.alacritty", "com.github.wez.wezterm", "co.zeit.hyper", "org.tabby",
+        "com.microsoft.VSCode", "com.microsoft.VSCodeInsiders", "com.vscodium", "com.todesktop.230313mzl4w4u92",
+        "com.exafunction.windsurf", "dev.zed.Zed", "dev.zed.Zed-Preview", "com.apple.dt.Xcode",
+        "com.google.android.studio",
+    ]
+    static let launchHostBundlePrefixes = ["com.jetbrains."]
+
+    struct LaunchHost: Equatable {
+        let id: String
+        let requirement: String
+        let path: String
+    }
+    /// Hosts only select verified tools and are never routed, so a signature check without
+    /// resource sealing is enough: sealing an IDE or Xcode takes seconds on every scan.
+    static func launchHosts(applicationDirectories: [URL]) -> [LaunchHost] {
+        var executables = launchHostExecutables.map { URL(fileURLWithPath: $0) }
+        for base in [URL(fileURLWithPath: "/System/Applications/Utilities")] + applicationDirectories {
+            for app in (try? FileManager.default.contentsOfDirectory(at: base, includingPropertiesForKeys: nil)) ?? [] where app.pathExtension == "app" {
+                // Read Info.plist directly: Bundle(url:) returns Bundle.main for the running app.
+                guard let info = NSDictionary(contentsOf: app.appendingPathComponent("Contents/Info.plist")),
+                      let id = info["CFBundleIdentifier"] as? String, let name = info["CFBundleExecutable"] as? String,
+                      !name.contains("/"),
+                      launchHostBundles.contains(id) || launchHostBundlePrefixes.contains(where: id.hasPrefix) else { continue }
+                executables.append(app.appendingPathComponent("Contents/MacOS").appendingPathComponent(name))
+            }
+        }
+        var hosts: [String: LaunchHost] = [:]
+        for url in executables {
+            let path = url.standardizedFileURL.resolvingSymlinksInPath().path
+            var code: SecStaticCode?; var info: CFDictionary?; var requirement: SecRequirement?; var text: CFString?
+            guard hosts[path] == nil, FileManager.default.isExecutableFile(atPath: path),
+                  SecStaticCodeCreateWithPath(URL(fileURLWithPath: path) as CFURL, [], &code) == errSecSuccess, let code,
+                  SecStaticCodeCheckValidity(code, SecCSFlags(rawValue: kSecCSDoNotValidateResources), nil) == errSecSuccess,
+                  SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
+                  let id = (info as? [String: Any])?[kSecCodeInfoIdentifier as String] as? String,
+                  SecCodeCopyDesignatedRequirement(code, [], &requirement) == errSecSuccess, let requirement,
+                  SecRequirementCopyString(requirement, [], &text) == errSecSuccess, let text else { continue }
+            hosts[path] = LaunchHost(id: id, requirement: text as String, path: path)
+        }
+        return hosts.values.sorted { $0.path < $1.path }
+    }
 
     /// One OS rule may stand for several approved copies of an identifier: match any of their requirements.
     static func requirement(_ texts: [String]) -> String {

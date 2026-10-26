@@ -313,8 +313,9 @@ public final class AppProxyStore: ObservableObject {
     }
 
     /// Exact CLIs, whole Team IDs and whole directories for one application; validated by a fresh scan.
+    /// `capturesLaunchedCLIs` is kept when nil.
     public func setPolicy(executablePaths paths: [String], teamIdentifiers teams: [String], directories: [String],
-                          for applicationID: String) async throws {
+                          capturesLaunchedCLIs: Bool? = nil, for applicationID: String) async throws {
         guard !busy, !refreshing, !extensionStatus.enabled, !hasConflict, routing != nil, let service,
               let index = draft.applications.firstIndex(where: { $0.id == applicationID }) else {
             throw AppProxySettingsError.staleState
@@ -325,6 +326,7 @@ public final class AppProxyStore: ObservableObject {
         candidate.applications[index].teamIdentifiers = teams.map { $0.trimmingCharacters(in: .whitespaces).uppercased() }
         // A typed folder may carry a trailing slash or `..`; executables must already be exact.
         candidate.applications[index].directories = directories.map { URL(fileURLWithPath: $0).standardizedFileURL.path }
+        if let capturesLaunchedCLIs { candidate.applications[index].capturesLaunchedCLIs = capturesLaunchedCLIs }
         try AppProxySettings(applications: candidate.applications).validate()
         func canonical(_ path: String) -> String { URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path }
         candidate.applications[index].executablePaths = paths.map(canonical)

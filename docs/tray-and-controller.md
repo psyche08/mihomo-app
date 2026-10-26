@@ -378,7 +378,7 @@ Config now includes **App Proxy**, separate from the profile editor's TUN
 process rules. Four rows cover ChatGPT/Codex Desktop, Codex CLI, Claude Desktop,
 and Claude CLI. Each row can select a concrete node or follow an existing proxy
 group. Discovered signed helper executables inherit their application's route;
-Terminal/editor `matchTools` rules still select only the two CLI families.
+Terminal, editor and SSH `matchTools` rules select only verified CLIs.
 A host-only identity that cannot identify the actual CLI is rejected, rather
 than assigned an arbitrary application's route.
 

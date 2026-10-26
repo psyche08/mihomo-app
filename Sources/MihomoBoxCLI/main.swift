@@ -926,17 +926,20 @@ private let appProxyUsage = """
     usage: mihomoboxctl app-proxy status | set-all PROXY
            mihomoboxctl app-proxy policy show [APP]
            mihomoboxctl app-proxy policy set APP [--team ID]... [--directory PATH]... [--executable PATH]...
+                                             [--launched-clis on|off]
            mihomoboxctl app-proxy targets APP | runtime | enable APP [--approve] | disable APP | on | off
     """
 
 /// Show or replace one application's routing policy in the daemon-owned settings.
-/// `set` replaces all three scopes; it takes effect at the next enable (or approval).
+/// `set` replaces all three scopes and keeps `--launched-clis` unless given; it takes effect
+/// at the next enable (or approval).
 private func appProxyPolicy(_ arguments: [String]) throws -> Int32 {
     guard let data = try sendControl(.appProxyStatus) else { throw CLIError(message: "missing App Proxy state") }
     let state = try JSONDecoder().decode(AppProxyRoutingState.self, from: data)
     func policy(_ entry: AppProxyEntry) -> [String: Any] {
         ["id": entry.id, "title": entry.title, "teamIdentifiers": entry.teamIdentifiers,
-         "directories": entry.directories, "executablePaths": entry.executablePaths]
+         "directories": entry.directories, "executablePaths": entry.executablePaths,
+         "capturesLaunchedCLIs": entry.capturesLaunchedCLIs]
     }
     func canonical(_ path: String) -> String {
         URL(fileURLWithPath: (path as NSString).expandingTildeInPath).standardizedFileURL.resolvingSymlinksInPath().path
@@ -953,6 +956,7 @@ private func appProxyPolicy(_ arguments: [String]) throws -> Int32 {
             throw CLIError(message: "Unknown App Proxy application: \(arguments[1])")
         }
         var teams: [String] = [], directories: [String] = [], executables: [String] = []
+        var launched = state.settings.applications[index].capturesLaunchedCLIs
         var rest = Array(arguments.dropFirst(2))
         while !rest.isEmpty {
             guard rest.count >= 2 else { throw CLIError(message: appProxyUsage) }
@@ -960,6 +964,7 @@ private func appProxyPolicy(_ arguments: [String]) throws -> Int32 {
             case "--team": teams.append(rest[1].trimmingCharacters(in: .whitespaces).uppercased())
             case "--directory": directories.append(canonical(rest[1]))
             case "--executable": executables.append(canonical(rest[1]))
+            case "--launched-clis" where ["on", "off"].contains(rest[1]): launched = rest[1] == "on"
             default: throw CLIError(message: appProxyUsage)
             }
             rest.removeFirst(2)
@@ -968,6 +973,7 @@ private func appProxyPolicy(_ arguments: [String]) throws -> Int32 {
         settings.applications[index].teamIdentifiers = teams
         settings.applications[index].directories = directories
         settings.applications[index].executablePaths = executables
+        settings.applications[index].capturesLaunchedCLIs = launched
         try settings.validate()
         let update = AppProxyRoutingUpdate(settings: settings, expectedRevision: state.revision)
         _ = try sendControl(.setAppProxyRouting, payload: JSONEncoder().encode(update))
@@ -1019,7 +1025,10 @@ private func usage() {
       app-proxy set-all PROXY         Route all saved apps through one node/group
       app-proxy policy show [APP]     Show Team ID, directory and executable scopes
       app-proxy policy set APP [--team ID]... [--directory PATH]... [--executable PATH]...
-                                      Replace one app's scopes (applies at next enable)
+                               [--launched-clis on|off]
+                                      Replace one app's scopes (applies at next enable);
+                                      --launched-clis: other apps' CLIs it launches keep
+                                      their own routes (on, default) or connect directly
       app-proxy targets APP           List the signed executables the policy captures
       app-proxy runtime               Show interception state per application
       app-proxy enable APP [--approve]

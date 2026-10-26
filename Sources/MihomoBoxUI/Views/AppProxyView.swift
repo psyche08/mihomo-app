@@ -455,6 +455,7 @@ private struct AppProxyExecutableEditor: View {
     @State private var paths: String
     @State private var teams: String
     @State private var directories: String
+    @State private var capturesLaunchedCLIs: Bool
     @State private var error: String?
     @State private var saving = false
 
@@ -463,6 +464,7 @@ private struct AppProxyExecutableEditor: View {
         _paths = State(initialValue: application.executablePaths.joined(separator: "\n"))
         _teams = State(initialValue: application.teamIdentifiers.joined(separator: "\n"))
         _directories = State(initialValue: application.directories.joined(separator: "\n"))
+        _capturesLaunchedCLIs = State(initialValue: application.capturesLaunchedCLIs)
     }
     private var locked: Bool { model.busy || model.refreshing || model.extensionStatus.enabled || model.hasConflict }
     private func lines(_ text: String) -> [String] {
@@ -475,7 +477,7 @@ private struct AppProxyExecutableEditor: View {
     }
     private var unchanged: Bool {
         entries == application.executablePaths && teamEntries == application.teamIdentifiers
-            && directoryEntries == application.directories
+            && directoryEntries == application.directories && capturesLaunchedCLIs == application.capturesLaunchedCLIs
     }
 
     var body: some View {
@@ -495,6 +497,12 @@ private struct AppProxyExecutableEditor: View {
             scopeSection("CLI executables", hint: "Exactly these executables, for example /usr/bin/curl. Scripts require their interpreter.",
                          text: $paths, label: "CLI executable paths") { urls in
                 urls.map { $0.resolvingSymlinksInPath().standardizedFileURL.path }
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Toggle("Route other apps’ CLIs launched by this app", isOn: $capturesLaunchedCLIs)
+                    .disabled(locked || saving)
+                Text("For example codex started by Claude Code keeps the codex CLI’s own node. Off, such CLIs connect directly.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             if model.extensionStatus.enabled {
                 Label("Turn off App Proxy before editing this policy.", systemImage: "info.circle")
@@ -521,7 +529,8 @@ private struct AppProxyExecutableEditor: View {
                         defer { saving = false }
                         do {
                             try await model.setPolicy(executablePaths: entries, teamIdentifiers: teamEntries,
-                                                      directories: directoryEntries, for: application.id)
+                                                      directories: directoryEntries,
+                                                      capturesLaunchedCLIs: capturesLaunchedCLIs, for: application.id)
                             dismiss()
                         } catch { self.error = error.localizedDescription }
                     }
@@ -532,7 +541,7 @@ private struct AppProxyExecutableEditor: View {
             Text("Update Draft scans and verifies signatures. Apply Changes on the App Proxy page saves the policy; then authorize the app.")
                 .font(.caption).foregroundStyle(.secondary)
         }
-        .padding(20).frame(width: 680, height: 700)
+        .padding(20).frame(width: 680, height: 760)
         .interactiveDismissDisabled(saving || model.busy)
     }
 

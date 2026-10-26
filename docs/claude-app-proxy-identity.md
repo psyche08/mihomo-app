@@ -589,14 +589,42 @@ Mach-O UUID as the system original: with its rule installed, `/usr/bin/curl`
 launched over SSH failed with `EPERM` on m4pro. Such copies are also killed by launch
 constraints.
 
-**Launch context (m4pro, 2026-10-26).** A scoped tool is captured when it is its own
-responsible process (launchd job, double-click) or runs under a listed terminal host.
-Launched from a context with no rule, such as an SSH session, a tool whose OS rule
-carries a `matchPath` fails `connect()` with `EPERM` before the provider sees the flow,
-and a tool whose identifier is shared (no `matchPath`) connects directly. Verified:
-directory-scoped ad-hoc probe and Team-scoped `packer` as launchd jobs reached Mihomo
-through `mihomobox-app-chatgpt`; an identical probe copy outside the directory
-connected directly; `/usr/bin/curl` stayed direct.
+**Launch context (m4pro, 2026-10-26).** macOS attributes a CLI to the responsible
+process of its session: the terminal, editor or SSH login (`sshd-session`). Two kernel
+steps use it before the provider. NECP evaluates the socket as the responsible
+application when that application's Mach-O UUID appears in an installed rule, and
+otherwise as the CLI itself (xnu `necp_socket_fillout_info_locked`). Flow divert then
+checks the responsible process's signing identifier against the rules' identifiers
+and fails `connect()` with `EPERM` when it is absent (`flow_divert_add_all_proc_info`).
+`NEFlowMetaData` still describes the real process: m4pro receipts carried the PIDs of
+ChatGPT's bundled `codex` helpers, whose responsible process is ChatGPT. A tool is
+therefore captured when it is its own responsible process or its host has a rule that
+lists it in `matchTools`. Under a host without a rule, a tool whose rule has a
+`matchPath` gets `EPERM`; a tool with a shared identifier connects directly, because
+NetworkExtension resolves a path-less rule only through LaunchServices. Verified in
+one SSH session: `packer` (Team scope) failed with `EPERM`, the same binary started
+with responsibility disclaimed reached `upstream_connected`, and ChatGPT's bundled
+`node` connected directly both ways. Earlier: directory-scoped and Team-scoped tools
+run as launchd jobs reached `mihomobox-app-chatgpt`; `/usr/bin/curl` stayed direct.
+
+**Launch hosts.** Host rules cover `/usr/libexec/sshd-session`, `/usr/sbin/sshd` and
+apps in `/System/Applications/Utilities`, `/Applications` and `~/Applications` whose
+bundle identifier names a known terminal or editor: Terminal, iTerm2, Warp, Ghostty,
+kitty, Alacritty, WezTerm, Hyper, Tabby, VS Code and Insiders, VSCodium, Cursor,
+Windsurf, Zed, Xcode, Android Studio and `com.jetbrains.*`. Each rule carries the
+host's `matchPath`, since a path-less rule never matches `sshd-session`, and lists only
+the verified tools. tmux, screen and shells inherit the process that started them.
+Hosts are never routed, so they are not authorized records: discovery reads their
+identifier and requirement from a signature check without sealed resources, which
+took 1–11 s per JetBrains IDE or Xcode on every 20-second scan. Other launchers, such
+as cron, a launchd job running a script or an unlisted app, still get `EPERM`.
+
+**Launched CLIs.** With `capturesLaunchedCLIs` (default on), an application's rules
+also list the other selected applications' verified CLIs, so `codex` started by Claude
+Code keeps the codex CLI's route; the provider routes by the real process. Off, such a
+CLI connects directly: the launching application's rule claims the responsible UUID,
+so the CLI's own rule no longer applies. The option is stored like a scope, without
+restarting Mihomo.
 
 **Scope edits do not restart Mihomo.** Scopes are not part of the generated Mihomo
 configuration (`AppProxySettings.runtimeRouting`), so the daemon stores a scope-only
