@@ -44,6 +44,7 @@ public enum ControlOperation: String, Codable, Sendable {
     case controllerStreamClose = "dashboard.controller-stream-close"
     case appProxyStatus = "app-proxy.status"
     case setAppProxyRouting = "app-proxy.set-routing"
+    case setAppProxyProcesses = "app-proxy.set-processes"
     case listProfiles = "profile.list"
     case importProfile = "profile.import"
     case switchProfile = "profile.switch"

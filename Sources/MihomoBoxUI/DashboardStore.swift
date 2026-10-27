@@ -188,6 +188,8 @@ public final class DashboardStore: ObservableObject {
   private var lastConnectionFrameAt: Date?
   private var nextLogIdentifier: UInt64 = 1
   private var usageBaselines: [String: (upload: Int64, download: Int64)] = [:]
+  /// Verified App Proxy process per Mihomo connection ID.
+  private var attributedProcesses: [String: (process: String, path: String?)] = [:]
   private var version = ControllerVersion()
 
   public init() {
@@ -970,6 +972,12 @@ public final class DashboardStore: ObservableObject {
       appendClosed(connection)
     }
 
+    attributedProcesses = attributedProcesses.filter { newIDs.contains($0.key) }
+    if connectionFrame.connections.contains(where: {
+      $0.metadata.inboundName.hasPrefix(AppProxyAttribution.inboundPrefix) && attributedProcesses[$0.id] == nil
+    }) {
+      Task { await appProxy.refreshFlowOwners() }
+    }
     activeConnections = connectionFrame.connections.map { raw in
       makeConnection(raw, previous: previousRawConnections[raw.id], elapsed: elapsed)
     }.sorted { $0.startedAt > $1.startedAt }
@@ -1036,6 +1044,18 @@ public final class DashboardStore: ObservableObject {
     elapsed: TimeInterval
   ) -> DashboardConnection {
     let metadata = raw.metadata
+    var process = metadata.process.isEmpty ? nil : metadata.process
+    var processPath = metadata.processPath.isEmpty ? nil : metadata.processPath
+    if let known = attributedProcesses[raw.id] {
+      (process, processPath) = (known.process, known.path)
+    } else if let found = AppProxyAttribution.process(
+      inboundName: metadata.inboundName, sourcePort: metadata.sourcePort, network: metadata.network,
+      owners: appProxy.flowOwners, applications: appProxy.draft.applications)
+    {
+      (process, processPath) = (found.process, found.path)
+      // An exact owner stays with the connection after the provider forgets the flow.
+      if found.path != nil { attributedProcesses[raw.id] = found }
+    }
     let host = firstNonempty(metadata.host, metadata.sniffHost, metadata.destinationIP, "Unknown")
     let destination = firstNonempty(
       metadata.remoteDestination,
@@ -1061,8 +1081,8 @@ public final class DashboardStore: ObservableObject {
       destinationIP: metadata.destinationIP,
       destinationPort: metadata.destinationPort,
       user: firstNonempty(metadata.inboundUser, metadata.uid.map(String.init) ?? "", "Local user"),
-      process: metadata.process.isEmpty ? nil : metadata.process,
-      processPath: metadata.processPath.isEmpty ? nil : metadata.processPath,
+      process: process,
+      processPath: processPath,
       sniffHost: metadata.sniffHost.isEmpty ? nil : metadata.sniffHost,
       inboundName: firstNonempty(metadata.inboundName, metadata.type).nilIfEmpty,
       dnsMode: metadata.dnsMode,

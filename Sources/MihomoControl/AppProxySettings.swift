@@ -173,3 +173,23 @@ public struct AppProxyRoutingUpdate: Codable, Sendable {
         self.settings = settings; self.expectedRevision = expectedRevision
     }
 }
+
+/// Verified executable paths of each active App Proxy application. Connections these
+/// processes make outside App Proxy, such as to the macOS system proxy on loopback, which
+/// NetworkExtension never diverts, follow the application's sub-rules in Mihomo too. The
+/// match is by path only: Mihomo does not check signatures.
+public struct AppProxyProcessRoutes: Codable, Equatable, Sendable {
+    public static let maximumPaths = 1024
+    public var paths: [String: [String]]
+    public init(_ paths: [String: [String]] = [:]) { self.paths = paths }
+    public func validate(applications: [AppProxyEntry]) throws {
+        guard Set(paths.keys).isSubset(of: Set(applications.map(\.id))),
+              paths.values.reduce(0, { $0 + $1.count }) <= Self.maximumPaths,
+              paths.values.allSatisfy({ $0.allSatisfy(Self.isRoutable) }) else { throw AppProxySettingsError.invalidExecutables }
+    }
+    /// A Mihomo classical rule is comma-separated, so a path with a comma cannot be expressed.
+    public static func isRoutable(_ path: String) -> Bool {
+        path.hasPrefix("/") && path.utf8.count <= 1024
+            && !path.contains(where: { [",", "\n", "\r", "\0"].contains($0) })
+    }
+}

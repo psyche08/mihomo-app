@@ -654,3 +654,41 @@ headlessly after checking it carries the CLI's own Developer ID leaf, so the bro
 still accepts only the host. `enable --approve` is the operator's consent; any process
 running as the user can invoke it, which is weaker than a UI click and was accepted
 by the owner for headless operation.
+
+**Traffic attribution.** Mihomo identifies a connection's process by the socket owner,
+which for every App Proxy flow is the provider's connection to a `mihomobox-app-*`
+listener. The provider therefore keeps, for each such connection, the verified
+executable path and PID by the connection's local port (TCP, or the SOCKS UDP relay).
+The app requests this table (`flowOwners`, at most 512 flows and 128 paths per reply,
+replacing receipts and counters in that reply) only while App Proxy connections lack
+an owner, at most once a second, and the dashboard replaces `MihomoAppProxy` with the
+real process for Connections and Usage; an exact match stays with the connection after
+the flow ends. Without a match it shows the App Proxy application title. The table is
+display-only: it is never logged and does not affect routing.
+
+**System proxy.** Apps that honor the macOS system proxy (Chromium-based helpers such
+as ChatGPT's `Codex (Service)` network process, and `codex` when given proxy settings)
+connect to it on loopback. NetworkExtension does not divert loopback connections to an
+app proxy provider: on m4pro (system proxy `127.0.0.1:7897`, Mihomo's mixed port) a
+verified `codex` process reached Mihomo through `DEFAULT-MIXED` with itself as the socket
+owner, and a provider that relayed such connections to the app's listener never saw one.
+App Proxy cannot intercept it, so Mihomo routes it by process instead: the generated
+configuration has one file rule provider per application (`mihomobox-app-<id>-processes`,
+`mihomo-data/mihomobox/app-<id>-processes.yaml`) and, ahead of the profile's rules,
+`SUB-RULE,(AND,((RULE-SET,mihomobox-app-<id>-processes))),mihomobox-app-<id>`. After each
+successful authorization or disable, the app sends the verified executable paths of the
+active applications (`app-proxy.set-processes`); the daemon rewrites only the changed
+provider files and asks the running core to reload them, without a restart. These rules
+match by path alone: Mihomo does not check signatures, so they route, but do not
+authenticate, code at a verified path. Paths containing a comma are left out (a classical
+rule is comma-separated), process lookup must not be disabled in the profile
+(`find-process-mode: off`). A configuration rendered before this overlay gains the
+providers on the next **Reload Profiles** (`mihomoboxctl profile reload`), which now renders
+the active profile again and applies a changed result as a transactional activation.
+
+**Framework links.** The signed-code scan once called `skipDescendants()` on symbolic
+links. The enumerator never follows a link, so that call skipped the directory holding
+it instead; because a framework's `Versions/Current` links can come first on disk, every
+helper in ChatGPT's `Codex Framework.framework` (including `Codex (Service)`) was missing
+from the targets. Links are now passed over, and only a link that resolves outside the
+scanned tree is reported as `escapedPath`.

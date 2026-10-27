@@ -63,6 +63,15 @@ final class ControllerBroker: @unchecked Sendable {
         )
     }
 
+    /// Re-reads one App Proxy process rule provider written by the daemon.
+    func refreshRuleProvider(_ name: String) throws {
+        guard name.hasPrefix("mihomobox-app-"), name.hasSuffix("-processes"), validControllerName(name) else {
+            throw brokerError("invalid App Proxy rule provider")
+        }
+        let configuration = try ProxyConfiguration.load(path: configPath)
+        _ = try send(configuration, method: "PUT", path: "/providers/rules/\(pathComponent(name))")
+    }
+
     func validateAppProxyRoutes(_ settings: AppProxySettings) throws {
         guard !settings.routes.isEmpty else { return }
         let configuration = try ProxyConfiguration.load(path: configPath)

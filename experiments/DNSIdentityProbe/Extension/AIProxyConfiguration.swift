@@ -97,7 +97,10 @@ struct AIProxyConfiguration {
     }
 
     func classify(_ metadata: NEFlowMetaData) -> String? { try? classifyValidated(metadata) }
-    func classifyValidated(_ metadata: NEFlowMetaData) throws -> String {
+    func classifyValidated(_ metadata: NEFlowMetaData) throws -> String { try identifyValidated(metadata).category }
+    func identify(_ metadata: NEFlowMetaData) -> (category: String, path: String)? { try? identifyValidated(metadata) }
+    /// The category and the verified executable path of the process behind a flow.
+    func identifyValidated(_ metadata: NEFlowMetaData) throws -> (category: String, path: String) {
         guard let token = metadata.sourceAppAuditToken, token.count == 32 else { throw AppProxyIdentityFailure.runtimeIdentity }
         if let snapshot, AppProxyFlowEvidence.word(token, 1) != snapshot.ownerUID { throw AppProxyIdentityFailure.wrongUser }
         let candidates = identities.filter { $0.id == metadata.sourceAppSigningIdentifier }
@@ -128,13 +131,13 @@ struct AIProxyConfiguration {
                     }
                 }
                 guard SecCodeCheckValidity(code, [], requirement) == errSecSuccess else { throw AppProxyIdentityFailure.signature }
-                return scope.category
+                return (scope.category, path)
             }
             guard values[kSecCodeInfoUnique as String] as? Data == record.cdHash else { throw AppProxyIdentityFailure.signature }
             guard try AppProxyFileStamp.read(path) == record.stamp else { throw AppProxyIdentityFailure.changedFile }
         }
         guard let target = candidates.first(where: { $0.path == path }) else { throw AppProxyIdentityFailure.undiscoveredTarget }
         guard SecCodeCheckValidity(code, [], target.requirement) == errSecSuccess else { throw AppProxyIdentityFailure.signature }
-        return target.category
+        return (target.category, path)
     }
 }

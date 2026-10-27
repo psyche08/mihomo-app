@@ -326,7 +326,7 @@ public enum AppProxyPeerRequirement {
 import CryptoKit
 
 public struct AppProxyRuntimeMessage: Codable {
-    public enum Action: String, Codable { case status, prepare, commit, abort, renew }
+    public enum Action: String, Codable { case status, prepare, commit, abort, renew, flowOwners }
     public let action: Action
     public let expected: UUID?
     public let configuration: Data?
@@ -358,10 +358,52 @@ public struct AppProxyRuntimeStatus: Codable, Equatable, Sendable {
     public var failure: AppProxyIdentityFailure?
     public var counters: [String: Int]
     public var recentFlows: [AppProxyFlowEvidence]
+    /// Present only in the reply to a `flowOwners` request.
+    public var flowOwners: AppProxyFlowOwners?
     public init(generation: UUID?, ready: Bool, verifiedTargets: Int, failure: AppProxyIdentityFailure? = nil,
-                counters: [String: Int] = [:], recentFlows: [AppProxyFlowEvidence] = []) {
+                counters: [String: Int] = [:], recentFlows: [AppProxyFlowEvidence] = [], flowOwners: AppProxyFlowOwners? = nil) {
         self.generation = generation; self.ready = ready; self.verifiedTargets = verifiedTargets
-        self.failure = failure; self.counters = counters; self.recentFlows = recentFlows
+        self.failure = failure; self.counters = counters; self.recentFlows = recentFlows; self.flowOwners = flowOwners
+    }
+}
+
+/// The verified process behind each provider connection to a Mihomo listener, keyed by that
+/// connection's local port. Mihomo sees only the provider as the socket owner; the dashboard
+/// uses this table to attribute App Proxy traffic to the real application. Paths are shared
+/// by index so the reply stays within the provider message limit.
+public struct AppProxyFlowOwners: Codable, Equatable, Sendable {
+    public struct Flow: Codable, Equatable, Sendable {
+        public let port: UInt16
+        public let udp: Bool
+        public let executable: Int
+        public let pid: UInt32
+        public init(port: UInt16, udp: Bool, executable: Int, pid: UInt32) {
+            self.port = port; self.udp = udp; self.executable = executable; self.pid = pid
+        }
+    }
+    public static let maximumFlows = 512
+    public static let maximumExecutables = 128
+    public private(set) var executables: [String]
+    public private(set) var flows: [Flow]
+
+    /// Keeps at most `maximumFlows` flows and `maximumExecutables` distinct paths, in the given order.
+    public init(_ owners: [(port: UInt16, udp: Bool, path: String, pid: UInt32)]) {
+        var executables: [String] = [], index: [String: Int] = [:], flows: [Flow] = []
+        for owner in owners where flows.count < Self.maximumFlows {
+            let position: Int
+            if let known = index[owner.path] { position = known }
+            else {
+                guard executables.count < Self.maximumExecutables else { continue }
+                position = executables.count; index[owner.path] = position; executables.append(owner.path)
+            }
+            flows.append(.init(port: owner.port, udp: owner.udp, executable: position, pid: owner.pid))
+        }
+        self.executables = executables; self.flows = flows
+    }
+    public func owner(port: UInt16, udp: Bool) -> (path: String, pid: UInt32)? {
+        guard let flow = flows.first(where: { $0.port == port && $0.udp == udp }),
+              executables.indices.contains(flow.executable) else { return nil }
+        return (executables[flow.executable], flow.pid)
     }
 }
 

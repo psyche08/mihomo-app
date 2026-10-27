@@ -66,9 +66,14 @@ struct AIAppTargets {
                 visited += 1
                 if visited > 20000 || found.count > 512 { overflow = true; break }
                 if files.level > 16 { files.skipDescendants(); continue }
+                // The enumerator never follows a link. skipDescendants() here would skip the
+                // directory holding the link instead: a framework's Versions/Current links can
+                // come first on disk, which hid every helper of ChatGPT's Codex Framework.
                 if (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true {
-                    if issues.count < 64 { issues.append(.init(category: category, failure: .escapedPath)) }
-                    files.skipDescendants(); continue
+                    // Links within the tree reach code the enumeration visits anyway.
+                    if !url.resolvingSymlinksInPath().standardizedFileURL.path.hasPrefix(canonical.path + "/"),
+                       issues.count < 64 { issues.append(.init(category: category, failure: .escapedPath)) }
+                    continue
                 }
                 let path = url.standardizedFileURL.resolvingSymlinksInPath()
                 guard path.path.hasPrefix(canonical.path + "/"),

@@ -927,7 +927,7 @@ private let appProxyUsage = """
            mihomoboxctl app-proxy policy show [APP]
            mihomoboxctl app-proxy policy set APP [--team ID]... [--directory PATH]... [--executable PATH]...
                                              [--launched-clis on|off]
-           mihomoboxctl app-proxy targets APP | runtime | enable APP [--approve] | disable APP | on | off
+           mihomoboxctl app-proxy targets APP | runtime | flows | enable APP [--approve] | disable APP | on | off
     """
 
 /// Show or replace one application's routing policy in the daemon-owned settings.
@@ -1031,6 +1031,8 @@ private func usage() {
                                       their own routes (on, default) or connect directly
       app-proxy targets APP           List the signed executables the policy captures
       app-proxy runtime               Show interception state per application
+      app-proxy flows                 Show the verified process behind each App Proxy
+                                      connection to Mihomo, by its source port
       app-proxy enable APP [--approve]
                                       Authorize and enable one app; --approve consents
                                       to its scanned code and scopes like the app's sheet
@@ -1182,7 +1184,7 @@ private func main() throws -> Int32 {
             try writePayload(try sendControl(.setAppProxyRouting, payload: JSONEncoder().encode(update)))
         } else if arguments.first == "policy" {
             return try appProxyPolicy(Array(arguments.dropFirst()))
-        } else if let action = arguments.first, ["targets", "runtime", "enable", "disable", "on", "off"].contains(action) {
+        } else if let action = arguments.first, ["targets", "runtime", "flows", "enable", "disable", "on", "off"].contains(action) {
             // Only the signed host owns the NetworkExtension configuration and the broker's consent.
             let host = try appProxyHostExecutable()
             return try runInteractive(host.path, ["--app-proxy", action == "runtime" ? "status" : action] + arguments.dropFirst())

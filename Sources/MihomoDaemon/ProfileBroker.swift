@@ -47,7 +47,14 @@ final class ProfileBroker: @unchecked Sendable {
                 let source = root.appendingPathComponent("profiles").appendingPathComponent(active)
                 let data = try readStoredProfile(source)
                 try validate(name: active, data: data)
-                try reloadActiveRuntime()
+                // Render again so an updated overlay (after an upgrade) or App Proxy settings
+                // reach the running configuration; a changed rendering is applied as a
+                // transactional activation, an identical one only reloads the core.
+                if try renderingChanged(data: data) {
+                    try activateProfile(name: active, data: data)
+                } else {
+                    try reloadActiveRuntime()
+                }
                 return try listUnlocked()
             default:
                 throw profileError("operation is not a profile operation")
@@ -74,6 +81,40 @@ final class ProfileBroker: @unchecked Sendable {
             try activateProfile(name: before.profile, data: data, appProxySettings: update.settings)
             return try JSONEncoder().encode(appProxyState())
         }
+    }
+
+    /// Stores verified executable paths per App Proxy application and rewrites their rule
+    /// provider files. Returns the providers whose content changed.
+    func setAppProxyProcesses(_ routes: AppProxyProcessRoutes) throws -> [String] {
+        try queue.sync {
+            try routes.validate(applications: try appProxySettings().applications)
+            try writePrivate(try JSONEncoder().encode(routes), to: root.appendingPathComponent("app-proxy-processes.json"), permissions: 0o600)
+            return try writeProcessProviders()
+        }
+    }
+
+    private func appProxyProcessRoutes() -> AppProxyProcessRoutes {
+        let path = root.appendingPathComponent("app-proxy-processes.json")
+        guard let data = try? readStoredProfile(path),
+              let routes = try? JSONDecoder().decode(AppProxyProcessRoutes.self, from: data) else { return .init() }
+        return routes
+    }
+
+    /// One provider file per configured application; Mihomo reads them from its home directory.
+    @discardableResult
+    private func writeProcessProviders() throws -> [String] {
+        let settings = try appProxySettings()
+        let routes = appProxyProcessRoutes()
+        let home = root.appendingPathComponent("mihomo-data")
+        var changed: [String] = []
+        for app in settings.applications {
+            let file = home.appendingPathComponent(AppProxyProfile.processProviderPath(app.id))
+            let contents = Data(try AppProxyProfile.processProviderContents(routes.paths[app.id] ?? []).utf8)
+            guard (try? Data(contentsOf: file)) != contents else { continue }
+            try writePrivate(contents, to: file, permissions: 0o600)
+            changed.append(AppProxyProfile.processProviderName(app.id))
+        }
+        return changed
     }
 
     private func appProxySettings() throws -> AppProxySettings {
@@ -347,6 +388,13 @@ final class ProfileBroker: @unchecked Sendable {
     /// daemon-owned LocalHttpDns listener alive and replace only the agent-owned
     /// Mihomo child. Profile import/switch still uses the full atomic activation
     /// transaction because those operations change files and credentials.
+    private func renderingChanged(data: Data) throws -> Bool {
+        let configured = try preparedProfile(data: data, publishController: true)
+        defer { try? FileManager.default.removeItem(at: configured.deletingLastPathComponent()) }
+        return (try? Data(contentsOf: configured))
+            != (try? Data(contentsOf: root.appendingPathComponent("mihomo-data/config.yaml")))
+    }
+
     private func reloadActiveRuntime() throws {
         do {
             if agent.isRunning {
@@ -514,6 +562,8 @@ final class ProfileBroker: @unchecked Sendable {
         guard let source = String(data: data, encoding: .utf8) else { throw profileError("profile must be UTF-8") }
         let rendered = try AppProxyProfile.applying(appProxySettings(), to: source)
         try writePrivate(Data(rendered.utf8), to: config, permissions: 0o600)
+        // Every rendered configuration references these files; create them before any use.
+        try writeProcessProviders()
         var arguments = [
             "--configure-profile",
             "--profile", config.path,

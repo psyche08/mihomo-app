@@ -71,6 +71,20 @@ private final class RoutingGateway: AppProxyRoutingGateway, @unchecked Sendable 
     func launchHosts() async -> [AppProxyLaunchHost] { hosts }
 }
 final class AppProxyStoreTests: XCTestCase {
+    func testAppProxyConnectionsAreAttributedToTheVerifiedProcess() {
+        let owners = AppProxyFlowOwners([(53001, false, "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex", 42)])
+        let applications = AppProxyEntry.defaults
+        let exact = AppProxyAttribution.process(inboundName: "mihomobox-app-chatgpt", sourcePort: "53001", network: "tcp",
+                                                owners: owners, applications: applications)
+        XCTAssertEqual(exact?.process, "codex")
+        XCTAssertEqual(exact?.path, "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex")
+        let unmatched = AppProxyAttribution.process(inboundName: "mihomobox-app-chatgpt", sourcePort: "53001", network: "udp",
+                                                    owners: owners, applications: applications)
+        XCTAssertEqual(unmatched?.process, applications.first { $0.id == "chatgpt" }?.title, "falls back to the App Proxy application")
+        XCTAssertNil(unmatched?.path)
+        XCTAssertNil(AppProxyAttribution.process(inboundName: "DEFAULT-TUN", sourcePort: "53001", network: "tcp",
+                                                 owners: owners, applications: applications), "other inbounds keep Mihomo's process")
+    }
     @MainActor func testExecutableScanCarriesLaunchHostsAcrossStatusRefresh() async throws {
         let gateway = RoutingGateway(); let model = AppProxyStore(gateway: gateway); let service = ExtensionService()
         service.hosts = ["/usr/libexec/sshd-session", "/Applications/Visual Studio Code.app/Contents/MacOS/Electron"]

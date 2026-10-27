@@ -21,6 +21,8 @@ final class AppProbeProvider: NEAppProxyProvider {
     private var lastRenewal: TimeInterval = 0
     private var lastFailure: AppProxyIdentityFailure?
     private var flowEvidence: [AppProxyFlowEvidence] = []
+    /// Verified process per active connection to a Mihomo listener, by that connection's local port.
+    private var flowOwners: [UUID: (port: UInt16, udp: Bool, path: String, pid: UInt32)] = [:]
     private var dnsRequests: [UUID: AppProxyDNSRequest] = [:]
 
     override func startProxy(options: [String: Any]?, completionHandler: @escaping (Error?) -> Void) {
@@ -103,8 +105,9 @@ final class AppProbeProvider: NEAppProxyProvider {
     override func handleNewFlow(_ flow: NEAppProxyFlow) -> Bool {
         queue.async {
             let receipt = UUID()
-            let activeIdentity = self.aiConfiguration?.classify(flow.metaData)
-            let pendingIdentity = activeIdentity == nil ? self.pendingAccess?.0.classify(flow.metaData) : nil
+            let activeOwner = self.aiConfiguration?.identify(flow.metaData)
+            let pendingOwner = activeOwner == nil ? self.pendingAccess?.0.identify(flow.metaData) : nil
+            let activeIdentity = activeOwner?.category, pendingIdentity = pendingOwner?.category
             let generation = pendingIdentity != nil ? self.pendingAccess?.1.snapshot.generation : self.accessLease?.snapshot.generation
             let identity = activeIdentity ?? pendingIdentity ?? (self.aiConfiguration == nil ? classifyProbeIdentity(flow.metaData) : "unknown")
             self.record(receipt, flow.metaData.sourceAppAuditToken, "handleNewFlow", generation: generation)
@@ -128,7 +131,15 @@ final class AppProbeProvider: NEAppProxyProvider {
             self.record(receipt, flow.metaData.sourceAppAuditToken, "providerValidated", generation: generation)
             self.count("flow_" + identity)
             let id = UUID()
-            let finished = { self.closers.removeValue(forKey: id); return }
+            let finished = { self.closers.removeValue(forKey: id); self.flowOwners.removeValue(forKey: id); return }
+            let ownerPath = activeOwner?.path ?? pendingOwner?.path
+            let pid = AppProxyFlowEvidence.word(flow.metaData.sourceAppAuditToken, 5)
+            func owned(_ udp: Bool) -> (UInt16) -> Void {
+                { port in
+                    guard let ownerPath, self.closers[id] != nil else { return }
+                    self.flowOwners[id] = (port, udp, ownerPath, pid)
+                }
+            }
             if let tcp = flow as? NEAppProxyTCPFlow,
                let endpoint = tcp.remoteEndpoint as? NWHostEndpoint {
                 if endpoint.port == "53" {
@@ -155,6 +166,7 @@ final class AppProbeProvider: NEAppProxyProvider {
                             self.record(receipt, flow.metaData.sourceAppAuditToken, key, generation: generation)
                         }
                     }, finished: finished)
+                    if !local { bridge.upstreamReady = owned(false) }
                     self.closers[id] = { bridge.close() }; bridge.start()
                 }
             } else if let udp = flow as? NEAppProxyUDPFlow {
@@ -166,7 +178,7 @@ final class AppProbeProvider: NEAppProxyProvider {
                         if ["socks_rejected", "upstream_failed", "upstream_timeout", "flow_open_failed", "upstream_connected"].contains(key) {
                             self.record(receipt, flow.metaData.sourceAppAuditToken, key, generation: generation)
                         }
-                    }, finished: finished)
+                    }, finished: finished, relayReady: owned(true))
                     self.closers[id] = { bridge.close() }; bridge.start()
                 } else { self.startDNS(flow, id: id, identity: identity, receipt: receipt, generation: generation, finished: finished) }
             } else { self.count("rejected_flow_type"); self.reject(flow) }
@@ -240,12 +252,14 @@ final class AppProbeProvider: NEAppProxyProvider {
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)? = nil) {
         queue.async {
             var failure: AppProxyIdentityFailure?
+            var owners: AppProxyFlowOwners?
             do {
                 guard messageData.count <= AppProxyIdentitySnapshot.maximumBytes + 65536,
                       let lease = self.accessLease, self.generationGate != nil, Self.consoleUID() == lease.snapshot.ownerUID else { throw AppProxyIdentityFailure.wrongUser }
                 let message = try JSONDecoder().decode(AppProxyRuntimeMessage.self, from: messageData)
                 switch message.action {
                 case .status: break
+                case .flowOwners: owners = AppProxyFlowOwners(Array(self.flowOwners.values))
                 case .prepare:
                     guard let data = message.configuration, data.count <= AppProxyIdentitySnapshot.maximumBytes,
                           let raw = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else { throw AppProxyIdentityFailure.malformed }
@@ -273,7 +287,10 @@ final class AppProbeProvider: NEAppProxyProvider {
             let status = AppProxyRuntimeStatus(generation: self.accessLease?.snapshot.generation,
                 ready: self.active && failure == nil && self.lastFailure == nil,
                 verifiedTargets: self.accessLease?.snapshot.records.count ?? 0,
-                failure: failure ?? self.lastFailure, counters: self.counts, recentFlows: self.flowEvidence)
+                failure: failure ?? self.lastFailure,
+                // The owner table replaces receipts and counters to stay within the message limit.
+                counters: owners == nil ? self.counts : [:], recentFlows: owners == nil ? self.flowEvidence : [],
+                flowOwners: owners)
             completionHandler?(try? JSONEncoder().encode(status))
         }
     }
@@ -300,6 +317,7 @@ private final class AppProbeTCPBridge {
     let finished: () -> Void
     let connection: AppProxyConnection
     let local: Bool
+    var upstreamReady: ((UInt16) -> Void)?
     var closed = false
     var clientEOF = false
     var remoteEOF = false
@@ -320,6 +338,7 @@ private final class AppProbeTCPBridge {
             switch state {
             case .ready:
                 self.connection.stateUpdateHandler = nil
+                if let upstreamReady = self.upstreamReady, let port = self.connection.localPort { upstreamReady(port) }
                 if self.local { self.open(); return }
                 self.send(Data([5, 1, 0])) {
                     self.readExact(2) { data in

@@ -148,6 +148,11 @@ scopes exactly as the confirmation sheet does; without it only earlier approvals
 apply. A headless run and the menu-bar app serialize their App Proxy changes with a
 per-user lock. `runtime` also prints the provider's recent process-validation stages
 and counters (PIDs only, no paths or traffic), the same receipts the app shows.
+`flows` lists the verified process behind each App Proxy connection to Mihomo, keyed by
+the connection's source port. Connections an app makes to the macOS system proxy on loopback never reach
+App Proxy; Mihomo routes them through the app's rules by the verified executable path
+instead, once the profile has been rendered by this version: after an upgrade, use
+**Reload Profiles** (or `mihomoboxctl profile reload`) once.
 For scripts, select the signed interpreter, which also covers its other uses.
 Limits are 32 additional executables per entry and 128 total. Duplicate ownership,
 missing files, unsigned programs and directories are rejected before accepting
@@ -420,6 +425,15 @@ only after the old runtime has reached its verified stopped state. Once the
 marker is published, its root-owned transaction directory is retained until
 commit or rollback clears both. A failed preflight therefore cannot leave a
 pending marker whose rollback directory has already been removed.
+
+Stopping the old runtime allows the agent 6 seconds after SIGTERM and 4 more after
+SIGKILL, and the stopped-state verification keeps checking for a late exit for its
+whole 6-second window. A long-running agent under load once needed more than the
+earlier 3 + 2 seconds; the update then failed closed and left the proxy stopped
+until `mihomoboxctl start`, although no component had been replaced. The first
+start of replaced components may take up to 60 seconds before the update rolls
+back (other runtime starts keep 20 seconds): macOS assesses new binaries on first
+launch, and under load that alone exceeded 20 seconds.
 
 The 0.8.1 and 0.8.2 installers incorrectly inspected the opened lock through
 the `/dev/fd` pathname, whose macOS device number differs from the underlying

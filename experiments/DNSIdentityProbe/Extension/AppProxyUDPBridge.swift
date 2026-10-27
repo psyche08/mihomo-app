@@ -20,12 +20,14 @@ final class AppProxyUDPBridge {
     private var timer: DispatchWorkItem?
     init(flow: NEAppProxyUDPFlow, proxyPort: UInt16, bypass: AppProxyBypassPolicy, queue: DispatchQueue,
          forwardDNS: @escaping (Data, @escaping (Data?) -> Void) -> Void,
-         count: @escaping (String) -> Void, finished: @escaping () -> Void) {
+         count: @escaping (String) -> Void, finished: @escaping () -> Void,
+         relayReady relayPort: @escaping (UInt16) -> Void = { _ in }) {
         self.control = NWConnection(host: "127.0.0.1", port: Network.NWEndpoint.Port(rawValue: proxyPort)!, using: .tcp)
         self.flow = flow; self.queue = queue; self.forwardDNS = forwardDNS
         self.bypass = bypass
-        self.count = count; self.finished = finished
+        self.count = count; self.finished = finished; self.relayPort = relayPort
     }
+    private let relayPort: (UInt16) -> Void
     func start() {
         armTimer(30)
         flow.open(withLocalEndpoint: nil) { error in
@@ -74,6 +76,7 @@ final class AppProxyUDPBridge {
             case .ready:
                 relay.stateUpdateHandler = nil
                 self.armTimer(180); self.count("socks_udp_connected")
+                if case let .hostPort(_, port)? = relay.currentPath?.localEndpoint { self.relayPort(port.rawValue) }
                 self.readRelay()
                 // An association is only valid while its TCP control stays open.
                 self.control.receive(minimumIncompleteLength: 1, maximumLength: 1) { _, _, _, _ in self.close() }

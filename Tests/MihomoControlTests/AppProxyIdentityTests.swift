@@ -153,4 +153,21 @@ final class AppProxyIdentityTests: XCTestCase {
         XCTAssertEqual(AppProxyFlowEvidence.word(token,1),501)
         XCTAssertEqual(AppProxyFlowEvidence.word(Data(),1),0)
     }
+    func testFlowOwnersShareExecutablePathsAndStayBounded() throws {
+        let owners = AppProxyFlowOwners([(52000, false, "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT", 10),
+                                         (52001, false, "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT", 10),
+                                         (52000, true, "/opt/homebrew/Cellar/packer/1.15.3/bin/packer", 11)])
+        XCTAssertEqual(owners.executables.count, 2, "repeated paths are sent once")
+        XCTAssertEqual(owners.owner(port: 52000, udp: true)?.path, "/opt/homebrew/Cellar/packer/1.15.3/bin/packer")
+        XCTAssertEqual(owners.owner(port: 52000, udp: false)?.pid, 10)
+        XCTAssertNil(owners.owner(port: 52002, udp: false))
+        let many = AppProxyFlowOwners((0..<1000).map { (UInt16($0), false, "/tool/\($0 % 300)", UInt32($0)) })
+        XCTAssertLessThanOrEqual(many.flows.count, AppProxyFlowOwners.maximumFlows)
+        XCTAssertLessThanOrEqual(many.executables.count, AppProxyFlowOwners.maximumExecutables)
+        let reply = AppProxyRuntimeStatus(generation: UUID(), ready: true, verifiedTargets: 1, flowOwners: many)
+        XCTAssertLessThan(try JSONEncoder().encode(reply).count, 65536, "fits the provider message limit")
+        // Replies from a provider without the owner table still decode.
+        let legacy = #"{"ready":true,"verifiedTargets":1,"counters":{},"recentFlows":[]}"#
+        XCTAssertNil(try JSONDecoder().decode(AppProxyRuntimeStatus.self, from: Data(legacy.utf8)).flowOwners)
+    }
 }

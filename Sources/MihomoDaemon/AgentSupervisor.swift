@@ -5,6 +5,10 @@ import MihomoDNSCore
 
 final class AgentSupervisor: @unchecked Sendable {
     private static let stoppedVerificationTimeout: TimeInterval = 6
+    // A long-running agent tearing down TUN and DNS under load can need more than a
+    // few seconds after SIGTERM, and SIGKILL waits for an uninterruptible system call.
+    private static let terminateGrace: TimeInterval = 6
+    private static let killGrace: TimeInterval = 4
     private static let stoppedVerificationPollMicroseconds: useconds_t = 250_000
     private let queue = DispatchQueue(label: "dev.linsheng.mihomo.daemon.agent")
     private let agentPath: String
@@ -132,13 +136,13 @@ final class AgentSupervisor: @unchecked Sendable {
             }
             ServiceLog.info("event=agent_stop_started pid=\(process.processIdentifier)")
             process.terminate()
-            let terminateDeadline = Date().addingTimeInterval(3)
+            let terminateDeadline = Date().addingTimeInterval(Self.terminateGrace)
             while process.isRunning, Date() < terminateDeadline {
                 usleep(50_000)
             }
             if process.isRunning {
                 kill(process.processIdentifier, SIGKILL)
-                let killDeadline = Date().addingTimeInterval(2)
+                let killDeadline = Date().addingTimeInterval(Self.killGrace)
                 while process.isRunning, Date() < killDeadline {
                     usleep(50_000)
                 }
@@ -160,7 +164,7 @@ final class AgentSupervisor: @unchecked Sendable {
     /// restores only a legacy root-owned system-DNS backup when one exists, and
     /// inspects live state without consulting the six-second health cache.
     func stopAndRestoreVerified() -> Bool {
-        let stopRequested = stop()
+        var stopRequested = stop()
         guard let configuration = try? ProxyConfiguration.load(path: configPath) else {
             ServiceLog.error(
                 "event=network_restore_verification result=failed blockers=configuration"
@@ -186,6 +190,9 @@ final class AgentSupervisor: @unchecked Sendable {
         var lastBlockers: [String] = []
         while true {
             attempts += 1
+            // A stop that timed out can still complete within this window; a single
+            // slow exit must not turn a verifiable stop into a fail-closed result.
+            if !stopRequested { stopRequested = confirmLateStop() }
             let observed = ProxyService.networkHealth(configuration: configuration)
             let systemDNSRestored =
                 (try? ProxyService.isSystemDNSRestored(configuration: configuration)) == true
@@ -211,6 +218,28 @@ final class AgentSupervisor: @unchecked Sendable {
             "blockers=\(lastBlockers.joined(separator: ","))"
         )
         return false
+    }
+
+    /// Completes a stop that `stop()` gave up on once the agent has actually exited.
+    private func confirmLateStop() -> Bool {
+        queue.sync {
+            if let process {
+                guard !process.isRunning else { return false }
+                self.process = nil
+                startedAt = nil
+                expectedHealthGeneration = nil
+                removeAgentPIDIfMatching(process.processIdentifier)
+                ServiceLog.info("event=agent_stop_completed running=false late=true")
+                return true
+            }
+            guard let value = try? String(contentsOfFile: agentPIDPath, encoding: .utf8),
+                  let pid = Int32(value.trimmingCharacters(in: .whitespacesAndNewlines)),
+                  mihomo_dns_pid_executable_matches(pid, agentPath) == 1 else {
+                try? FileManager.default.removeItem(atPath: agentPIDPath)
+                return true
+            }
+            return false
+        }
     }
 
     func restart() throws {
@@ -424,13 +453,13 @@ final class AgentSupervisor: @unchecked Sendable {
             return true
         }
         kill(pid, SIGTERM)
-        let deadline = Date().addingTimeInterval(3)
+        let deadline = Date().addingTimeInterval(Self.terminateGrace)
         while mihomo_dns_pid_executable_matches(pid, agentPath) == 1, Date() < deadline {
             usleep(50_000)
         }
         if mihomo_dns_pid_executable_matches(pid, agentPath) == 1 {
             kill(pid, SIGKILL)
-            let killDeadline = Date().addingTimeInterval(2)
+            let killDeadline = Date().addingTimeInterval(Self.killGrace)
             while mihomo_dns_pid_executable_matches(pid, agentPath) == 1,
                   Date() < killDeadline {
                 usleep(50_000)

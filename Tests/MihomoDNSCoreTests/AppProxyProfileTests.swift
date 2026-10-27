@@ -52,7 +52,11 @@ final class AppProxyProfileTests: XCTestCase {
     func testFourIndependentLoopbackListenersPreserveRawProfile() throws {
         let source = "mixed-port: 7897\ntun:\n  enable: false\nrules:\n  - MATCH,REJECT\n"
         let rendered = try AppProxyProfile.applying(settings, to: source)
-        XCTAssertTrue(rendered.hasPrefix(source))
+        // Process rules precede the profile's own rules; every raw line is kept in order.
+        let processRules = AppProxyEntry.defaults.map {
+            "  - SUB-RULE,(AND,((RULE-SET,mihomobox-app-\($0.id)-processes))),mihomobox-app-\($0.id)\n"
+        }.joined()
+        XCTAssertTrue(rendered.hasPrefix("mixed-port: 7897\ntun:\n  enable: false\nrules:\n" + processRules + "  - MATCH,REJECT\n"))
         for app in AppProxyApplication.allCases {
             XCTAssertTrue(rendered.contains("port: \(app.port)\n    udp: true\n    rule: mihomobox-app-\(app.rawValue)"))
             XCTAssertTrue(rendered.contains("\"MATCH,REJECT\""))
@@ -61,6 +65,28 @@ final class AppProxyProfileTests: XCTestCase {
         XCTAssertEqual(rendered.components(separatedBy: "listen: 127.0.0.1").count - 1, 4)
         XCTAssertFalse(rendered.contains("0.0.0.0"))
         XCTAssertEqual(try AppProxyProfile.applying(.init(), to: source), source)
+    }
+    func testVerifiedProcessesFollowTheirApplicationOutsideAppProxy() throws {
+        let source = "rule-providers:\n  geo:\n    type: http\n    behavior: domain\n    url: https://example.com/geo.yaml\n"
+            + "rules:\n- PROCESS-PATH-REGEX,.*/ChatGPT\\.app/.*,Proxy\n- MATCH,DIRECT\n"
+        let rendered = try AppProxyProfile.applying(settings, to: source)
+        let lines = rendered.components(separatedBy: "\n")
+        let rules = try XCTUnwrap(lines.firstIndex(of: "rules:"))
+        XCTAssertEqual(lines[rules + 1], "- SUB-RULE,(AND,((RULE-SET,mihomobox-app-chatgpt-processes))),mihomobox-app-chatgpt",
+                       "indentationless rules keep their style, ahead of the profile's process rule")
+        XCTAssertEqual(lines[rules + 1 + AppProxyEntry.defaults.count], "- PROCESS-PATH-REGEX,.*/ChatGPT\\.app/.*,Proxy")
+        XCTAssertTrue(rendered.contains("  geo:\n    type: http"), "existing providers are kept")
+        XCTAssertTrue(rendered.contains("  mihomobox-app-chatgpt-processes:\n    type: file\n    behavior: classical\n    format: yaml\n    path: ./mihomobox/app-chatgpt-processes.yaml"))
+        XCTAssertEqual(try AppProxyProfile.processProviderContents([]), "payload: []\n")
+        let helper = "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Helpers/Codex (Service).app/Contents/MacOS/Codex (Service)"
+        XCTAssertEqual(try AppProxyProfile.processProviderContents([helper, "/b"]),
+                       "payload:\n  - \"PROCESS-PATH,\(helper)\"\n  - \"PROCESS-PATH,/b\"\n")
+        XCTAssertThrowsError(try AppProxyProfile.processProviderContents(["/tmp/a,b"]), "a comma would split the classical rule")
+        var routes = AppProxyProcessRoutes(["chatgpt": [helper]])
+        XCTAssertNoThrow(try routes.validate(applications: AppProxyEntry.defaults))
+        routes.paths["unknown"] = ["/bin/ls"]
+        XCTAssertThrowsError(try routes.validate(applications: AppProxyEntry.defaults))
+        XCTAssertThrowsError(try AppProxyProcessRoutes(["chatgpt": ["relative/path"]]).validate(applications: AppProxyEntry.defaults))
     }
     func testLegacySettingsMigrateAndExplicitEmptyApplicationListStaysEmpty() throws {
         let legacy = try JSONDecoder().decode(AppProxySettings.self, from: Data(#"{"routes":{}}"#.utf8))

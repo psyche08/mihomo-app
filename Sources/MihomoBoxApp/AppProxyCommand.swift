@@ -17,7 +17,7 @@ import MihomoControl
 
     struct UsageError: LocalizedError {
         var errorDescription: String? {
-            "usage: --app-proxy status | targets APP | enable APP [--approve] | disable APP | on | off"
+            "usage: --app-proxy status | flows | targets APP | enable APP [--approve] | disable APP | on | off"
         }
     }
 
@@ -25,7 +25,7 @@ import MihomoControl
         guard arguments.first == argument, arguments.count >= 2 else { throw UsageError() }
         let rest = Array(arguments.dropFirst(2))
         switch arguments[1] {
-        case "status", "on", "off":
+        case "status", "flows", "on", "off":
             guard rest.isEmpty else { throw UsageError() }
             return .init(action: arguments[1], application: nil, approve: false)
         case "targets", "disable":
@@ -50,6 +50,16 @@ import MihomoControl
                 return entry
             }
             switch invocation.action {
+            case "flows":
+                guard let owners = await coordinator.flowOwners() else {
+                    write(["error": "App Proxy is not connected or its provider did not answer"])
+                    return 1
+                }
+                write(["flows": owners.flows.compactMap { flow -> [String: Any]? in
+                    guard let owner = owners.owner(port: flow.port, udp: flow.udp) else { return nil }
+                    return ["port": Int(flow.port), "network": flow.udp ? "udp" : "tcp", "pid": Int(flow.pid), "path": owner.path]
+                }])
+                return 0
             case "targets":
                 let executables = try await coordinator.discoverExecutables(applications: [try entry()])
                 write(["application": try entry().id, "executables": executables.map {

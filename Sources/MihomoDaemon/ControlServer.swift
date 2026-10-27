@@ -30,6 +30,10 @@ final class ControlDispatcher: @unchecked Sendable {
         let validateStartedRuntime = {
             try Self.validateStartedRuntime(agent: agent, controller: controllerBroker)
         }
+        let validateUpdatedRuntime = {
+            try Self.validateStartedRuntime(agent: agent, controller: controllerBroker,
+                                            timeout: Self.updatedComponentsStartTimeout)
+        }
         let localDoHServer = IndependentLocalDoHServer(
             configurationPath: configPath
         )
@@ -46,7 +50,7 @@ final class ControlDispatcher: @unchecked Sendable {
         )
         components = try ComponentUpdater(
             agent: agent,
-            validateStartedRuntime: validateStartedRuntime
+            validateStartedRuntime: validateUpdatedRuntime
         )
         localDoHServer.setFailureHandler { [weak self] in
             // The callback originates on the listener queue. Enter lifecycle
@@ -163,7 +167,8 @@ final class ControlDispatcher: @unchecked Sendable {
                 try activateGlobalDNSFallbackLocked()
             } else {
                 try agent.start()
-                try ensureStartedRuntimeLocked()
+                try ensureStartedRuntimeLocked(timeout: components.hasPendingBootValidation
+                    ? Self.updatedComponentsStartTimeout : 20)
                 if preserveFallback { finishGlobalDNSFallbackLocked() }
             }
             if resumeEnhancedTUN { try resumeEnhancedRuntimeLocked() }
@@ -432,6 +437,22 @@ final class ControlDispatcher: @unchecked Sendable {
                 let update = try JSONDecoder().decode(AppProxyRoutingUpdate.self, from: data)
                 if agent.isRunning { try controller.validateAppProxyRoutes(update.settings) }
                 payload = try profiles.setAppProxyRouting(update)
+            case .setAppProxyProcesses:
+                guard let data = request.payload, data.count <= 262_144 else {
+                    throw serverError("invalid App Proxy process routes")
+                }
+                let changed = try profiles.setAppProxyProcesses(try JSONDecoder().decode(AppProxyProcessRoutes.self, from: data))
+                // Files are read at start; a running core reloads only the providers that changed.
+                // A configuration rendered before this overlay has no such provider until the
+                // profile is next applied, so a failed refresh is logged rather than fatal.
+                if agent.isRunning {
+                    for name in changed {
+                        do { try controller.refreshRuleProvider(name) } catch {
+                            ServiceLog.error("event=app_proxy_process_provider result=refresh_failed")
+                        }
+                    }
+                }
+                payload = nil
             case .listProfiles:
                 payload = try profiles.list()
             case .importProfile, .switchProfile, .reloadProfile:
@@ -542,7 +563,7 @@ final class ControlDispatcher: @unchecked Sendable {
              .importProfile, .switchProfile, .reloadProfile, .setTUN,
              .setOutboundMode, .selectProxy, .refreshProxyProvider,
              .closeAllConnections, .installLocalDoH, .trustLocalDoHCertificate,
-             .prepareLocalDoHCertificateTrust, .setDNSMode, .setAppProxyRouting:
+             .prepareLocalDoHCertificateTrust, .setDNSMode, .setAppProxyRouting, .setAppProxyProcesses:
             return true
         case .controllerRequest:
             // ControllerRequestPolicy is still the authority for the exact
@@ -559,9 +580,13 @@ final class ControlDispatcher: @unchecked Sendable {
         }
     }
 
-    private func ensureStartedRuntimeLocked() throws {
+    /// The first launch of replaced component binaries waits for macOS to assess them,
+    /// which took over 20 seconds under load; a premature rollback interrupts the proxy twice.
+    static let updatedComponentsStartTimeout: TimeInterval = 60
+
+    private func ensureStartedRuntimeLocked(timeout: TimeInterval = 20) throws {
         do {
-            try Self.validateStartedRuntime(agent: agent, controller: controller)
+            try Self.validateStartedRuntime(agent: agent, controller: controller, timeout: timeout)
         } catch {
             throw ControllerBrokerCriticalError.unsafeGlobalRuntime
         }

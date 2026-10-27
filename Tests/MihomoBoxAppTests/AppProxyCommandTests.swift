@@ -7,6 +7,8 @@ final class AppProxyCommandTests: XCTestCase {
             try AppProxyCommand.parse(words.split(separator: " ").map(String.init))
         }
         XCTAssertEqual(try parse("--app-proxy status"), .init(action: "status", application: nil, approve: false))
+        XCTAssertEqual(try parse("--app-proxy flows"), .init(action: "flows", application: nil, approve: false))
+        XCTAssertThrowsError(try parse("--app-proxy flows chatgpt"))
         XCTAssertEqual(try parse("--app-proxy targets chatgpt"), .init(action: "targets", application: "chatgpt", approve: false))
         XCTAssertEqual(try parse("--app-proxy enable chatgpt"), .init(action: "enable", application: "chatgpt", approve: false))
         XCTAssertEqual(try parse("--app-proxy enable chatgpt --approve"), .init(action: "enable", application: "chatgpt", approve: true))

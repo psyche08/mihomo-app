@@ -21,6 +21,10 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
     private var discoveryIssues: [String: Int] = [:]
     private var lastReadbackObservation: String?
     private var applicationIssues: [String: String] = [:]
+    /// The manager from the latest preference read, reused for frequent owner-table requests.
+    private var liveManager: NEAppProxyProviderManager?
+    /// Process routes last accepted by the daemon; nil until the first push.
+    private var lastProcessRoutes: AppProxyProcessRoutes?
     private let selectionKey = "appProxy.requestedApplications.v1"
     private let masterKey = "appProxy.requestedEnabled.v1"
     private var requestedIDs: Set<String> {
@@ -72,6 +76,7 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
     func status(settings: AppProxySettings) async throws -> AppProxyExtensionStatus {
         let isAvailable = available
         let manager = isAvailable ? try await load() : nil
+        liveManager = manager
         migrateSelection(manager)
         let configuration = (manager?.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration
         var live: AppProxyRuntimeStatus?
@@ -107,6 +112,15 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
             AppProxyExecutable(applicationID: $0.category, path: $0.path, signingIdentifier: $0.id,
                                teamIdentifier: $0.team, requirement: $0.requirement)
         }
+    }
+
+    /// Which verified process owns each provider connection to a Mihomo listener.
+    func flowOwners() async -> AppProxyFlowOwners? {
+        guard available else { return nil }
+        if liveManager == nil { liveManager = try? await load() }
+        guard let manager = liveManager, manager.connection.status == .connected else { return nil }
+        do { return try await message(.init(.flowOwners), to: manager).flowOwners }
+        catch { liveManager = nil; return nil }
     }
 
     func launchHosts() async -> [AppProxyLaunchHost] {
@@ -162,6 +176,7 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         if !enabled {
             requestedEnabled = false
             if let existing { try await disable(existing) }
+            await syncProcessRoutes(nil)
             return
         }
         guard !requestedIDs.isEmpty else { throw failure("Choose Authorize & Enable on an application first.") }
@@ -228,6 +243,7 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         guard requestedEnabled, let snapshot = plan.snapshot else {
             if let existing { try await disable(existing) }
             identityIssue = nil
+            await syncProcessRoutes(nil)
             return
         }
         let targets = plan.targets
@@ -240,7 +256,9 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
             do {
                 let state = try await message(.init(.renew, expected: old.generation), to: existing)
                 try Self.requireProvider(state, generation: old.generation)
-                identityIssue = nil; return
+                identityIssue = nil
+                await syncProcessRoutes(snapshot)
+                return
             } catch {
                 // A failed live lease is never presented as healthy. Rebuild from
                 // freshly checked per-application broker capabilities below.
@@ -248,6 +266,21 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
             }
         }
         try await install(settings: settings, targets: targets, snapshot: snapshot, existing: existing)
+        await syncProcessRoutes(snapshot)
+    }
+
+    /// Mirrors the active applications' verified executables into Mihomo's process rules, so
+    /// their system-proxy connections, which never reach the provider, follow the same route.
+    /// Best effort: interception does not depend on it.
+    private func syncProcessRoutes(_ snapshot: AppProxyIdentitySnapshot?) async {
+        let routes = AppProxyProcessRoutes(Dictionary(grouping: snapshot?.records ?? [], by: \.category).mapValues {
+            Array(Set($0.map(\.path).filter(AppProxyProcessRoutes.isRoutable))).sorted()
+        })
+        guard routes != lastProcessRoutes else { return }
+        do {
+            try await ControlGateway().setAppProxyProcesses(routes)
+            lastProcessRoutes = routes
+        } catch { AppLog.error("event=app_proxy_process_routes result=failed") }
     }
 
     private func install(settings: AppProxySettings, targets: AIAppTargets,

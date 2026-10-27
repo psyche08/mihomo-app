@@ -328,6 +328,13 @@ public final class ControlGateway: @unchecked Sendable {
     }
   }
 
+  /// Verified executable paths of the active App Proxy applications, for Mihomo's process rules.
+  public func setAppProxyProcesses(_ routes: AppProxyProcessRoutes) async throws {
+    _ = try await channel.send(
+      ControlRequest(operation: .setAppProxyProcesses, payload: try JSONEncoder().encode(routes)),
+      retryReadOnDisconnect: false)
+  }
+
   public func fetchVersion() async throws -> ControllerVersion {
     try await decode(
       ControllerVersion.self,

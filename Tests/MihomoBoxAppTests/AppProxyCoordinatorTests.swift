@@ -81,6 +81,32 @@ final class AppProxyCoordinatorTests: XCTestCase {
         XCTAssertEqual(AIAppTargets.requirement(["b", "a", "a"]), "(a) or (b)")
         XCTAssertEqual(AIAppTargets.requirement(["a", "a"]), "a")
     }
+    func testScanReachesCodeBehindFrameworkVersionLinks() throws {
+        let fm = FileManager.default
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent(".build/link-test-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: root) }
+        // Same names as ChatGPT's Codex Framework: on APFS the link is listed before Versions.
+        let framework = root.appendingPathComponent("X.framework")
+        let helpers = framework.appendingPathComponent("Versions/1/Helpers")
+        try fm.createDirectory(at: helpers, withIntermediateDirectories: true)
+        try fm.createSymbolicLink(atPath: framework.appendingPathComponent("Codex Framework").path,
+                                  withDestinationPath: "Versions/Current/Codex Framework")
+        try fm.createSymbolicLink(atPath: framework.appendingPathComponent("Versions/Current").path, withDestinationPath: "1")
+        try fm.createSymbolicLink(atPath: root.appendingPathComponent("outside").path, withDestinationPath: "/usr/bin")
+        let tool = helpers.appendingPathComponent("tool")
+        try fm.copyItem(atPath: "/usr/bin/true", toPath: tool.path)
+        let sign = Process()
+        sign.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        sign.arguments = ["--force", "--sign", "-", "--identifier", "dev.linsheng.mihomo.link-fixture", tool.path]
+        try sign.run(); sign.waitUntilExit()
+        XCTAssertEqual(sign.terminationStatus, 0)
+        var entry = AppProxyEntry.defaults[1]
+        entry.directories = [root.path]
+        let discovered = try AIAppTargets(requireAll: false, applications: [entry])
+        XCTAssertTrue(discovered.targets.contains { $0.path == tool.path }, "code behind a version link is discovered")
+        XCTAssertEqual(discovered.issues.filter { $0.failure == .escapedPath }.count, 1, "only the link leaving the tree is reported")
+    }
     @MainActor func testNewManagerUsesAppProxyProviderAndPerApplicationRouting() {
         let manager: NETunnelProviderManager = AppProxyCoordinator.makeManager()
         XCTAssertTrue(manager is NEAppProxyProviderManager)

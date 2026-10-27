@@ -35,6 +35,13 @@ final class AppProxyConnection {
         }
         nw_connection_start(connection)
     }
+    /// The local port of an established connection; the listener sees it as the source port.
+    var localPort: UInt16? {
+        guard let path = nw_connection_copy_current_path(connection),
+              let endpoint = nw_path_copy_effective_local_endpoint(path) else { return nil }
+        let port = nw_endpoint_get_port(endpoint)
+        return port == 0 ? nil : port
+    }
     func cancel() {
         stateUpdateHandler = nil
         nw_connection_cancel(connection)

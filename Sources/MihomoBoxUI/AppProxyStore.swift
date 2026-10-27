@@ -91,10 +91,28 @@ public protocol DashboardAppProxyService: AnyObject {
     func chooseApplication(port: UInt16) async throws -> AppProxyEntry?
     func chooseExecutable() async throws -> String?
     func launchHosts() async -> [AppProxyLaunchHost]
+    func flowOwners() async -> AppProxyFlowOwners?
 }
 
 public extension DashboardAppProxyService {
     func launchHosts() async -> [AppProxyLaunchHost] { [] }
+    func flowOwners() async -> AppProxyFlowOwners? { nil }
+}
+
+/// Mihomo reports the App Proxy provider as the owner of every connection it relays to a
+/// `mihomobox-app-*` listener. The provider's owner table names the verified process by the
+/// connection's source port; without a match the App Proxy application title is used.
+enum AppProxyAttribution {
+    static let inboundPrefix = "mihomobox-app-"
+    static func process(inboundName: String, sourcePort: String, network: String,
+                        owners: AppProxyFlowOwners?, applications: [AppProxyEntry]) -> (process: String, path: String?)? {
+        guard inboundName.hasPrefix(inboundPrefix) else { return nil }
+        if let port = UInt16(sourcePort), let owner = owners?.owner(port: port, udp: network.lowercased() == "udp") {
+            return ((owner.path as NSString).lastPathComponent, owner.path)
+        }
+        let id = String(inboundName.dropFirst(inboundPrefix.count))
+        return applications.first { $0.id == id }.map { ($0.title, nil) }
+    }
 }
 
 protocol AppProxyRoutingGateway: Sendable {
@@ -121,6 +139,10 @@ public final class AppProxyStore: ObservableObject {
     private var discoveredApplications: [AppProxyEntry]?
     private var discoveryGeneration = 0
     private var discoveredAt = Date.distantPast
+    /// Display-only attribution for App Proxy connections; refreshed at most once a second.
+    public private(set) var flowOwners: AppProxyFlowOwners?
+    private var flowOwnersFetchedAt = Date.distantPast
+    private var fetchingFlowOwners = false
     private let gateway: any AppProxyRoutingGateway
     public convenience init() { self.init(gateway: ControlGateway()) }
     init(gateway: any AppProxyRoutingGateway) { self.gateway = gateway }
@@ -262,6 +284,13 @@ public final class AppProxyStore: ObservableObject {
             guard generation == discoveryGeneration, applications == draft.applications else { return }
             discoveryError = error.localizedDescription
         }
+    }
+
+    public func refreshFlowOwners() async {
+        guard !preview, !fetchingFlowOwners, let service, Date().timeIntervalSince(flowOwnersFetchedAt) >= 1 else { return }
+        fetchingFlowOwners = true
+        defer { fetchingFlowOwners = false; flowOwnersFetchedAt = Date() }
+        flowOwners = await service.flowOwners()
     }
 
     public func addApplication() async {
