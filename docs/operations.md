@@ -72,7 +72,10 @@ loads the latest saved settings, preventing accidental overwrites.
 Choose a node or proxy group for every entry, then **Apply Changes**. Each row
 has **Authorize & Enable**, **Retry Authorization** and **Disable** actions.
 Authorize rescans that application's signed executables and lists them for one-click
-confirmation; no file picker is needed for code in the home directory,
+confirmation, grouped by what admits them (the app and its helpers, a Team ID, a
+folder, an exact CLI). The sheet also names the Team IDs and folders being approved,
+which admit signed code added there later, and whether other apps' CLIs started by
+this app keep their own nodes. No file picker is needed for code in the home directory,
 `/Applications`, `/opt/homebrew` or `/usr/local`. Other rows and their node
 choices remain saved; declining one application's consent does not discard or
 block other authorized applications. An application publishes rules only after
@@ -112,9 +115,15 @@ scopes, one entry per line (type, paste or drag in):
   installed later.
 - **CLI executables**: exactly these executables (or **Choose Executable…**).
 
+Below them, **Where CLIs are captured** lists the terminals, editors and SSH logins
+detected on this Mac and holds the **Route other selected apps' CLIs launched by
+APP** switch (on by default). The row's **Policy** link summarizes the scopes and
+notes when that switch is off.
+
 Then **Update Draft**, **Apply Changes**, and authorize the app. Turn App Proxy off
-before editing a policy. A Team ID or directory belongs to one app. A scope follows
-the code regardless of its launcher; it does not include every descendant of an app.
+before editing a policy. A Team ID or directory belongs to one app. A scope selects code, not
+every descendant of an app; whether a launch is captured depends on its launcher, as
+listed in the editor.
 New tools under a scope are picked up by the next background scan (within about
 20 seconds).
 

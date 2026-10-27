@@ -109,6 +109,15 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         }
     }
 
+    func launchHosts() async -> [AppProxyLaunchHost] {
+        await Task.detached(priority: .utility) {
+            let home = FileManager.default.homeDirectoryForCurrentUser
+            return AIAppTargets.launchHosts(applicationDirectories: [URL(fileURLWithPath: "/Applications"),
+                                                                     home.appendingPathComponent("Applications")])
+                .map { AppProxyLaunchHost(path: $0.path) }
+        }.value
+    }
+
     func chooseApplication(port: UInt16) async throws -> AppProxyEntry? {
         let panel = NSOpenPanel()
         panel.title = "Add application or CLI executable"

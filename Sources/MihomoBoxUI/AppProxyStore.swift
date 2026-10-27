@@ -39,6 +39,23 @@ public struct AppProxyApplicationStatus: Equatable, Sendable {
     }
 }
 
+/// A terminal, editor or SSH login whose CLIs App Proxy captures. Display-only.
+public struct AppProxyLaunchHost: Equatable, Sendable, Identifiable {
+    public var id: String { path }
+    public let path: String
+    public let name: String
+    public init(path: String) {
+        self.path = path
+        name = Self.name(forExecutable: path)
+    }
+    static func name(forExecutable path: String) -> String {
+        if ["/usr/libexec/sshd-session", "/usr/sbin/sshd"].contains(path) { return "SSH login" }
+        let components = path.split(separator: "/")
+        if let bundle = components.first(where: { $0.hasSuffix(".app") }) { return String(bundle.dropLast(4)) }
+        return components.last.map(String.init) ?? path
+    }
+}
+
 public struct AppProxyExtensionStatus: Equatable, Sendable {
     public var available: Bool
     public var enabled: Bool
@@ -52,6 +69,7 @@ public struct AppProxyExtensionStatus: Equatable, Sendable {
     public var diagnostics: AppProxyRuntimeStatus?
     public var targetCounts: [String: Int]
     public var executables: [AppProxyExecutable]
+    public var launchHosts: [AppProxyLaunchHost] = []
     public init(available: Bool, enabled: Bool = false, connected: Bool = false, requiresReactivation: Bool = false, targetCounts: [String: Int] = [:], executables: [AppProxyExecutable] = [], identityReady: Bool = false, verifiedTargetCount: Int = 0,
                 identityIssue: String? = nil, diagnostics: AppProxyRuntimeStatus? = nil, discoveryIssues: [String: Int] = [:], applications: [String: AppProxyApplicationStatus] = [:]) {
         self.applications = applications
@@ -72,6 +90,11 @@ public protocol DashboardAppProxyService: AnyObject {
     func setApplicationEnabled(_ id: String, enabled: Bool, settings: AppProxySettings) async throws
     func chooseApplication(port: UInt16) async throws -> AppProxyEntry?
     func chooseExecutable() async throws -> String?
+    func launchHosts() async -> [AppProxyLaunchHost]
+}
+
+public extension DashboardAppProxyService {
+    func launchHosts() async -> [AppProxyLaunchHost] { [] }
 }
 
 protocol AppProxyRoutingGateway: Sendable {
@@ -162,6 +185,9 @@ public final class AppProxyStore: ObservableObject {
         }
         extensionStatus = .init(available: true, enabled: true, connected: true,
                                 targetCounts: counts, executables: executables)
+        extensionStatus.launchHosts = ["/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal",
+                                       "/Applications/Visual Studio Code.app/Contents/MacOS/Electron",
+                                       "/usr/libexec/sshd-session"].map(AppProxyLaunchHost.init(path:))
     }
 
     public func refresh() async {
@@ -204,6 +230,7 @@ public final class AppProxyStore: ObservableObject {
         var status = status
         status.executables = extensionStatus.executables
         status.targetCounts = extensionStatus.targetCounts
+        status.launchHosts = extensionStatus.launchHosts
         extensionStatus = status
     }
 
@@ -225,9 +252,12 @@ public final class AppProxyStore: ObservableObject {
         let applications = draft.applications
         defer { scanning = false }
         do {
+            async let hosts = service.launchHosts()
             let executables = try await service.discoverExecutables(applications: applications)
+            let launchHosts = await hosts
             guard generation == discoveryGeneration, applications == draft.applications else { return }
             updateExecutables(executables, applications: applications)
+            extensionStatus.launchHosts = launchHosts
         } catch {
             guard generation == discoveryGeneration, applications == draft.applications else { return }
             discoveryError = error.localizedDescription

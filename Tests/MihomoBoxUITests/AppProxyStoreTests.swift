@@ -67,8 +67,21 @@ private final class RoutingGateway: AppProxyRoutingGateway, @unchecked Sendable 
         .init(id: "app_00000000-0000-0000-0000-000000000001", title: "Test App", path: "/Applications/Test.app", port: port)
     }
     func chooseExecutable() async throws -> String? { "/usr/bin/curl" }
+    var hosts: [AppProxyLaunchHost] = []
+    func launchHosts() async -> [AppProxyLaunchHost] { hosts }
 }
 final class AppProxyStoreTests: XCTestCase {
+    @MainActor func testExecutableScanCarriesLaunchHostsAcrossStatusRefresh() async throws {
+        let gateway = RoutingGateway(); let model = AppProxyStore(gateway: gateway); let service = ExtensionService()
+        service.hosts = ["/usr/libexec/sshd-session", "/Applications/Visual Studio Code.app/Contents/MacOS/Electron"]
+            .map(AppProxyLaunchHost.init(path:))
+        model.configure(service); await model.refresh()
+        XCTAssertEqual(model.extensionStatus.launchHosts.map(\.name), ["SSH login", "Visual Studio Code"])
+        await model.refresh()
+        XCTAssertEqual(model.extensionStatus.launchHosts.count, 2, "a status refresh keeps the last scan's launchers")
+        XCTAssertEqual(AppProxyLaunchHost(path: "/usr/sbin/sshd").name, "SSH login")
+        XCTAssertEqual(AppProxyLaunchHost(path: "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal").name, "Terminal")
+    }
     @MainActor func testBypassEditsPersistAndRequireDisabledExtension() async throws {
         let gateway = RoutingGateway(); let model = AppProxyStore(gateway: gateway); let service = ExtensionService()
         model.configure(service); await model.refresh()
