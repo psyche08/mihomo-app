@@ -360,10 +360,14 @@ public struct AppProxyRuntimeStatus: Codable, Equatable, Sendable {
     public var recentFlows: [AppProxyFlowEvidence]
     /// Present only in the reply to a `flowOwners` request.
     public var flowOwners: AppProxyFlowOwners?
+    /// The running provider's bundle version; absent from providers up to 1.0.8.
+    public var providerVersion: String?
     public init(generation: UUID?, ready: Bool, verifiedTargets: Int, failure: AppProxyIdentityFailure? = nil,
-                counters: [String: Int] = [:], recentFlows: [AppProxyFlowEvidence] = [], flowOwners: AppProxyFlowOwners? = nil) {
+                counters: [String: Int] = [:], recentFlows: [AppProxyFlowEvidence] = [], flowOwners: AppProxyFlowOwners? = nil,
+                providerVersion: String? = nil) {
         self.generation = generation; self.ready = ready; self.verifiedTargets = verifiedTargets
         self.failure = failure; self.counters = counters; self.recentFlows = recentFlows; self.flowOwners = flowOwners
+        self.providerVersion = providerVersion
     }
 }
 

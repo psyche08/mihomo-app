@@ -290,7 +290,7 @@ final class AppProbeProvider: NEAppProxyProvider {
                 failure: failure ?? self.lastFailure,
                 // The owner table replaces receipts and counters to stay within the message limit.
                 counters: owners == nil ? self.counts : [:], recentFlows: owners == nil ? self.flowEvidence : [],
-                flowOwners: owners)
+                flowOwners: owners, providerVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)
             completionHandler?(try? JSONEncoder().encode(status))
         }
     }

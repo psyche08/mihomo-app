@@ -692,3 +692,13 @@ it instead; because a framework's `Versions/Current` links can come first on dis
 helper in ChatGPT's `Codex Framework.framework` (including `Codex (Service)`) was missing
 from the targets. Links are now passed over, and only a link that resolves outside the
 scanned tree is reported as `escapedPath`.
+
+**Extension updates.** The App activates its bundled provider only on a non-live install,
+so after an update the old provider kept running until the user next enabled App Proxy;
+on m4pro under load that replacement then took about three minutes and looked like a
+failed start. The provider now reports its bundle version in every status reply. The
+App's maintenance pass (20 seconds after launch, then every 20 seconds) compares it with
+the bundled extension and, when App Proxy is enabled and connected and the versions
+differ (a provider without the field counts as older), disables the session and
+republishes, which activates the bundled extension and its rules in the background. It
+tries this once per bundled version per App launch.

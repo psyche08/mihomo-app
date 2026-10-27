@@ -25,6 +25,8 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
     private var liveManager: NEAppProxyProviderManager?
     /// Process routes last accepted by the daemon; nil until the first push.
     private var lastProcessRoutes: AppProxyProcessRoutes?
+    /// Bundled extension version this process already tried to put in place of an older provider.
+    private var extensionUpgradeAttempted: String?
     private let selectionKey = "appProxy.requestedApplications.v1"
     private let masterKey = "appProxy.requestedEnabled.v1"
     private var requestedIDs: Set<String> {
@@ -386,7 +388,17 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
             let manager = try await load(); managed = manager; migrateSelection(manager)
             guard requestedEnabled else { return }
             let settings = try await ControlGateway().fetchAppProxyRouting().settings
+            // After an update the bundled provider is newer than the running one, and only a
+            // non-live install activates it. Do that here, in the background after launch,
+            // rather than at the user's next enable, where it took minutes under load.
+            let upgrading = await providerNeedsUpgrade(manager)
+            if upgrading, let manager {
+                extensionUpgradeAttempted = bundledExtensionVersion
+                AppLog.info("event=app_proxy_extension_upgrade phase=started bundled=\(bundledExtensionVersion ?? "unknown")")
+                try await disable(manager)
+            }
             try await reconcile(settings: settings, existing: manager, interactiveID: nil)
+            if upgrading { AppLog.info("event=app_proxy_extension_upgrade result=success") }
         } catch {
             identityIssue = "maintenance:" + Self.issueCode(error)
             AppLog.error("event=app_proxy_policy_failure phase=maintenance issue=\(Self.issueCode(error))")
@@ -612,6 +624,19 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         guard SecRequirementCopyString(requirement, [], &canonical) == errSecSuccess else { return nil }
         return canonical as String?
     }
+    private var bundledExtensionVersion: String? {
+        let info = Bundle.main.bundleURL.appendingPathComponent(
+            "Contents/Library/SystemExtensions/\(extensionID).systemextension/Contents/Info.plist")
+        return NSDictionary(contentsOf: info)?["CFBundleVersion"] as? String
+    }
+    /// True once per bundled version when a connected provider reports another version (or none).
+    private func providerNeedsUpgrade(_ manager: NEAppProxyProviderManager?) async -> Bool {
+        guard let manager, manager.isEnabled, manager.connection.status == .connected,
+              let bundled = bundledExtensionVersion, extensionUpgradeAttempted != bundled,
+              let live = try? await message(.init(.status), to: manager) else { return false }
+        return live.providerVersion != bundled
+    }
+
     private func activate() async throws {
         try await withCheckedThrowingContinuation { c in
             activation = c

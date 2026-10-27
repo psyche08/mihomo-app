@@ -168,6 +168,10 @@ final class AppProxyIdentityTests: XCTestCase {
         XCTAssertLessThan(try JSONEncoder().encode(reply).count, 65536, "fits the provider message limit")
         // Replies from a provider without the owner table still decode.
         let legacy = #"{"ready":true,"verifiedTargets":1,"counters":{},"recentFlows":[]}"#
-        XCTAssertNil(try JSONDecoder().decode(AppProxyRuntimeStatus.self, from: Data(legacy.utf8)).flowOwners)
+        let decoded = try JSONDecoder().decode(AppProxyRuntimeStatus.self, from: Data(legacy.utf8))
+        XCTAssertNil(decoded.flowOwners)
+        XCTAssertNil(decoded.providerVersion, "a provider without a version is treated as older than the bundle")
+        let current = AppProxyRuntimeStatus(generation: nil, ready: true, verifiedTargets: 0, providerVersion: "1.0.9")
+        XCTAssertEqual(try JSONDecoder().decode(AppProxyRuntimeStatus.self, from: JSONEncoder().encode(current)).providerVersion, "1.0.9")
     }
 }
