@@ -393,7 +393,7 @@ login-start integration or guaranteed reconnect after an extension crash.
 
 ### App Proxy DNS scope with Local DoH disabled
 
-On m4pro with Cloud Build 37, Local DoH unprepared and Enhanced TUN enabled,
+On the test Mac with Cloud Build 37, Local DoH unprepared and Enhanced TUN enabled,
 ChatGPT's selected flows used its configured listener and returned data, but
 Claude reported `ERR_NAME_NOT_RESOLVED`. Independent system resolver calls for
 `claude.ai`, `api.anthropic.com` and `example.com` also failed. Direct UDP DNS to

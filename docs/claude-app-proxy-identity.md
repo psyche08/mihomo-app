@@ -7,7 +7,7 @@ Cloud 49's physical-interface bypass fix), not just the investigated
 `80c220877856aff4cbbf7da79035494771683d7c`. It does not change Mihomo's Rule,
 Global or Direct routing semantics, SafeDNS, or the shared DNS forwarding path.
 
-The evidence directory `m4pro:/private/tmp/claude-dns-layer-20261023/` was present
+The evidence directory from the 2026-10-23 DNS-layer run on the test Mac was present
 and its report and summarized permission results were read. The historical
 report contains framework `SecCodeRef`/EPERM and validation-aborted observations
 before the provider callback, and successful host-side code checks. These support
@@ -25,7 +25,7 @@ read-only grant successfully; this narrows the uncertainty but does not validate
 If the public bookmark mechanism fails those gates, do not ship or weaken the
 sandbox. Take the minimal signed reproducer to Apple Developer Technical Support.
 
-On 2026-10-24, the real Claude Desktop CLI code package on m4pro passed strict
+On 2026-10-24, the real Claude Desktop CLI code package on the test Mac passed strict
 signature validation in independent same-user and UID 0 sandbox receivers when
 the issuer delegated the exact version's `claude.app` read-only. Executable and
 Info.plist write opens and parent-directory listing remained denied. Earlier
@@ -284,7 +284,7 @@ Full `scripts/validate.sh` passed again after snapshot-v2 package/file grants:
 pinned artifacts, development bundle and installer dry-run checks passed.
 The root-enabled sandbox suite additionally covered signed bundle metadata
 replacement and rejection of writable package grants. The production candidate
-shared implementation also passed against m4pro's real Claude CLI in same-user
+shared implementation also passed against the test Mac's real Claude CLI in same-user
 and root sandbox receivers, including denial of an existing outside file.
 Cloud Build 50 (the earlier exact-file candidate) was signed/notarized but never
 installed because its real bundled-CLI sandbox test failed. A new Cloud build
@@ -413,7 +413,7 @@ version-53 system extension activated. The original ZIP SHA-256 was
 App, broker and extension passed strict/deep signature verification against the
 pinned Cloud leaf. The broker retained sandbox, user-selected read-only and
 app-scoped bookmark entitlements. Build 52 was retained as a VM-local rollback
-bundle. No host or m4pro installation or network changes were made.
+bundle. No installation or network changes were made on either Mac.
 
 This supersedes the earlier untested-consent status for this VM/mock case:
 production Powerbox stayed open, accepted exact selection of the user-home mock
@@ -486,7 +486,7 @@ This host restart test does not establish provider-process or OS-reboot recovery
 At completion, fixture-a was restored through the UI, App Proxy was explicitly
 disabled and the saved NE enabled flag was verified false. Build 54 remains in
 the VM with the Build 53 rollback App. The bounded diagnostic collector was
-stopped. No host or m4pro network/application changes were made. Local evidence:
+stopped. No network or application changes were made on either Mac. Local evidence:
 `/private/tmp/mihomobox-build54-test/acceptance.json` and the three per-request
 JSONL records. The source build had passed `scripts/validate.sh` and the nine
 AppProxyCoordinator tests before Cloud submission.
@@ -527,7 +527,7 @@ leakage, shared-terminal tool bounds, duplicate ownership, malformed broker repl
 missing file, consent-wait lease renewal, failed lease propagation, saved-route
 preservation and stale/dirty UI refusal. These tests use system-signed local test
 executables and opaque fake grants for assembly; they are not NetworkExtension or
-Claude end-to-end evidence. Signed m4pro acceptance must still prove exact Claude
+Claude end-to-end evidence. Signed acceptance on the test Mac must still prove exact Claude
 process receipts, DNS response and actual API recovery, with the other entries
 retained and no new ChatGPT/Codex file consent.
 
@@ -566,7 +566,7 @@ optional picker; the CLI executable editor also accepts drops and `file://` line
 
 ## Team, directory and exact-CLI scopes (owner decision, 2026-10-26)
 
-**Cause.** On m4pro, `event=app_proxy_rules_diff` reported `rules=27/21 missing=6`
+**Cause.** On the test Mac, `event=app_proxy_rules_diff` reported `rules=27/21 missing=6`
 with every other field matching. The 27 generated targets held six signing
 identifiers twice, each a copy bundled in `ChatGPT.app` plus a copy installed under
 the home directory (`node`, `com.openai.sky.CUAService` and its helpers), with
@@ -586,17 +586,17 @@ elsewhere needs a directory scope. Directory discovery takes every signed Mach-O
 below the folder within the existing scan bounds, except Apple's own code
 (`anchor apple`). A copy of an Apple binary has the same identifier, requirement and
 Mach-O UUID as the system original: with its rule installed, `/usr/bin/curl`
-launched over SSH failed with `EPERM` on m4pro. Such copies are also killed by launch
+launched over SSH failed with `EPERM` on the test Mac. Such copies are also killed by launch
 constraints.
 
-**Launch context (m4pro, 2026-10-26).** macOS attributes a CLI to the responsible
+**Launch context (test Mac, 2026-10-26).** macOS attributes a CLI to the responsible
 process of its session: the terminal, editor or SSH login (`sshd-session`). Two kernel
 steps use it before the provider. NECP evaluates the socket as the responsible
 application when that application's Mach-O UUID appears in an installed rule, and
 otherwise as the CLI itself (xnu `necp_socket_fillout_info_locked`). Flow divert then
 checks the responsible process's signing identifier against the rules' identifiers
 and fails `connect()` with `EPERM` when it is absent (`flow_divert_add_all_proc_info`).
-`NEFlowMetaData` still describes the real process: m4pro receipts carried the PIDs of
+`NEFlowMetaData` still describes the real process: the test Mac's receipts carried the PIDs of
 ChatGPT's bundled `codex` helpers, whose responsible process is ChatGPT. A tool is
 therefore captured when it is its own responsible process or its host has a rule that
 lists it in `matchTools`. Under a host without a rule, a tool whose rule has a
@@ -669,7 +669,7 @@ display-only: it is never logged and does not affect routing.
 **System proxy.** Apps that honor the macOS system proxy (Chromium-based helpers such
 as ChatGPT's `Codex (Service)` network process, and `codex` when given proxy settings)
 connect to it on loopback. NetworkExtension does not divert loopback connections to an
-app proxy provider: on m4pro (system proxy `127.0.0.1:7897`, Mihomo's mixed port) a
+app proxy provider: on the test Mac (system proxy `127.0.0.1:7897`, Mihomo's mixed port) a
 verified `codex` process reached Mihomo through `DEFAULT-MIXED` with itself as the socket
 owner, and a provider that relayed such connections to the app's listener never saw one.
 App Proxy cannot intercept it, so Mihomo routes it by process instead: the generated
@@ -695,7 +695,7 @@ scanned tree is reported as `escapedPath`.
 
 **Extension updates.** The App activates its bundled provider only on a non-live install,
 so after an update the old provider kept running until the user next enabled App Proxy;
-on m4pro under load that replacement then took about three minutes and looked like a
+on the test Mac under load that replacement then took about three minutes and looked like a
 failed start. The provider now reports its bundle version in every status reply. The
 App's maintenance pass (20 seconds after launch, then every 20 seconds) compares it with
 the bundled extension and, when App Proxy is enabled and connected and the versions

@@ -35,8 +35,8 @@ Rule/Global/Direct changes cannot remove it. No route table changes are made.
 If a VPN disappears, macOS chooses the remaining route; this is not a VPN kill
 switch. No proxy failure automatically falls back to direct access.
 
-For the private VPN regression, check the system route to `192.168.13.12`, then
-run `ssh -o BatchMode=yes -o ConnectTimeout=10 m4pro /usr/bin/true` from the actual
+For the private VPN regression, check the system route to a host on the private
+VPN, then run `ssh -o BatchMode=yes -o ConnectTimeout=10 HOST /usr/bin/true` from the actual
 Codex context. Confirm successful SSH handshake/authentication and absence of
 that target on the app's remote-proxy listener. Also verify public HTTPS still
 appears on that listener and follows the current mode: original direct/reject

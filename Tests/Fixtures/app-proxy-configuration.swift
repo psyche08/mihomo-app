@@ -11,17 +11,17 @@ let config = try AIProxyConfiguration(valid, now: 1)
 precondition(config.proxyPort(for: custom) == 17975)
 precondition(config.proxyPort(for: "cli_host") == nil)
 precondition(config.proxyPort(for: "unknown") == nil)
-precondition(!config.bypass.contains("192.168.13.12"))
+precondition(!config.bypass.contains("192.168.50.20"))
 var current = valid
 current["routing"] = "per-application-v3"
-current["bypassCIDRs"] = ["192.168.13.12/32", "fd12::/16"]
+current["bypassCIDRs"] = ["192.168.50.20/32", "fd12::/16"]
 let currentConfig = try AIProxyConfiguration(current, now: 1)
-precondition(currentConfig.bypass.contains("192.168.13.12"))
-precondition(!currentConfig.bypass.contains("192.168.13.14"))
+precondition(currentConfig.bypass.contains("192.168.50.20"))
+precondition(!currentConfig.bypass.contains("192.168.50.22"))
 precondition(!currentConfig.bypass.contains("1.1.1.1"))
 current["bypassCIDRs"] = [String]()
 let disabledConfig = try AIProxyConfiguration(current, now: 1)
-precondition(!disabledConfig.bypass.contains("192.168.13.12"))
+precondition(!disabledConfig.bypass.contains("192.168.50.20"))
 for value: Any in [["0.0.0.0/0"], ["198.18.0.0/16"], [true], "10.0.0.0/8"] {
     current["bypassCIDRs"] = value
     precondition(!accepted(current))

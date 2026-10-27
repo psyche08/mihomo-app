@@ -100,10 +100,10 @@ final class AppProxyStoreTests: XCTestCase {
         let gateway = RoutingGateway(); let model = AppProxyStore(gateway: gateway); let service = ExtensionService()
         model.configure(service); await model.refresh()
         let routes = model.draft.routes
-        try model.setBypassCIDRs(["192.168.13.12/32", "fd12::/16"])
+        try model.setBypassCIDRs(["192.168.50.20/32", "fd12::/16"])
         XCTAssertTrue(model.dirty)
         try await model.apply()
-        XCTAssertEqual(gateway.state.settings.bypass.cidrs, ["192.168.13.12/32", "fd12::/16"])
+        XCTAssertEqual(gateway.state.settings.bypass.cidrs, ["192.168.50.20/32", "fd12::/16"])
         XCTAssertEqual(gateway.state.settings.routes, routes)
         try await model.setEnabled(true)
         XCTAssertThrowsError(try model.setBypassCIDRs([]))
