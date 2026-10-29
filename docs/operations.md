@@ -169,7 +169,7 @@ This page does not prepare or enable Local DoH. A fresh CLI installation keeps
 Local DoH unprepared until the operator explicitly invokes Prepare & Trust.
 App Proxy forwards captured DNS queries over TCP to the existing Mihomo DNS
 listener at `127.0.0.1:1153`, sharing the TUN resolver and its Fake-IP policy.
-Its per-app resolver advertises the managed TUN DNS address `198.18.0.1`,
+Its per-app resolver advertises the managed TUN DNS address `198.18.0.2`,
 not `127.0.0.1:53` where no DNS service is bound. Low-level resolver calls
 must be tested with App Proxy enabled: successful hostname/SOCKS forwarding
 alone does not establish that system name resolution works.
@@ -612,7 +612,7 @@ minimal direct profile active.
 
 In Config > DNS Integration, **Use Global DNS** persists the existing Global
 DNS configuration (`globalDNSFallbackEnabled` is retained as the compatible
-storage key), starts and verifies Enhanced TUN DNS at `198.18.0.1`, releases
+storage key), starts and verifies Enhanced TUN DNS at `198.18.0.2`, releases
 443, and removes only MihomoBox's installed DoH profile. The App confirms this
 impact before starting. A removal error remains visible, never an active-mode
 success. Certificate identity files and the prepared profile are retained.
@@ -661,13 +661,13 @@ log show --last 10m --style compact \
   --predicate 'subsystem == "dev.linsheng.mihomo-app" AND eventMessage CONTAINS "event=app_startup"'
 grep 'event=daemon_startup' '/Library/Logs/Mihomo App/mihomo-daemon.log'
 grep 'event=agent_startup' '/Library/Logs/Mihomo App/mihomo-agent.log'
-dig @198.18.0.1 -p 53 example.com
-dig @198.18.0.1 -p 53 example.com +tcp
+dig @198.18.0.2 -p 53 example.com
+dig @198.18.0.2 -p 53 example.com +tcp
 dig @127.0.0.1 -p 1054 example.com
 scutil --dns
 ```
 
-The `198.18.0.1` probes apply to Global DNS fallback; LocalHttpDns normally
+The `198.18.0.2` probes apply to Global DNS fallback; LocalHttpDns normally
 listens on `127.0.0.1:443`, and 9443 is no longer used. Config reports fallback
 separately from pending DoH-profile removal. A successful TUN probe alone does
 not prove that macOS has stopped using the old encrypted-DNS profile.

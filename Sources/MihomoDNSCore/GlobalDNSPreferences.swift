@@ -74,6 +74,18 @@ struct ResolverTopologyObservation: Equatable, Sendable {
 }
 
 enum ManagedDNSDictionaryCleanup {
+    /// The previous Global DNS address must remain recognizable during upgrade
+    /// and restore, but it must never count as the newly applied resolver.
+    static func restorationServerSets(for servers: [String]) -> [[String]] {
+        servers == [ManagedTUNDNS.server]
+            ? [servers, [ManagedTUNDNS.legacyServer]] : [servers]
+    }
+
+    static func matchingServers(_ serverSets: [[String]], in dictionary: [String: Any]?) -> [String]? {
+        let observed = globalServers(in: dictionary)
+        return serverSets.first { !$0.isEmpty && $0 == observed }
+    }
+
     /// Service-specific resolvers (including App Proxy) belong to Network
     /// Extension, even when they advertise the same address as Global DNS.
     /// Preserve any ServiceIdentifier-bearing dictionary conservatively.
@@ -101,6 +113,8 @@ enum ManagedDNSDictionaryCleanup {
 public final class GlobalDNSPreferences: @unchecked Sendable {
     private let lock = NSLock()
     private let servers: [String]
+    private let restorationServerSets: [[String]]
+    private var restorationServers: Set<String> { Set(restorationServerSets.flatMap { $0 }) }
     private let backupPath: String
     private let preferencesID: String?
     private let primaryServiceIDOverride: String?
@@ -112,6 +126,7 @@ public final class GlobalDNSPreferences: @unchecked Sendable {
         primaryServiceIDOverride: String? = nil
     ) {
         self.servers = servers
+        self.restorationServerSets = ManagedDNSDictionaryCleanup.restorationServerSets(for: servers)
         self.backupPath = backupPath
         self.preferencesID = preferencesID
         self.primaryServiceIDOverride = primaryServiceIDOverride
@@ -208,7 +223,7 @@ public final class GlobalDNSPreferences: @unchecked Sendable {
         }
         let globalPath = "\(currentSet)/Network/Global/DNS"
         if persistentServers(at: globalPath, preferences: preferences)
-            .contains(where: { servers.contains($0) }) {
+            .contains(where: { restorationServers.contains($0) }) {
             return true
         }
         let servicesPath = "\(currentSet)/Network/Service"
@@ -218,7 +233,7 @@ public final class GlobalDNSPreferences: @unchecked Sendable {
         for serviceID in services.keys {
             let path = "\(servicesPath)/\(serviceID)/DNS"
             if persistentServers(at: path, preferences: preferences)
-                .contains(where: { servers.contains($0) }) {
+                .contains(where: { restorationServers.contains($0) }) {
                 return true
             }
         }
@@ -270,7 +285,7 @@ public final class GlobalDNSPreferences: @unchecked Sendable {
         if dynamicServers(
             at: "State:/Network/Global/DNS",
             store: store
-        ).contains(where: { servers.contains($0) }) {
+        ).contains(where: { restorationServers.contains($0) }) {
             return true
         }
         guard let keys = SCDynamicStoreCopyKeyList(
@@ -284,7 +299,7 @@ public final class GlobalDNSPreferences: @unchecked Sendable {
         }
         for key in keys {
             if dynamicServers(at: key, store: store)
-                .contains(where: { servers.contains($0) }) {
+                .contains(where: { restorationServers.contains($0) }) {
                 return true
             }
         }
@@ -338,8 +353,7 @@ public final class GlobalDNSPreferences: @unchecked Sendable {
                 throw GlobalDNSPreferencesError.invalidBackup
             }
             let current = SCPreferencesPathGetValue(preferences, path as CFString) as? [String: Any]
-            let currentServers = current?[kSCPropNetDNSServerAddresses as String] as? [String]
-            guard currentServers == servers else {
+            guard ManagedDNSDictionaryCleanup.matchingServers(restorationServerSets, in: current) != nil else {
                 ServiceLog.info("event=system_dns_restore_skipped reason=externally_changed")
                 continue
             }
@@ -430,8 +444,9 @@ public final class GlobalDNSPreferences: @unchecked Sendable {
                 preferences,
                 path as CFString
             ) as? [String: Any],
+                let ownedServers = ManagedDNSDictionaryCleanup.matchingServers(restorationServerSets, in: current),
                 let updated = ManagedDNSDictionaryCleanup.removingExactServers(
-                    servers,
+                    ownedServers,
                     from: current
                 ) else {
                 continue
@@ -471,7 +486,7 @@ public final class GlobalDNSPreferences: @unchecked Sendable {
         var changed = false
         for (path, rawEntry) in entries where path != currentPath {
             let current = SCPreferencesPathGetValue(preferences, path as CFString) as? [String: Any]
-            guard current?[kSCPropNetDNSServerAddresses as String] as? [String] == servers else {
+            guard ManagedDNSDictionaryCleanup.matchingServers(restorationServerSets, in: current) != nil else {
                 continue
             }
             guard let entry = rawEntry as? [String: Any],
@@ -564,7 +579,7 @@ public final class GlobalDNSPreferences: @unchecked Sendable {
         var changed = false
         for (key, rawEntry) in entries where key != currentKey {
             let current = SCDynamicStoreCopyValue(store, key as CFString) as? [String: Any]
-            guard current?[kSCPropNetDNSServerAddresses as String] as? [String] == servers else {
+            guard ManagedDNSDictionaryCleanup.matchingServers(restorationServerSets, in: current) != nil else {
                 continue
             }
             guard let entry = rawEntry as? [String: Any],
@@ -594,7 +609,7 @@ public final class GlobalDNSPreferences: @unchecked Sendable {
         var changed = false
         for (key, rawEntry) in entries {
             let current = SCDynamicStoreCopyValue(store, key as CFString) as? [String: Any]
-            guard current?[kSCPropNetDNSServerAddresses as String] as? [String] == servers else {
+            guard ManagedDNSDictionaryCleanup.matchingServers(restorationServerSets, in: current) != nil else {
                 continue
             }
             guard let entry = rawEntry as? [String: Any],
@@ -634,8 +649,9 @@ public final class GlobalDNSPreferences: @unchecked Sendable {
                 store,
                 key as CFString
             ) as? [String: Any],
+                let ownedServers = ManagedDNSDictionaryCleanup.matchingServers(restorationServerSets, in: current),
                 let updated = ManagedDNSDictionaryCleanup.removingExactServers(
-                    servers,
+                    ownedServers,
                     from: current
                 ) else {
                 continue

@@ -134,7 +134,7 @@ not a background consequence of polling or update checks.
 5. Its generation-bound observer commits either controller/DNS standby (TUN
    and Fake-IP route absent) or the persisted Enhanced state (controller, TUN,
    Fake-IP route and Mihomo DNS healthy). Explicit fallback additionally
-   validates TUN DNS at `198.18.0.1:53`, applies system DNS and removes the
+   validates TUN DNS at `198.18.0.2:53`, applies system DNS and removes the
    MihomoBox DoH profile. An existing fallback state survives reboot.
 7. The Swift `NSApplication` starts with accessory activation policy, compares bundled and installed
    component digests through XPC, and synchronizes signed changes when the
@@ -185,7 +185,7 @@ dialog; only the explicit repair boundaries described above do.
 |---|---|---|
 | XPC `dev.linsheng.mihomo.daemon.control` | Desktop/CLI → daemon | authenticated control plane |
 | `127.0.0.1:443` HTTPS | macOS → daemon | independent split DoH with managed-Mihomo then physical-DNS fallback |
-| `198.18.0.1:53` UDP/TCP | macOS → TUN | Global DNS fallback; requires verified Enhanced TUN |
+| `198.18.0.2:53` UDP/TCP | macOS → TUN | Global DNS fallback; requires verified Enhanced TUN |
 | `127.0.0.53:53` UDP/TCP | legacy only | restored during protocol-3 migration; not bound in normal operation |
 | `127.0.0.1:1153` UDP/TCP | agent / App Proxy → Mihomo | shared Mihomo DNS listener |
 | `127.0.0.1:1054` UDP/TCP | Mihomo → agent | nonrecursive path to current DHCP DNS |

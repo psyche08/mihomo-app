@@ -80,7 +80,7 @@ final class LocalDoHCoordinator: DashboardLocalDoHService {
     if mode == .globalDNS {
       let alert = NSAlert()
       alert.messageText = "Switch to Global DNS?"
-      alert.informativeText = "This enables Enhanced TUN and uses 198.18.0.1 for system DNS. "
+      alert.informativeText = "This enables Enhanced TUN and uses 198.18.0.2 for system DNS. "
         + "MihomoBox will remove only its own DoH profile and release port 443. "
         + "The certificate and private key are retained. Switching back requires profile installation in System Settings."
       alert.addButton(withTitle: "Use Global DNS")

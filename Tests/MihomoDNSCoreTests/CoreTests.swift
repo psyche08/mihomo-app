@@ -237,6 +237,20 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(ManagedDNSDictionaryCleanup.removingExactServers(servers, from: physicalDNS)?.count, 0)
     }
 
+    func testGlobalDNSAddressMigrationRecognizesOnlyExactUnscopedLegacyOwnership() {
+        let key = kSCPropNetDNSServerAddresses as String
+        let sets = ManagedDNSDictionaryCleanup.restorationServerSets(for: ["198.18.0.2"])
+        XCTAssertEqual(sets, [["198.18.0.2"], ["198.18.0.1"]])
+        for address in ["198.18.0.1", "198.18.0.2"] {
+            XCTAssertEqual(ManagedDNSDictionaryCleanup.matchingServers(sets, in: [key: [address]]), [address])
+            XCTAssertNil(ManagedDNSDictionaryCleanup.matchingServers(sets, in: [
+                key: [address], "ServiceIdentifier": 2,
+            ]))
+            XCTAssertNil(ManagedDNSDictionaryCleanup.matchingServers(sets, in: [key: [address, "8.8.8.8"]]))
+        }
+        XCTAssertEqual(ManagedDNSDictionaryCleanup.restorationServerSets(for: ["127.0.0.53"]), [["127.0.0.53"]])
+    }
+
     func testStoppedRuntimeVerificationReportsOnlyUnsafeStateNames() {
         let health = NetworkConsistencyHealth(
             controllerReachable: true,
@@ -683,6 +697,41 @@ final class CoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: backupPath))
     }
 
+    func testGlobalDNSUpgradeRestoresLegacyBackupBeforeApplyingPeerAddress() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let preferencesPath = root.appendingPathComponent("preferences.plist").path
+        let backupPath = root.appendingPathComponent("backup.plist").path
+        let preferences = try XCTUnwrap(SCPreferencesCreate(
+            nil, "dev.linsheng.mihomo.tests.dns-upgrade" as CFString, preferencesPath as CFString
+        ))
+        let dnsPath = "/Sets/Test/Network/Global/DNS" as CFString
+        let key = kSCPropNetDNSServerAddresses as String
+        let original: [String: Any] = [key: ["192.0.2.53"], "SearchDomains": ["corp.example"]]
+        XCTAssertTrue(SCPreferencesSetValue(preferences, kSCPrefCurrentSet, "/Sets/Test" as CFString))
+        XCTAssertTrue(SCPreferencesPathSetValue(preferences, dnsPath, original as CFDictionary))
+        guard SCPreferencesCommitChanges(preferences) else {
+            throw XCTSkip("SCPreferences custom-file commit requires privileged SystemConfiguration access")
+        }
+        let old = GlobalDNSPreferences(servers: ["198.18.0.1"], backupPath: backupPath, preferencesID: preferencesPath)
+        try old.apply()
+        let upgraded = GlobalDNSPreferences(servers: ["198.18.0.2"], backupPath: backupPath, preferencesID: preferencesPath)
+        XCTAssertFalse(try upgraded.isApplied(), "Old local address must not satisfy the new DNS health check")
+        XCTAssertTrue(try upgraded.containsManagedServerPersistently(), "Legacy DNS must block stopped-state success")
+        try upgraded.restore()
+        SCPreferencesSynchronize(preferences)
+        let restored = try XCTUnwrap(SCPreferencesPathGetValue(preferences, dnsPath) as? [String: Any])
+        XCTAssertEqual(restored[key] as? [String], ["192.0.2.53"])
+        XCTAssertEqual(restored["SearchDomains"] as? [String], ["corp.example"])
+        XCTAssertFalse(try upgraded.containsManagedServerPersistently())
+        try upgraded.apply()
+        XCTAssertTrue(try upgraded.isApplied())
+        try upgraded.restore()
+        SCPreferencesSynchronize(preferences)
+        XCTAssertEqual((SCPreferencesPathGetValue(preferences, dnsPath) as? [String: Any])?[key] as? [String], ["192.0.2.53"])
+    }
+
     func testDNSPreferencesTargetsPrimaryServiceAndRestoresExactly() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -1073,6 +1122,20 @@ final class CoreTests: XCTestCase {
     func testRuntimeRecoveryPolicyDoesNotActWithoutManagedNetwork() {
         var policy = RuntimeRecoveryPolicy(graceSeconds: 1)
         XCTAssertEqual(policy.decide(runtimeReady: false, networkOwned: false, nowNanoseconds: 1), .none)
+    }
+
+    func testFlappingDNSCannotRestartAgainAfterOneSuccessfulProbeOrTemporaryRouteLoss() {
+        var policy = RuntimeRecoveryPolicy(graceSeconds: 8, requiredFailures: 2, minimumRestartIntervalSeconds: 60)
+        let second: UInt64 = 1_000_000_000
+        XCTAssertEqual(policy.decide(runtimeReady: false, networkOwned: true, nowNanoseconds: 0), .debounce)
+        XCTAssertEqual(policy.decide(runtimeReady: false, networkOwned: true, nowNanoseconds: second), .start)
+        XCTAssertEqual(policy.decide(runtimeReady: true, networkOwned: true, nowNanoseconds: 2 * second), .recovered)
+        XCTAssertEqual(policy.decide(runtimeReady: false, networkOwned: true, nowNanoseconds: 3 * second), .cooldown)
+        XCTAssertEqual(policy.decide(runtimeReady: false, networkOwned: false, nowNanoseconds: 4 * second), .none)
+        XCTAssertEqual(policy.decide(runtimeReady: false, networkOwned: true, nowNanoseconds: 60 * second), .cooldown)
+        XCTAssertEqual(policy.decide(runtimeReady: false, networkOwned: true, nowNanoseconds: 61 * second), .debounce)
+        XCTAssertEqual(policy.decide(runtimeReady: false, networkOwned: true, nowNanoseconds: 62 * second), .start)
+        XCTAssertEqual(policy.decide(runtimeReady: false, networkOwned: true, nowNanoseconds: 70 * second), .failed)
     }
 
     func testPublishedHealthIsServedOnlyWhileFresh() throws {

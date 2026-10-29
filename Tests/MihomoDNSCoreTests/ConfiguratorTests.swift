@@ -457,8 +457,8 @@ extension ConfiguratorTests {
         XCTAssertTrue(fallback.expectsEnhancedTUN)
         XCTAssertTrue(fallback.manageSystemDNS)
         XCTAssertNil(fallback.localDoH)
-        XCTAssertEqual(fallback.managedSystemDNSServers, ["198.18.0.1"])
-        XCTAssertEqual(fallback.managedDNSProbeEndpoint, Endpoint(host: "198.18.0.1", port: 53))
+        XCTAssertEqual(fallback.managedSystemDNSServers, ["198.18.0.2"])
+        XCTAssertEqual(fallback.managedDNSProbeEndpoint, Endpoint(host: "198.18.0.2", port: 53))
         XCTAssertEqual(fallback.upstreamListen, Endpoint(host: "127.0.0.1", port: 1054))
 
         let config = directory.appendingPathComponent("config.yaml")
@@ -473,7 +473,7 @@ extension ConfiguratorTests {
         let once = try String(contentsOf: config, encoding: .utf8)
         XCTAssertTrue(once.contains("auto-route: true"))
         XCTAssertTrue(once.contains("fake-ip-range: 198.18.0.1/16"))
-        XCTAssertTrue(once.contains("dns-hijack:\n    - 198.18.0.1:53\n    - tcp://198.18.0.1:53"))
+        XCTAssertTrue(once.contains("dns-hijack:\n    - 198.18.0.2:53\n    - tcp://198.18.0.2:53"))
         try MihomoConfigurator.apply(paths, resolver: StubResolver(answers: [:]))
         XCTAssertEqual(once, try String(contentsOf: config, encoding: .utf8))
 

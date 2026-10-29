@@ -208,12 +208,12 @@ Fallback persists `globalDNSFallbackEnabled: true`, `manageSystemDNS: true`,
 `enhancedTUNEnabled: true`, and no `localDoH`. It uses this shorter path:
 
 ```text
-macOS Global DNS -> 198.18.0.1:53 -> Mihomo TUN DNS
+macOS Global DNS -> 198.18.0.2:53 -> Mihomo TUN DNS
 Mihomo upstream -> 127.0.0.1:1054 -> physical/scoped DNS
 ```
 
 No loopback port-53 bridge or alias is created. The managed profile forces the
-matching Fake-IP range, auto-route, and UDP/TCP hijack for `198.18.0.1:53`.
+matching Fake-IP range, auto-route, and UDP/TCP hijack for `198.18.0.2:53`.
 The current controller, owned TUN route and DNS response must be healthy before
 the agent applies Global DNS. The compatibility `dns_bridge_ready` health field
 reports the TUN DNS probe in this mode. Reload and shutdown restore the original
@@ -228,6 +228,21 @@ If removal fails or cannot be confirmed, Config explicitly requests removal in
 Device Management; network health alone does not prove fallback completion.
 The identity and prepared profile remain available for a later Prepare retry.
 
+The pinned Mihomo v1.19.30 assigns `198.18.0.1/30` to the interface and
+[reserves the next address for DNS](https://github.com/MetaCubeX/mihomo/blob/v1.19.30/listener/sing_tun/server.go#L281-L286).
+The system resolver and health probe must therefore target `198.18.0.2`, not
+the interface's local `.1`. On a macOS host with DNS Proxy enabled, `.1` had
+a LOCAL route while the system owned wildcard port 53: probes timed out or reached a different resolver,
+even though loopback Mihomo DNS remained healthy. UDP queries to `.2` returned
+the same Fake-IP answer as the loopback resolver. TCP and system-resolver
+acceptance still need verification on the signed corrected build.
+Upgrade restoration recognizes either exact `.1` or `.2` Global DNS ownership,
+preserves the original backup, and excludes NetworkExtension-specific resolver
+dictionaries. Only `.2` satisfies the applied-state check. Runtime health
+recovery also enforces a minimum sixty-second interval between restart requests;
+a transient successful probe or disappearing route cannot reset that interval.
+DNS restoration remains immediate while the path is unhealthy.
+
 Fallback survives daemon restart and does not repeatedly contend for 443.
 Disabling TUN in fallback restores system DNS and enters controller/DNS standby,
 so App Proxy can keep using the shared resolver without a TUN route. Prepare
@@ -239,7 +254,7 @@ listener. Privileged fault-injection acceptance must use a signed Cloud build.
 ### Legacy DNS restoration
 
 The SystemConfiguration code below restores legacy `127.0.0.53` installations
-and manages `198.18.0.1` in explicit fallback. Startup restores recorded DNS with
+and manages `198.18.0.2` in explicit fallback. Startup restores recorded DNS with
 the old configuration before changing ownership. The agent reads `CurrentSet`,
 then manages:
 

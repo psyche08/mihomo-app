@@ -119,19 +119,23 @@ enum RuntimeRecoveryDecision: Equatable {
     case debounce
     case start
     case wait
+    case cooldown
     case recovered
     case failed
 }
 
 struct RuntimeRecoveryPolicy {
     private(set) var deadlineNanoseconds: UInt64?
+    private(set) var restartNotBeforeNanoseconds: UInt64?
     private(set) var consecutiveFailures = 0
     let graceNanoseconds: UInt64
     let requiredFailures: Int
+    let minimumRestartIntervalNanoseconds: UInt64
 
-    init(graceSeconds: UInt64 = 8, requiredFailures: Int = 3) {
+    init(graceSeconds: UInt64 = 8, requiredFailures: Int = 3, minimumRestartIntervalSeconds: UInt64 = 60) {
         graceNanoseconds = graceSeconds * 1_000_000_000
         self.requiredFailures = max(1, requiredFailures)
+        minimumRestartIntervalNanoseconds = minimumRestartIntervalSeconds * 1_000_000_000
     }
 
     mutating func decide(runtimeReady: Bool, networkOwned: Bool, nowNanoseconds: UInt64) -> RuntimeRecoveryDecision {
@@ -154,12 +158,20 @@ struct RuntimeRecoveryPolicy {
             consecutiveFailures = 0
             return .failed
         }
+        // A single successful probe (or the route disappearing during restart)
+        // must not permit another immediate restart when DNS is flapping.
+        // The caller still restores unsafe system DNS during this cooldown.
+        if let restartNotBeforeNanoseconds, nowNanoseconds < restartNotBeforeNanoseconds {
+            consecutiveFailures = 0
+            return .cooldown
+        }
         consecutiveFailures += 1
         guard consecutiveFailures >= requiredFailures else {
             return .debounce
         }
         consecutiveFailures = 0
         deadlineNanoseconds = nowNanoseconds &+ graceNanoseconds
+        restartNotBeforeNanoseconds = nowNanoseconds &+ minimumRestartIntervalNanoseconds
         return .start
     }
 }
@@ -1121,6 +1133,9 @@ public final class NetworkConsistencyController: @unchecked Sendable {
         case .wait:
             safetyState.setRuntimeReady(false)
             action = "await_runtime_recovery"
+        case .cooldown:
+            safetyState.setRuntimeReady(false)
+            action = "cooldown_runtime_recovery"
         case .recovered:
             action = "runtime_recovered"
             changed = true

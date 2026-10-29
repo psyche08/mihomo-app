@@ -29,6 +29,15 @@ public struct LocalDoHConfiguration: Codable, Equatable {
     }
 }
 
+/// With the pinned Mihomo core the interface owns .1 and sing-tun serves DNS
+/// at its next address, .2. Sending DNS to .1 can hit a local port-53 listener
+/// (including macOS DNS Proxy) instead of traversing the tunnel.
+public enum ManagedTUNDNS {
+    public static let server = "198.18.0.2"
+    public static let legacyServer = "198.18.0.1"
+    public static let fakeIPRange = "198.18.0.1/16"
+}
+
 public struct ProxyConfiguration: Codable, Equatable {
     public var systemDNSListen: Endpoint
     public var mihomoDNS: Endpoint
@@ -158,11 +167,11 @@ public struct ProxyConfiguration: Codable, Equatable {
     }
 
     public var managedSystemDNSServers: [String] {
-        usesGlobalDNSFallback ? ["198.18.0.1"] : [systemDNSListen.host]
+        usesGlobalDNSFallback ? [ManagedTUNDNS.server] : [systemDNSListen.host]
     }
 
     public var managedDNSProbeEndpoint: Endpoint {
-        usesGlobalDNSFallback ? Endpoint(host: "198.18.0.1", port: 53) : systemDNSListen
+        usesGlobalDNSFallback ? Endpoint(host: ManagedTUNDNS.server, port: 53) : systemDNSListen
     }
 
     public func validate() throws {

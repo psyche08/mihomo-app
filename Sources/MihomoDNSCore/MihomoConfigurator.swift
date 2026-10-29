@@ -112,7 +112,7 @@ public enum MihomoConfigurator {
                 lines = replaceTunList(
                     lines,
                     key: "dns-hijack",
-                    entries: ["    - 198.18.0.1:53\n", "    - tcp://198.18.0.1:53\n"]
+                    entries: ["    - \(ManagedTUNDNS.server):53\n", "    - tcp://\(ManagedTUNDNS.server):53\n"]
                 )
             }
         }
@@ -129,7 +129,7 @@ public enum MihomoConfigurator {
             dns = replaceList(dns, key: "fake-ip-filter", values: ["MATCH,real-ip"])
         }
         if runtime?.globalDNSFallbackEnabled == true {
-            dns = replaceScalar(dns, key: "fake-ip-range", value: "198.18.0.1/16")
+            dns = replaceScalar(dns, key: "fake-ip-range", value: ManagedTUNDNS.fakeIPRange)
         }
         lines = Array(lines[...dnsStart]) + dns + Array(lines[dnsEnd...])
 

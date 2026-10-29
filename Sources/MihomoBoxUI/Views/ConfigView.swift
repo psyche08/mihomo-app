@@ -209,7 +209,7 @@ public struct ConfigView: View {
         }
 
         Text(
-          "Enhanced TUN remains read-only here. Local DoH stays active when TUN is off; Global DNS uses 198.18.0.1 and requires Enhanced TUN."
+          "Enhanced TUN remains read-only here. Local DoH stays active when TUN is off; Global DNS uses 198.18.0.2 and requires Enhanced TUN."
         )
         .font(.system(size: 10))
         .foregroundStyle(DashboardTheme.muted.opacity(0.72))
@@ -506,7 +506,7 @@ public struct ConfigView: View {
     case .degraded:
       "Local DoH is not ready. Enhanced TUN can use Global DNS without a certificate or profile. Prepare and approve the profile to use Local DoH."
     case .globalDNSFallback:
-      "System DNS uses 198.18.0.1 through Enhanced TUN, either by selection or fallback. Stop Mihomo to restore the original DNS. Prepare & Trust and reinstall the profile to return to Local DoH."
+      "System DNS uses 198.18.0.2 through Enhanced TUN, either by selection or fallback. Stop Mihomo to restore the original DNS. Prepare & Trust and reinstall the profile to return to Local DoH."
     case .fallbackNeedsProfileRemoval:
       "Global DNS fallback is configured, but macOS has not confirmed removal of the MihomoBox DNS profile. Remove it in Device Management so matching domains can use Global DNS."
     case .fallbackUnavailable:
