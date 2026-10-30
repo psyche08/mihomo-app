@@ -27,6 +27,8 @@ readonly EXPECTED_SIGN_UPDATE_SHA256='bfb52400c3da18bb4c251ac4818c2c2e1e31c2e649
 readonly EXPECTED_SPARKLE_PUBLIC_ED_KEY='CL5i36xBB93GX8INJAcBAVFreeVys28Vu94mgAgTA00='
 readonly EXPECTED_KEY_CHALLENGE_SIGNATURE_SHA256='92b8373f2a7807b1e3b22b91d9e2fcf7b8de57e7314825dc10cda1213dc42b2c'
 readonly EXPECTED_CLOUD_LEAF_SHA1='44B2EB8C6C3C6A85A3687EEDED7D85EB7C13524A'
+typeset EXPECTED_LEAF_SHA1="$EXPECTED_CLOUD_LEAF_SHA1"
+typeset LOCAL_RELEASE=false
 readonly EXPECTED_TEAM_ID='89LGY6BD53'
 readonly EXPECTED_SPARKLE_VERSION='2.9.4'
 readonly REPOSITORY='psyche08/mihomo-app'
@@ -37,7 +39,7 @@ fail() {
 }
 
 usage() {
-  /usr/bin/printf 'usage: %s --cloud-zip /absolute/path/MihomoBox.app.zip\n' "${0:t}" >&2
+  /usr/bin/printf 'usage: %s --cloud-zip|--local-zip /absolute/path/MihomoBox.app.zip\n' "${0:t}" >&2
   exit 2
 }
 
@@ -54,6 +56,14 @@ require_regular_file() {
 typeset CLOUD_ZIP=''
 while (( $# > 0 )); do
   case "$1" in
+    --local-zip)
+      (( $# >= 2 )) || usage
+      [[ -z "$CLOUD_ZIP" ]] || usage
+      LOCAL_RELEASE=true
+      EXPECTED_LEAF_SHA1='2E1EF531C972A15F5B5C58855001FA6FA1186383'
+      CLOUD_ZIP="$2"
+      shift 2
+      ;;
     --cloud-zip)
       (( $# >= 2 )) || usage
       [[ -z "$CLOUD_ZIP" ]] || fail '--cloud-zip may be supplied only once'
@@ -81,6 +91,10 @@ readonly VERSION_MINOR="${VERSION_REMAINDER%%.*}"
 readonly VERSION_PATCH="${VERSION_REMAINDER#*.}"
 (( VERSION_MAJOR > 0 || VERSION_MINOR > 9 || (VERSION_MINOR == 9 && VERSION_PATCH >= 3) )) ||
   fail 'Cloud ZIP release format starts at version 0.9.3'
+
+if [[ "$LOCAL_RELEASE" == true ]]; then
+  (( VERSION_MAJOR > 1 || (VERSION_MAJOR == 1 && VERSION_MINOR >= 1) )) || fail 'local ZIP releases start at 1.1.0'
+fi
 
 readonly SOURCE_COMMIT="$(/usr/bin/git -C "$ROOT" rev-parse --verify 'HEAD^{commit}')"
 [[ "$SOURCE_COMMIT" =~ '^[0-9a-f]{40}$' ]] || fail 'HEAD is not one full SHA-1 commit'
@@ -134,9 +148,10 @@ readonly APP="$STAGE/extracted/MihomoBox.app"
 
 /usr/bin/codesign --verify --deep --strict --all-architectures "$APP"
 /usr/bin/codesign --verify --strict \
-  -R="anchor apple generic and certificate leaf = H\"$EXPECTED_CLOUD_LEAF_SHA1\"" "$APP"
+  -R="anchor apple generic and certificate leaf = H\"$EXPECTED_LEAF_SHA1\"" "$APP"
 /usr/sbin/spctl --assess --type execute "$APP"
 /usr/bin/xcrun stapler validate "$APP"
+"$ROOT/scripts/check-app-proxy-bundle.sh" "$APP" --signed
 
 readonly INFO="$APP/Contents/Info.plist"
 readonly MANIFEST="$APP/Contents/Resources/BuildManifest.plist"
@@ -152,7 +167,8 @@ readonly BUILD_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$
   fail 'Cloud App executable is invalid'
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :Version' "$MANIFEST")" == "$VERSION" ]] ||
   fail 'Cloud BuildManifest version mismatch'
-[[ "$(/usr/libexec/PlistBuddy -c 'Print :BuildVersion' "$MANIFEST")" == "$VERSION" ]] ||
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :BuildVersion' "$MANIFEST")" == "$VERSION" ||
+   "$(/usr/libexec/PlistBuddy -c 'Print :BuildVersion' "$MANIFEST")" == "$BUILD_VERSION" ]] ||
   fail 'Cloud BuildManifest source build version mismatch'
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :Architecture' "$MANIFEST")" == 'arm64' ]] ||
   fail 'Cloud App architecture is not arm64'
@@ -174,7 +190,7 @@ for executable in "${EXECUTABLES[@]}"; do
   [[ -f "$executable_path" && ! -L "$executable_path" && -x "$executable_path" ]] ||
     fail "Cloud App executable is missing or unsafe: $executable"
   /usr/bin/codesign --verify --strict \
-    -R="anchor apple generic and certificate leaf = H\"$EXPECTED_CLOUD_LEAF_SHA1\"" \
+    -R="anchor apple generic and certificate leaf = H\"$EXPECTED_LEAF_SHA1\"" \
     "$executable_path"
 done
 

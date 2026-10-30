@@ -281,4 +281,22 @@ reject_regex "$CLOUD_PREP" 'notarytool|notarytool-rs|stapler[[:space:]]+staple|h
 
 require_literal "$VALIDATE" '/bin/bash Tests/test_release_product.sh'
 
+LOCAL_RELEASE="$ROOT/scripts/release-local.zsh"
+require_file "$LOCAL_RELEASE"
+/bin/zsh -n "$LOCAL_RELEASE"
+require_literal "$LOCAL_RELEASE" 'readonly LEAF=2E1EF531C972A15F5B5C58855001FA6FA1186383'
+require_literal "$LOCAL_RELEASE" 'RELEASE_BUILD_NUMBER > PREVIOUS_RELEASE_BUILD_NUMBER'
+require_literal "$LOCAL_RELEASE" '"$ROOT/scripts/check-app-proxy-bundle.sh" "$APP" --signed'
+require_literal "$LOCAL_RELEASE" 'shasum -a 256 -c "$STATE/notary.sha256"'
+require_literal "$LOCAL_RELEASE" 'touch "$STATE/submit-attempted"'
+require_literal "$LOCAL_RELEASE" 'xcrun notarytool wait "$ID"'
+require_literal "$LOCAL_RELEASE" 'ditto -x -k "$ZIP" "$STATE/accepted"'
+require_literal "$LOCAL_RELEASE" '"$ROOT/scripts/prepare-cloud-release.zsh" --local-zip'
+reject_literal "$LOCAL_RELEASE" 'unlock-keychain'
+reject_regex "$LOCAL_RELEASE" 'codesign.*--deep.*--sign|gh[[:space:]]+release'
+# Invalid modes must exit before any credentials, build, or network operation.
+if /bin/zsh -f "$LOCAL_RELEASE" invalid-mode >/dev/null 2>&1; then
+  fail "local release accepted an invalid mode"
+fi
+
 echo "release product source contracts passed"

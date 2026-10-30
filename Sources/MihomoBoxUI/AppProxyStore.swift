@@ -190,8 +190,8 @@ public final class AppProxyStore: ObservableObject {
         preview = true
         nodes = ["Tokyo · 32 ms", "Singapore · 48 ms", "Los Angeles · 126 ms"]
         groups = ["Proxy", "Automatic"]
-        let routes = Dictionary(uniqueKeysWithValues: AppProxyApplication.allCases.enumerated().map { index, app in
-            (app.rawValue, nodes[index % nodes.count])
+        let routes = Dictionary(uniqueKeysWithValues: AppProxyEntry.defaults.enumerated().map { index, app in
+            (app.id, nodes[index % nodes.count])
         })
         routing = .init(settings: .init(routes: routes), profile: "Preview.yaml", revision: "preview")
         draft = routing!.settings

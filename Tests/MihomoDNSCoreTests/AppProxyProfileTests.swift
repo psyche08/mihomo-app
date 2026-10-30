@@ -41,19 +41,19 @@ final class AppProxyProfileTests: XCTestCase {
             settings.applications[0].executablePaths = paths
             XCTAssertThrowsError(try settings.validate())
         }
-        settings.applications = AppProxyEntry.defaults
+        settings.applications = AppProxyEntry.legacyDefaults
         settings.applications[0].executablePaths = ["/usr/bin/curl"]
         settings.applications[1].executablePaths = ["/usr/bin/curl"]
         XCTAssertThrowsError(try settings.validate(), "Ownership must be unique across apps")
     }
     private var settings: AppProxySettings {
-        .init(routes: Dictionary(uniqueKeysWithValues: AppProxyApplication.allCases.map { ($0.rawValue, "node-" + $0.rawValue) }))
+        .init(routes: Dictionary(uniqueKeysWithValues: AppProxyApplication.allCases.map { ($0.rawValue, "node-" + $0.rawValue) }), applications: AppProxyEntry.legacyDefaults)
     }
     func testFourIndependentLoopbackListenersPreserveRawProfile() throws {
         let source = "mixed-port: 7897\ntun:\n  enable: false\nrules:\n  - MATCH,REJECT\n"
         let rendered = try AppProxyProfile.applying(settings, to: source)
         // Process rules precede the profile's own rules; every raw line is kept in order.
-        let processRules = AppProxyEntry.defaults.map {
+        let processRules = AppProxyEntry.legacyDefaults.map {
             "  - SUB-RULE,(AND,((RULE-SET,mihomobox-app-\($0.id)-processes))),mihomobox-app-\($0.id)\n"
         }.joined()
         XCTAssertTrue(rendered.hasPrefix("mixed-port: 7897\ntun:\n  enable: false\nrules:\n" + processRules + "  - MATCH,REJECT\n"))
@@ -74,7 +74,7 @@ final class AppProxyProfileTests: XCTestCase {
         let rules = try XCTUnwrap(lines.firstIndex(of: "rules:"))
         XCTAssertEqual(lines[rules + 1], "- SUB-RULE,(AND,((RULE-SET,mihomobox-app-chatgpt-processes))),mihomobox-app-chatgpt",
                        "indentationless rules keep their style, ahead of the profile's process rule")
-        XCTAssertEqual(lines[rules + 1 + AppProxyEntry.defaults.count], "- PROCESS-PATH-REGEX,.*/ChatGPT\\.app/.*,Proxy")
+        XCTAssertEqual(lines[rules + 1 + AppProxyEntry.legacyDefaults.count], "- PROCESS-PATH-REGEX,.*/ChatGPT\\.app/.*,Proxy")
         XCTAssertTrue(rendered.contains("  geo:\n    type: http"), "existing providers are kept")
         XCTAssertTrue(rendered.contains("  mihomobox-app-chatgpt-processes:\n    type: file\n    behavior: classical\n    format: yaml\n    path: ./mihomobox/app-chatgpt-processes.yaml"))
         XCTAssertEqual(try AppProxyProfile.processProviderContents([]), "payload: []\n")
@@ -83,10 +83,10 @@ final class AppProxyProfileTests: XCTestCase {
                        "payload:\n  - \"PROCESS-PATH,\(helper)\"\n  - \"PROCESS-PATH,/b\"\n")
         XCTAssertThrowsError(try AppProxyProfile.processProviderContents(["/tmp/a,b"]), "a comma would split the classical rule")
         var routes = AppProxyProcessRoutes(["chatgpt": [helper]])
-        XCTAssertNoThrow(try routes.validate(applications: AppProxyEntry.defaults))
+        XCTAssertNoThrow(try routes.validate(applications: AppProxyEntry.legacyDefaults))
         routes.paths["unknown"] = ["/bin/ls"]
-        XCTAssertThrowsError(try routes.validate(applications: AppProxyEntry.defaults))
-        XCTAssertThrowsError(try AppProxyProcessRoutes(["chatgpt": ["relative/path"]]).validate(applications: AppProxyEntry.defaults))
+        XCTAssertThrowsError(try routes.validate(applications: AppProxyEntry.legacyDefaults))
+        XCTAssertThrowsError(try AppProxyProcessRoutes(["chatgpt": ["relative/path"]]).validate(applications: AppProxyEntry.legacyDefaults))
     }
     func testLegacySettingsMigrateAndExplicitEmptyApplicationListStaysEmpty() throws {
         let legacy = try JSONDecoder().decode(AppProxySettings.self, from: Data(#"{"routes":{}}"#.utf8))
@@ -325,7 +325,7 @@ final class AppProxyProfileTests: XCTestCase {
             """#.utf8)
         )
         let routes = AppProxySettings(routes: Dictionary(uniqueKeysWithValues:
-            AppProxyApplication.allCases.map { ($0.rawValue, "Proxy") }))
+            AppProxyApplication.allCases.map { ($0.rawValue, "Proxy") }), applications: AppProxyEntry.legacyDefaults)
         XCTAssertNoThrow(try routes.validateRoutes(in: snapshot))
     }
 

@@ -3,7 +3,7 @@ import MihomoControl
 @testable import MihomoBoxUI
 
 private final class RoutingGateway: AppProxyRoutingGateway, @unchecked Sendable {
-    var state = AppProxyRoutingState(settings: .init(routes: Dictionary(uniqueKeysWithValues: AppProxyApplication.allCases.map { ($0.rawValue, "one") })), profile: "test.yaml", revision: "1")
+    var state = AppProxyRoutingState(settings: .init(routes: Dictionary(uniqueKeysWithValues: AppProxyEntry.defaults.map { ($0.id, "one") })), profile: "test.yaml", revision: "1")
     var writes = 0
     var fail = false
     var failRead = false
@@ -226,7 +226,7 @@ final class AppProxyStoreTests: XCTestCase {
         service.enabled = true; model.configure(service); await model.refresh()
         model.removeApplication("claude"); await model.addApplication()
         XCTAssertEqual(model.draft.applications, AppProxyEntry.defaults)
-        model.draft.applications.removeLast(); model.draft.routes.removeValue(forKey: "claude_cli")
+        model.draft.applications.removeLast(); model.draft.routes.removeValue(forKey: "claude")
         do { try await model.apply(); XCTFail("Must disable before editing applications") } catch {}
         XCTAssertEqual(gateway.state.settings.applications, AppProxyEntry.defaults)
     }
@@ -320,8 +320,8 @@ final class AppProxyStoreTests: XCTestCase {
         XCTAssertFalse(model.refreshing)
         XCTAssertFalse(model.busy)
         model.selectTarget("two", for: "claude")
-        model.removeApplication("codex_cli")
-        service.scanContinuation?.resume(returning: [.init(applicationID: "codex_cli", path: "/old", signingIdentifier: "old", teamIdentifier: nil, requirement: "old")])
+        model.removeApplication("chatgpt")
+        service.scanContinuation?.resume(returning: [.init(applicationID: "chatgpt", path: "/old", signingIdentifier: "old", teamIdentifier: nil, requirement: "old")])
         await refresh.value
         XCTAssertEqual(model.draft.routes["claude"], "two")
         XCTAssertTrue(model.extensionStatus.executables.isEmpty)
@@ -329,7 +329,7 @@ final class AppProxyStoreTests: XCTestCase {
         service.suspendScan = false
         await model.refreshExecutables()
         XCTAssertTrue(model.hasExecutableInventory)
-        XCTAssertNil(model.extensionStatus.targetCounts["codex_cli"])
+        XCTAssertNil(model.extensionStatus.targetCounts["chatgpt"])
     }
 
     @MainActor func testMutationRejectsOverlappingActionsAndDraftChanges() async throws {
@@ -341,9 +341,9 @@ final class AppProxyStoreTests: XCTestCase {
         let enable = Task { try await model.setEnabled(true) }
         await fulfillment(of: [started], timeout: 2)
         XCTAssertTrue(model.busy)
-        model.selectTarget("two", for: "claude"); model.removeApplication("codex_cli")
+        model.selectTarget("two", for: "claude"); model.removeApplication("chatgpt")
         XCTAssertEqual(model.draft.routes["claude"], "one")
-        XCTAssertEqual(model.draft.applications.count, 4)
+        XCTAssertEqual(model.draft.applications.count, 2)
         do { try await model.apply(); XCTFail("Concurrent write must fail") } catch {}
         service.enableContinuation?.resume()
         try await enable.value

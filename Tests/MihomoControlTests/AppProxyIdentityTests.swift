@@ -4,6 +4,20 @@ import Darwin
 @testable import MihomoControl
 
 final class AppProxyIdentityTests: XCTestCase {
+    func testTeamDefaultsAndLegacyRouteMigration() throws {
+        let defaults = AppProxySettings()
+        XCTAssertEqual(defaults.applications.map(\.id), ["chatgpt", "claude"])
+        XCTAssertEqual(defaults.applications.flatMap(\.teamIdentifiers), ["2DC432GLL2", "Q6L2SF6YDW"])
+        XCTAssertNoThrow(try defaults.validate())
+        let oldRoutes = Dictionary(uniqueKeysWithValues: AppProxyApplication.allCases.map { ($0.rawValue, "Proxy") })
+        let data = try JSONSerialization.data(withJSONObject: ["routes": oldRoutes])
+        let legacy = try JSONDecoder().decode(AppProxySettings.self, from: data)
+        XCTAssertEqual(legacy.applications, AppProxyEntry.legacyDefaults)
+        XCTAssertEqual(legacy.routes, oldRoutes)
+        XCTAssertNoThrow(try legacy.validate())
+        XCTAssertEqual(try JSONDecoder().decode(AppProxySettings.self, from: JSONEncoder().encode(legacy)), legacy)
+        XCTAssertEqual(try JSONDecoder().decode(AppProxySettings.self, from: JSONEncoder().encode(defaults)), defaults)
+    }
     func testCodeAccessScopeNeverIncludesVersionOrDataParent() throws {
         let root = "/Users/test/Library/Application Support/Claude/claude-code/2.1/hash/claude.app"
         XCTAssertEqual(try AppProxyCodeIdentity.accessURL(for: root + "/Contents/MacOS/claude").path, root)
@@ -123,7 +137,7 @@ final class AppProxyIdentityTests: XCTestCase {
                                                           scopes: [directory, directory], scopeGrants: [Data([2]), Data([2])]).validate())
     }
     func testSettingsScopesAreValidatedAndOwnedByOneApplication() throws {
-        var entry = AppProxyEntry.defaults[1]
+        var entry = AppProxyEntry.legacyDefaults[1]
         entry.teamIdentifiers = ["2DC432GLL2"]; entry.directories = ["/Users/me/.codex"]
         let decoded = try JSONDecoder().decode(AppProxyEntry.self, from: JSONEncoder().encode(entry))
         XCTAssertEqual(decoded, entry)
@@ -134,11 +148,11 @@ final class AppProxyIdentityTests: XCTestCase {
         XCTAssertTrue(legacy.capturesLaunchedCLIs, "older settings capture launched CLIs")
         var direct = entry; direct.capturesLaunchedCLIs = false
         XCTAssertEqual(try JSONDecoder().decode(AppProxyEntry.self, from: JSONEncoder().encode(direct)), direct)
-        var other = AppProxyEntry.defaults[2]
+        var other = AppProxyEntry.legacyDefaults[2]
         other.teamIdentifiers = ["2DC432GLL2"]
         XCTAssertThrowsError(try AppProxySettings(applications: [entry, other]).validate())
         for (teams, directories) in [(["2dc432gll2"], []), ([], ["/"]), ([], ["relative"]), (Array(repeating: "2DC432GLL2", count: 2), [])] {
-            var invalid = AppProxyEntry.defaults[1]
+            var invalid = AppProxyEntry.legacyDefaults[1]
             invalid.teamIdentifiers = teams; invalid.directories = directories
             XCTAssertThrowsError(try AppProxySettings(applications: [invalid]).validate(), "\(teams) \(directories)")
         }

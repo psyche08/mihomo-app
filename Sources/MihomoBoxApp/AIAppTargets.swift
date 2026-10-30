@@ -37,6 +37,9 @@ struct AIAppTargets {
     init(ruleSet: String = "all", requireAll: Bool = true, applications: [AppProxyEntry] = AppProxyEntry.defaults, homeDirectory: URL? = nil, applicationDirectories: [URL]? = nil) throws {
         try AppProxySettings(applications: applications).validate()
         let selected = Set(applications.map(\.id))
+        let teamOwners = Dictionary(uniqueKeysWithValues: applications.flatMap { entry in
+            entry.teamIdentifiers.map { ($0, entry.id) }
+        })
         let fm = FileManager.default
         let home = homeDirectory ?? fm.homeDirectoryForCurrentUser
         var issues: [DiscoveryIssue] = []
@@ -91,6 +94,7 @@ struct AIAppTargets {
         for (name, category, team) in [("ChatGPT.app", "chatgpt", "2DC432GLL2"),
                                         ("Codex.app", "chatgpt", "2DC432GLL2"),
                                         ("Claude.app", "claude", "Q6L2SF6YDW")] {
+            let category = teamOwners[team] ?? category
             guard selected.contains(category) else { continue }
             for base in applicationDirectories ?? [URL(fileURLWithPath: "/Applications"), home.appendingPathComponent("Applications")] {
                 scan(base.appendingPathComponent(name), category: category, team: team)
@@ -106,12 +110,14 @@ struct AIAppTargets {
         // Desktop downloads and remote runtimes are independently versioned code trees.
         // Do not auto-trust remote/srv ad-hoc servers; explicit enrollment pins their hash.
         for (relative, category) in Self.claudeCodeRoots {
+            let category = teamOwners["Q6L2SF6YDW"] ?? category
             guard selected.contains(category) else { continue }
             scan(home.appendingPathComponent(relative), category: category, team: "Q6L2SF6YDW",
                  identifier: "com.anthropic.claude-code")
         }
         for (name, category, team) in [("codex", "codex_cli", "2DC432GLL2"),
                                         ("claude", "claude_cli", "Q6L2SF6YDW")] {
+            let category = teamOwners[team] ?? category
             guard selected.contains(category) else { continue }
             for base in ["/opt/homebrew/bin", "/usr/local/bin", home.appendingPathComponent(".local/bin").path] {
                 add(URL(fileURLWithPath: base).appendingPathComponent(name), category: category, team: team,
@@ -174,9 +180,7 @@ struct AIAppTargets {
         guard !duplicate else { throw Failure.duplicateTarget }
         let tools = found.values.filter { toolCategories.contains($0.category) || $0.id == "com.anthropic.claude-code" || explicitToolPaths.contains($0.path) }.sorted { $0.path < $1.path }
         if requireAll {
-        guard found.values.contains(where: { $0.category == "chatgpt" }),
-              found.values.contains(where: { $0.category == "claude" }),
-              Set(tools.map(\.category)).isSuperset(of: ["codex_cli", "claude_cli"]) else { throw Failure.missingTarget }
+            guard Set(found.values.map(\.category)).isSuperset(of: selected) else { throw Failure.missingTarget }
         }
         // The provider receives every exact version/path as a separate record.
         // NE keeps one app rule per signing identifier, so the OS gets one rule each.

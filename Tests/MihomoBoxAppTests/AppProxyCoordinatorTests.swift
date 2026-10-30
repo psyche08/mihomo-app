@@ -11,7 +11,7 @@ final class AppProxyCoordinatorTests: XCTestCase {
         let curl = try XCTUnwrap(discovered.targets.first { $0.path == "/usr/bin/curl" })
         XCTAssertEqual(curl.category, entry.id)
         XCTAssertTrue(discovered.rules.contains { $0.matchTools?.contains { $0.matchSigningIdentifier == curl.id } == true })
-        var builtin = AppProxyEntry.defaults[0]
+        var builtin = AppProxyEntry.legacyDefaults[0]
         builtin.executablePaths = ["/bin/ls"]
         XCTAssertThrowsError(try AIAppTargets(requireAll: false, applications: [entry, builtin]))
         for path in ["/etc/hosts", "/missing-cli", "/usr/bin"] {
@@ -54,7 +54,7 @@ final class AppProxyCoordinatorTests: XCTestCase {
         // An unmodified copy of Apple's code would make its OS rule capture the system original.
         try fm.createDirectory(at: root.appendingPathComponent("apple"), withIntermediateDirectories: true)
         try fm.copyItem(atPath: "/usr/bin/curl", toPath: root.appendingPathComponent("apple/curl").path)
-        var entry = AppProxyEntry.defaults[1]
+        var entry = AppProxyEntry.legacyDefaults[1]
         entry.directories = [root.path]
         let discovered = try AIAppTargets(requireAll: false, applications: [entry])
         let copies = discovered.targets.filter { $0.path.hasPrefix(root.path + "/") }
@@ -69,8 +69,8 @@ final class AppProxyCoordinatorTests: XCTestCase {
         XCTAssertEqual(Set(shared.matchTools?.compactMap(\.matchPath) ?? []).isSuperset(of: copies.map(\.path)), true)
 
         // Two applications owning copies of one identifier still publish a single OS rule.
-        var first = AppProxyEntry.defaults[1]; first.directories = [root.appendingPathComponent("a").path]
-        var second = AppProxyEntry.defaults[3]; second.directories = [root.appendingPathComponent("b").path]
+        var first = AppProxyEntry.legacyDefaults[1]; first.directories = [root.appendingPathComponent("a").path]
+        var second = AppProxyEntry.legacyDefaults[3]; second.directories = [root.appendingPathComponent("b").path]
         let one = try AIAppTargets(requireAll: false, applications: [first])
         let two = try AIAppTargets(requireAll: false, applications: [second])
         XCTAssertNotNil(one.rules.first { $0.matchSigningIdentifier == copies[0].id }?.matchPath)
@@ -101,7 +101,7 @@ final class AppProxyCoordinatorTests: XCTestCase {
         sign.arguments = ["--force", "--sign", "-", "--identifier", "dev.linsheng.mihomo.link-fixture", tool.path]
         try sign.run(); sign.waitUntilExit()
         XCTAssertEqual(sign.terminationStatus, 0)
-        var entry = AppProxyEntry.defaults[1]
+        var entry = AppProxyEntry.legacyDefaults[1]
         entry.directories = [root.path]
         let discovered = try AIAppTargets(requireAll: false, applications: [entry])
         XCTAssertTrue(discovered.targets.contains { $0.path == tool.path }, "code behind a version link is discovered")
@@ -140,7 +140,7 @@ extension AppProxyCoordinatorTests {
         try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: home) }
         try FileManager.default.createSymbolicLink(at: parent.appendingPathComponent("claude-code"), withDestinationURL: URL(fileURLWithPath: "/usr/bin"))
-        let discovered = try AIAppTargets(requireAll: false, applications: [AppProxyEntry.defaults.first { $0.id == "claude" }!], homeDirectory: home, applicationDirectories: [])
+        let discovered = try AIAppTargets(requireAll: false, applications: [AppProxyEntry.legacyDefaults.first { $0.id == "claude" }!], homeDirectory: home, applicationDirectories: [])
         XCTAssertFalse(discovered.targets.contains { $0.category == "claude" })
         XCTAssertTrue(discovered.issues.contains { $0.failure == .escapedPath })
     }

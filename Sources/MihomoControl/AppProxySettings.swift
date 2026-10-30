@@ -57,6 +57,10 @@ public struct AppProxyEntry: Codable, Equatable, Sendable, Identifiable {
         capturesLaunchedCLIs = try values.decodeIfPresent(Bool.self, forKey: .capturesLaunchedCLIs) ?? true
     }
     public static var defaults: [Self] {
+        [.init(id: "chatgpt", title: "OpenAI (ChatGPT / Codex)", port: 17971, teamIdentifiers: ["2DC432GLL2"]),
+         .init(id: "claude", title: "Anthropic (Claude)", port: 17973, teamIdentifiers: ["Q6L2SF6YDW"])]
+    }
+    public static var legacyDefaults: [Self] {
         AppProxyApplication.allCases.map { .init(id: $0.rawValue, title: $0.title, port: $0.port) }
     }
 }
@@ -88,7 +92,7 @@ public struct AppProxySettings: Codable, Equatable, Sendable {
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         routes = try values.decode([String: String].self, forKey: .routes)
-        applications = try values.decodeIfPresent([AppProxyEntry].self, forKey: .applications) ?? AppProxyEntry.defaults
+        applications = try values.decodeIfPresent([AppProxyEntry].self, forKey: .applications) ?? (routes.isEmpty ? AppProxyEntry.defaults : AppProxyEntry.legacyDefaults)
         bypass = try values.decodeIfPresent(AppProxyBypassPolicy.self, forKey: .bypass) ?? .init()
     }
     public func validateRoutes(in snapshot: ControllerRouteSnapshot) throws {

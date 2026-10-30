@@ -2,20 +2,52 @@
 
 ## Current release policy
 
-Production release artifacts originate only from Xcode Cloud after the 0.9.1
-certificate bridge. Xcode Cloud owns the release build, Developer ID signing,
-notarization, ticket attachment and App packaging. Starting with 0.9.3, GitHub
-publishes that exact ticket-attached ZIP byte-for-byte plus a locally generated
-signed Sparkle appcast. A local build, re-sign or repack must never be
-substituted. Local compilation, tests and validation use ad-hoc signing only.
+Starting with **1.1.0**, production signing and notarization run locally through
+`scripts/release-local.zsh`. Xcode archives and exports the existing project,
+including the sandboxed code-access XPC service and App Proxy system extension.
+The export pins published Developer ID leaf
+`2E1EF531C972A15F5B5C58855001FA6FA1186383` and Team ID `89LGY6BD53`.
+The host and extension require valid installed provisioning profiles. The
+keychain must already be available; no script unlocks it.
 
-Version 0.9.1 is the sole migration exception. It may reuse only the already
-built App bound to source commit `acb6f380c76d5d5a8bd96d208ce6a5e3947cdb4f`,
-signed by published Developer ID leaf
-`2E1EF531C972A15F5B5C58855001FA6FA1186383`. Its exact pre-staple ZIP is
-notarized through `tools/notarytool-rs`; packaging and GitHub publication may
-then run locally. The exception does not authorize rebuilding or re-signing
-the accepted App and expires immediately after 0.9.1.
+From a clean committed checkout, with pinned release tools already installed:
+
+```bash
+RELEASE_BUILD_NUMBER=2026103001 PREVIOUS_RELEASE_BUILD_NUMBER=<latest-published-build> \
+NOTARY_KEYCHAIN_PROFILE=<existing-profile> ./scripts/release-local.zsh prepare
+NOTARY_KEYCHAIN_PROFILE=<existing-profile> ./scripts/release-local.zsh resume
+```
+
+Use an increasing numeric build number, greater than the latest published
+Sparkle build (including Cloud builds). `prepare` runs validation, archives,
+exports, seals the signed ZIP, notarizes, staples and generates the two-file
+release set. Logs and submission state are under
+`dist/.release-state/local-VERSION-COMMIT`. `resume` never rebuilds or re-signs;
+it verifies the sealed submission digest and queries the saved submission ID.
+An ambiguous submission fails closed for manual reconciliation. A failure before
+export requires inspecting the logs and explicitly preserving/relocating that
+failed state before starting a new prepare; resume cannot build a missing App.
+
+The final gate uses `prepare-cloud-release.zsh --local-zip` with the local
+certificate pin. The historical `--cloud-zip` path retains its Cloud pin.
+Both verify nested signatures, provisioning, Gatekeeper, the ticket, bundle and
+source identity, and the unchanged Sparkle public key. GitHub publication is a
+separate explicit operation via `release-github.zsh prepare` then `publish`.
+The existing ZIP plus signed `appcast.xml` format and feed URL remain unchanged.
+
+Compatibility: keep both published local and Cloud leaves in the authenticated
+XPC migration allowlist; never replace them with Team ID-only authentication.
+Sparkle 0.8+ clients retain their key and feed, and 0.7 clients retain the
+historical legacy bridge. Existing App Proxy settings keep their routes and
+consent; fresh settings use OpenAI and Anthropic Team ID scopes. Live acceptance
+must cover a Cloud-signed older App/daemon upgrading to this local leaf, and
+operator-approved daemon repair. Preparing artifacts does not authorize
+installation or publication.
+
+The sections below describing Cloud production ownership and the five-file
+local release pipeline document **historical releases before 1.1.0**. Use the
+entry point above for new releases; `release-product.zsh` / `release-macos.sh`
+remain historical recovery tooling.
 
 ## Pinned Inputs
 
@@ -38,7 +70,7 @@ never linked, copied into the App, or executed at runtime.
 
 Local compilation, tests and ad-hoc validation may be run by an agent, outside
 the sandbox when required. This does not authorize installation or publication.
-Production signing, notarization and packaging remain exclusive to Xcode Cloud.
+Production signing, notarization and packaging use the local entry point above.
 
 From the repository root, the operator runs:
 
@@ -425,5 +457,5 @@ its exact App Proxy extension identifier before creating a corrected record.
 Local `build-macos-app.sh` compiles the same provider with `MAIN_APP_PROXY` and
 includes an unsigned development extension. It cannot be activated as a
 production system extension. The top-level five executable contract remains
-unchanged; the extension executable lives in its own nested bundle. No local
-Developer ID signing, notarization, installation or publication is added.
+unchanged; the extension executable lives in its own nested bundle. Production local releases use the Xcode archive/export path above so all nested
+code receives its production entitlements and provisioning.

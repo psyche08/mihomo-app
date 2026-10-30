@@ -77,3 +77,16 @@ implementation context at once.
 
 This project is MIT licensed. MetaCubeXD and Mihomo remain independent upstream
 projects; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+### 1.1.0 defaults and local releases
+
+Fresh App Proxy settings route OpenAI (`2DC432GLL2`, ChatGPT/Codex) and Anthropic
+(`Q6L2SF6YDW`, Claude) by verified Team ID. Choose a proxy node and approve the
+code scope before activation. Existing saved routes and approvals are preserved.
+Team discovery covers Applications, conventional CLI locations and the known
+vendor runtime locations; code elsewhere needs an explicit directory scope.
+
+Production signing/notarization now uses `scripts/release-local.zsh prepare`
+and `resume`. See [Build and Release](docs/build-release.md) for credentials,
+profiles, increasing build numbers and separate GitHub publication. Historical
+Sparkle keys, certificate compatibility and the ZIP/appcast format are retained.

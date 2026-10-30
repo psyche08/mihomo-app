@@ -176,6 +176,14 @@ readonly VERSION="$(/usr/bin/tr -d '[:space:]' < "$ROOT/VERSION")"
 [[ "$VERSION" =~ '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' ]] ||
   fail "VERSION must contain one strict semantic version"
 
+# Modern releases use the local Xcode export pipeline, never the historical DMG path.
+typeset release_major="${VERSION%%.*}"
+typeset release_rest="${VERSION#*.}"
+typeset release_minor="${release_rest%%.*}"
+if (( release_major > 1 || (release_major == 1 && release_minor >= 1) )); then
+  fail "For 1.1.0+, use scripts/release-local.zsh prepare|resume, then release-github.zsh prepare|publish"
+fi
+
 typeset EXPECTED_COMMIT=""
 typeset EXPECTED_BRANCH=""
 

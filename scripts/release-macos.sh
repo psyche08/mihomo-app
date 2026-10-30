@@ -4,6 +4,17 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT/scripts/release-common.sh"
 
+# Keep the prebuilt DMG/legacy-feed pipeline limited to historical releases.
+RELEASE_VERSION="$(tr -d '[:space:]' < "$ROOT/VERSION")"
+RELEASE_MAJOR="${RELEASE_VERSION%%.*}"
+RELEASE_REST="${RELEASE_VERSION#*.}"
+RELEASE_MINOR="${RELEASE_REST%%.*}"
+if (( RELEASE_MAJOR > 1 || (RELEASE_MAJOR == 1 && RELEASE_MINOR >= 1) )); then
+  echo "For 1.1.0+, use scripts/release-local.zsh prepare|resume" >&2
+  exit 1
+fi
+
+
 RESUME_RELEASE=false
 APP_INPUT="$ROOT/build/MihomoBox.app"
 PROVENANCE_INPUT=""

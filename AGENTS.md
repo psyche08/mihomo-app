@@ -25,17 +25,14 @@ Enhanced TUN privilege, DHCP-aware DNS forwarding, and macOS Global DNS.
 5. Pin and checksum bundled upstream artifacts. Retain third-party licenses.
 6. Validate Swift, the pinned Sparkle package and MetaCubeXD visual reference,
    installer dry-run, and the final `.app` bundle before release.
-7. Production release Apps are built, Developer ID signed, notarized and
-   ticket-attached only by Xcode Cloud. Starting with 0.9.3, GitHub publishes
-   the exact Cloud `MihomoBox.app.zip` bytes under the versioned ZIP name plus
-   a locally generated signed Sparkle `appcast.xml`; never extract, repackage,
-   re-sign, notarize or staple that App locally. The only migration exception
-   is version 0.9.1: it may reuse the already-built App bound to commit
-   `acb6f38`, sign with the published Developer ID leaf, notarize through
-   `tools/notarytool-rs`, package locally and publish to GitHub. That exception
-   must not rebuild or re-sign the accepted App and expires after 0.9.1. Local
-   development may compile, test and validate with ad-hoc signing. Compilation
-   or validation never implies authorization to publish or deploy.
+7. Starting with 1.1.0, production Apps are built and Developer ID signed
+   locally using the Xcode project, notarized and stapled locally through
+   `scripts/release-local.zsh`. Preserve the published local certificate,
+   Sparkle key, bundle identifiers and migration certificate allowlist.
+   Publish the signed, ticket-attached ZIP and signed appcast as one release.
+   Historical Cloud releases retain their exact original bytes; the frozen
+   0.9.1 bridge remains historical only. Compilation and validation do not
+   authorize installation or publication.
 8. Never execute `security unlock-keychain`, directly or indirectly. Keychain
    availability is an operator-controlled prerequisite; scripts and agents
    must fail closed instead of unlocking it.
