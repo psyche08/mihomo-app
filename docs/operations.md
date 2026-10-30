@@ -39,6 +39,28 @@ mihomoboxctl app-proxy on
 mihomoboxctl app-proxy off
 ```
 
+The menu and App Proxy page share one host coordinator. Preference/session
+reads are serialized with enable/disable and authorization renewal, including
+headless CLI requests; diagnostic reads may wait for an active operation.
+A transient empty provider reply can be retried twice for status, flow-owner
+reads or renewal. Prepare/commit/abort, validation failures and timeouts are
+never replayed by this recovery. Startup and TUN decisions precede App Proxy
+polling, and failed menu actions retain a visible error.
+
+All three switches persist their requested state independently. TUN and System
+Proxy choices live in root-owned `daemon.json`; App Proxy uses the existing
+per-user preference and retains its authorized scope selection. Menu checkmarks
+show these saved choices, while runtime health and connection status report
+actual operation. A failed transition does not erase the choice. Legacy TUN
+configurations preserve their last state; absent System Proxy intent defaults
+to off and does not adopt another application's proxy settings.
+
+Daemon startup and signed `start` restore the saved TUN/System Proxy choices.
+App startup reconciles mismatches and immediately restores App Proxy using the
+signed host's bounded on/off action. Temporary shutdown restores owned system
+proxy settings without clearing the saved choice; a later startup reapplies it.
+Turning a switch off saves off before attempting the runtime transition.
+
 These switches are independent of **Enhanced TUN**. When checking combined
 App Proxy + TUN operation, keep System Proxy off and distinguish the two
 application-specific inbounds from `DEFAULT-TUN`. A Team ID application's

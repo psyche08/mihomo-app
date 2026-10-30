@@ -271,3 +271,44 @@ extension AppProxyCoordinatorTests {
         XCTAssertEqual(try launcherTools(direct), ["/bin/ls"])
     }
 }
+
+
+extension AppProxyCoordinatorTests {
+    @MainActor func testTransientEmptyReplyRecoversOnlyForIdempotentRequests() async throws {
+        for action in [AppProxyRuntimeMessage.Action.status, .flowOwners, .renew] {
+            var calls = 0, pauses = 0
+            let value = try await AppProxyCoordinator.withProviderReplyRetry(action: action, pause: { pauses += 1 }) {
+                calls += 1
+                if calls == 1 { throw AppProxyCoordinator.ProviderTransportFailure.emptyReply }
+                return "verified"
+            }
+            XCTAssertEqual(value, "verified"); XCTAssertEqual(calls, 2); XCTAssertEqual(pauses, 1)
+        }
+        for action in [AppProxyRuntimeMessage.Action.prepare, .commit, .abort] {
+            var calls = 0, pauses = 0
+            do {
+                let _: Int = try await AppProxyCoordinator.withProviderReplyRetry(action: action, pause: { pauses += 1 }) {
+                    calls += 1; throw AppProxyCoordinator.ProviderTransportFailure.emptyReply
+                }
+                XCTFail("An unobserved publication must not be replayed")
+            } catch { XCTAssertEqual(error as? AppProxyCoordinator.ProviderTransportFailure, .emptyReply) }
+            XCTAssertEqual(calls, 1); XCTAssertEqual(pauses, 0)
+        }
+    }
+    @MainActor func testProviderReplyRetryIsBoundedAndNeverRetriesValidationOrTimeoutFailures() async {
+        let failures: [Error] = [AppProxyCoordinator.ProviderTransportFailure.emptyReply,
+            AppProxyCoordinator.ProviderTransportFailure.oversizedReply,
+            AppProxyIdentityFailure.signature, AppProxyIdentityFailure.providerTimeout]
+        for failure in failures {
+            var calls = 0, pauses = 0
+            do {
+                let _: Int = try await AppProxyCoordinator.withProviderReplyRetry(action: .status, pause: { pauses += 1 }) {
+                    calls += 1; throw failure
+                }
+                XCTFail("Failure must propagate")
+            } catch {}
+            let empty = (failure as? AppProxyCoordinator.ProviderTransportFailure) == .emptyReply
+            XCTAssertEqual(calls, empty ? 3 : 1); XCTAssertEqual(pauses, empty ? 2 : 0)
+        }
+    }
+}

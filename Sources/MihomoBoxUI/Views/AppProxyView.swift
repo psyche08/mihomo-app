@@ -15,7 +15,7 @@ struct AppProxyView: View {
 
     private var busy: Bool { dashboard.configAction != nil || model.busy }
     private var canAdd: Bool {
-        !busy && !model.refreshing && !model.extensionStatus.enabled && model.routing != nil && model.draft.applications.count < 32
+        !busy && !model.refreshing && !model.extensionStatus.requiresDisableBeforeEditing && model.routing != nil && model.draft.applications.count < 32
     }
     private var changeSummary: String {
         if busy { return "Updating App Proxy…" }
@@ -41,7 +41,7 @@ struct AppProxyView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("These four legacy presets can be merged into OpenAI and Anthropic Team ID policies. Your proxy nodes and network bypasses are kept.")
                         Button("Use Team ID Defaults") { model.restoreDefaults() }
-                            .disabled(busy || model.refreshing || model.extensionStatus.enabled)
+                            .disabled(busy || model.refreshing || model.extensionStatus.requiresDisableBeforeEditing)
                         Text("Turn App Proxy off, apply the change, then review code access when enabling it.").font(.caption).foregroundStyle(.secondary)
                     }.padding(16)
                 }
@@ -95,7 +95,7 @@ struct AppProxyView: View {
             }
             Spacer()
             Button("Edit Bypass…") { editingBypass = true }
-                .disabled(busy || model.refreshing || model.extensionStatus.enabled || model.routing == nil)
+                .disabled(busy || model.refreshing || model.extensionStatus.requiresDisableBeforeEditing || model.routing == nil)
                 .help("Turn off App Proxy before editing network bypasses")
         }
         .padding(12).background(DashboardTheme.surface).clipShape(RoundedRectangle(cornerRadius: 8))
@@ -162,11 +162,11 @@ struct AppProxyView: View {
                     .accessibilityLabel("Search applications")
                 Button("Add App or CLI…", systemImage: "plus") { newPath = ""; addingPath = true }
                     .disabled(!canAdd)
-                    .help(model.extensionStatus.enabled ? "Turn off App Proxy to change the application list" : "Add a signed app or CLI executable, or drag one onto the list")
+                    .help(model.extensionStatus.requiresDisableBeforeEditing ? "Turn off App Proxy to change the application list" : "Add a signed app or CLI executable, or drag one onto the list")
                     .popover(isPresented: $addingPath, arrowEdge: .bottom) { addPathPopover }
                 Menu {
                     Button("Restore Team ID Defaults") { model.restoreDefaults() }
-                        .disabled(model.extensionStatus.enabled || model.routing == nil || model.refreshing)
+                        .disabled(model.extensionStatus.requiresDisableBeforeEditing || model.routing == nil || model.refreshing)
                     Button("Rescan Signed Executables") { Task { await model.refreshExecutables(force: true) } }
                         .disabled(model.scanning)
                     if !model.groups.isEmpty {
@@ -248,8 +248,8 @@ struct AppProxyView: View {
             .help("Used when a profile rule chooses a proxy in Rule mode")
             Button(role: .destructive) { model.removeApplication(app.id) } label: { Image(systemName: "trash") }
                 .buttonStyle(.borderless)
-                .disabled(busy || model.refreshing || model.extensionStatus.enabled)
-                .help(model.extensionStatus.enabled ? "Turn off App Proxy to remove an entry" : "Remove routing; keep the installed application")
+                .disabled(busy || model.refreshing || model.extensionStatus.requiresDisableBeforeEditing)
+                .help(model.extensionStatus.requiresDisableBeforeEditing ? "Turn off App Proxy to remove an entry" : "Remove routing; keep the installed application")
                 .accessibilityLabel("Remove \(app.title)")
         }
         .padding(.horizontal, 14).padding(.vertical, 12)
@@ -293,7 +293,7 @@ struct AppProxyView: View {
                 Button("Apply Changes") { Task { await dashboard.applyAppProxyRoutes() } }
                     .buttonStyle(.borderedProminent)
                     .disabled(busy || model.refreshing || model.hasConflict || model.routing == nil || !model.valid || !model.dirty)
-                if model.extensionStatus.enabled {
+                if model.extensionStatus.requestedEnabled || model.extensionStatus.enabled {
                     Button("Turn Off") { Task { await dashboard.setAppProxyEnabled(false) } }
                         .disabled(busy || model.refreshing)
                         .accessibilityLabel("Disable App Proxy")
@@ -541,7 +541,7 @@ private struct AppProxyExecutableEditor: View {
         _directories = State(initialValue: application.directories.joined(separator: "\n"))
         _capturesLaunchedCLIs = State(initialValue: application.capturesLaunchedCLIs)
     }
-    private var locked: Bool { model.busy || model.refreshing || model.extensionStatus.enabled || model.hasConflict }
+    private var locked: Bool { model.busy || model.refreshing || model.extensionStatus.requiresDisableBeforeEditing || model.hasConflict }
     private func lines(_ text: String) -> [String] {
         text.components(separatedBy: .newlines).map(AppProxyStore.normalizedPath).filter { !$0.isEmpty }
     }
@@ -582,7 +582,7 @@ private struct AppProxyExecutableEditor: View {
                 }
                 .padding(.trailing, 6)
             }
-            if model.extensionStatus.enabled {
+            if model.extensionStatus.requiresDisableBeforeEditing {
                 Label("Turn off App Proxy before editing this policy.", systemImage: "info.circle")
                     .font(.callout).foregroundStyle(.orange)
             }

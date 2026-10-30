@@ -104,6 +104,9 @@ struct TraySnapshot: Equatable, Sendable {
   var enhancedTUN: Bool
   var systemProxyEnabled: Bool? = nil
   var appProxyEnabled: Bool? = nil
+  var enhancedTUNRequested: Bool? = nil
+  var systemProxyRequested: Bool? = nil
+  var appProxyRequested: Bool? = nil
   var tunOperationInFlight: Bool
   var mutationOperationInFlight: Bool
   var networkHealthy: Bool?
@@ -142,7 +145,10 @@ struct TraySnapshot: Equatable, Sendable {
     enhancedTUNActionAvailable: Bool = true,
     actionError: String? = nil,
     systemProxyEnabled: Bool? = nil,
-    appProxyEnabled: Bool? = nil
+    appProxyEnabled: Bool? = nil,
+    enhancedTUNRequested: Bool? = nil,
+    systemProxyRequested: Bool? = nil,
+    appProxyRequested: Bool? = nil
   ) {
     self.daemonCompatibility = daemonCompatibility
     self.controllerReachable = controllerReachable
@@ -165,8 +171,15 @@ struct TraySnapshot: Equatable, Sendable {
     self.enhancedTUNActionAvailable = enhancedTUNActionAvailable
     self.systemProxyEnabled = systemProxyEnabled
     self.appProxyEnabled = appProxyEnabled
+    self.enhancedTUNRequested = enhancedTUNRequested
+    self.systemProxyRequested = systemProxyRequested
+    self.appProxyRequested = appProxyRequested
     self.actionError = actionError
   }
+
+  var tunSwitchOn: Bool { enhancedTUNRequested ?? enhancedTUN }
+  var systemProxySwitchOn: Bool? { systemProxyRequested ?? systemProxyEnabled }
+  var appProxySwitchOn: Bool? { appProxyRequested ?? appProxyEnabled }
 
   var networkStatusTitle: String {
     if let actionError, !actionError.isEmpty {
@@ -250,6 +263,9 @@ struct TraySnapshot: Equatable, Sendable {
       enhancedTUN: enhancedTUN,
       systemProxyEnabled: systemProxyEnabled,
       appProxyEnabled: appProxyEnabled,
+      enhancedTUNRequested: enhancedTUNRequested,
+      systemProxyRequested: systemProxyRequested,
+      appProxyRequested: appProxyRequested,
       tunOperationInFlight: tunOperationInFlight,
       mutationOperationInFlight: mutationOperationInFlight,
       networkHealthy: networkHealthy,
@@ -284,6 +300,9 @@ struct TrayMenuSignature: Equatable, Sendable {
   var enhancedTUN: Bool
   var systemProxyEnabled: Bool? = nil
   var appProxyEnabled: Bool? = nil
+  var enhancedTUNRequested: Bool? = nil
+  var systemProxyRequested: Bool? = nil
+  var appProxyRequested: Bool? = nil
   var tunOperationInFlight: Bool
   var mutationOperationInFlight: Bool
   var networkHealthy: Bool?

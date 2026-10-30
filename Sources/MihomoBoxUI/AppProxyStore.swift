@@ -59,6 +59,8 @@ public struct AppProxyLaunchHost: Equatable, Sendable, Identifiable {
 public struct AppProxyExtensionStatus: Equatable, Sendable {
     public var available: Bool
     public var enabled: Bool
+    public var requestedEnabled: Bool
+    public var requiresDisableBeforeEditing: Bool { requestedEnabled || enabled }
     public var connected: Bool
     public var requiresReactivation: Bool
     public var discoveryIssues: [String: Int]
@@ -71,8 +73,9 @@ public struct AppProxyExtensionStatus: Equatable, Sendable {
     public var executables: [AppProxyExecutable]
     public var launchHosts: [AppProxyLaunchHost] = []
     public init(available: Bool, enabled: Bool = false, connected: Bool = false, requiresReactivation: Bool = false, targetCounts: [String: Int] = [:], executables: [AppProxyExecutable] = [], identityReady: Bool = false, verifiedTargetCount: Int = 0,
-                identityIssue: String? = nil, diagnostics: AppProxyRuntimeStatus? = nil, discoveryIssues: [String: Int] = [:], applications: [String: AppProxyApplicationStatus] = [:]) {
+                identityIssue: String? = nil, diagnostics: AppProxyRuntimeStatus? = nil, discoveryIssues: [String: Int] = [:], applications: [String: AppProxyApplicationStatus] = [:], requestedEnabled: Bool? = nil) {
         self.applications = applications
+        self.requestedEnabled = requestedEnabled ?? enabled
         self.available = available; self.enabled = enabled; self.connected = connected; self.targetCounts = targetCounts
         self.requiresReactivation = requiresReactivation
         self.executables = executables
@@ -84,6 +87,7 @@ public struct AppProxyExtensionStatus: Equatable, Sendable {
 
 @MainActor
 public protocol DashboardAppProxyService: AnyObject {
+    var requestedState: Bool? { get }
     func status(settings: AppProxySettings) async throws -> AppProxyExtensionStatus
     func discoverExecutables(applications: [AppProxyEntry]) async throws -> [AppProxyExecutable]
     func setEnabled(_ enabled: Bool, settings: AppProxySettings) async throws
@@ -95,6 +99,7 @@ public protocol DashboardAppProxyService: AnyObject {
 }
 
 public extension DashboardAppProxyService {
+    var requestedState: Bool? { nil }
     func launchHosts() async -> [AppProxyLaunchHost] { [] }
     func flowOwners() async -> AppProxyFlowOwners? { nil }
 }
@@ -173,7 +178,7 @@ public final class AppProxyStore: ObservableObject {
         draft.routes = Dictionary(uniqueKeysWithValues: draft.applications.map { ($0.id, target) })
     }
     public func setBypassCIDRs(_ cidrs: [String]) throws {
-        guard !busy, !refreshing, !extensionStatus.enabled, !hasConflict, routing != nil else {
+        guard !busy, !refreshing, !extensionStatus.requiresDisableBeforeEditing, !hasConflict, routing != nil else {
             throw AppProxySettingsError.staleState
         }
         let policy = AppProxyBypassPolicy(cidrs: cidrs)
@@ -213,6 +218,7 @@ public final class AppProxyStore: ObservableObject {
     }
 
     public func refresh() async {
+        if let requested = service?.requestedState { extensionStatus.requestedEnabled = requested }
         guard !preview, !refreshing, !busy else { return }
         refreshing = true
         error = nil
@@ -335,7 +341,7 @@ public final class AppProxyStore: ObservableObject {
     }
 
     private func add(_ makeEntry: (UInt16) async throws -> AppProxyEntry?) async {
-        guard !busy, !refreshing, !extensionStatus.enabled, let service,
+        guard !busy, !refreshing, !extensionStatus.requiresDisableBeforeEditing, let service,
               let port = (UInt16(17975)...UInt16(18002)).first(where: { value in !draft.applications.contains { $0.port == value } }),
               draft.applications.count < 32 else { return }
         editingApplications = true; defer { editingApplications = false }
@@ -354,12 +360,12 @@ public final class AppProxyStore: ObservableObject {
     }
 
     public func removeApplication(_ id: String) {
-        guard !busy, !refreshing, !extensionStatus.enabled else { return }
+        guard !busy, !refreshing, !extensionStatus.requiresDisableBeforeEditing else { return }
         draft.applications.removeAll { $0.id == id }; draft.routes.removeValue(forKey: id)
     }
 
     public func chooseExecutable() async throws -> String? {
-        guard !busy, !refreshing, !extensionStatus.enabled, let service else { throw AppProxySettingsError.staleState }
+        guard !busy, !refreshing, !extensionStatus.requiresDisableBeforeEditing, let service else { throw AppProxySettingsError.staleState }
         editingApplications = true; defer { editingApplications = false }
         return try await service.chooseExecutable()
     }
@@ -375,7 +381,7 @@ public final class AppProxyStore: ObservableObject {
     /// `capturesLaunchedCLIs` is kept when nil.
     public func setPolicy(executablePaths paths: [String], teamIdentifiers teams: [String], directories: [String],
                           capturesLaunchedCLIs: Bool? = nil, for applicationID: String) async throws {
-        guard !busy, !refreshing, !extensionStatus.enabled, !hasConflict, routing != nil, let service,
+        guard !busy, !refreshing, !extensionStatus.requiresDisableBeforeEditing, !hasConflict, routing != nil, let service,
               let index = draft.applications.firstIndex(where: { $0.id == applicationID }) else {
             throw AppProxySettingsError.staleState
         }
@@ -399,7 +405,7 @@ public final class AppProxyStore: ObservableObject {
     }
 
     public func restoreDefaults() {
-        guard !busy, !refreshing, !extensionStatus.enabled else { return }
+        guard !busy, !refreshing, !extensionStatus.requiresDisableBeforeEditing else { return }
         if let migrated = draft.teamPresetMigration {
             draft = migrated
             return
@@ -412,7 +418,7 @@ public final class AppProxyStore: ObservableObject {
 
     public func reset() async throws {
         guard !preview else { return }
-        guard !busy, !refreshing, let routing, !extensionStatus.enabled else { throw AppProxySettingsError.staleState }
+        guard !busy, !refreshing, let routing, !extensionStatus.requiresDisableBeforeEditing else { throw AppProxySettingsError.staleState }
         mutating = true; defer { mutating = false }
         do {
             let state = try await gateway.setAppProxyRouting(.init(settings: .init(), expectedRevision: routing.revision))
@@ -426,7 +432,7 @@ public final class AppProxyStore: ObservableObject {
         guard !preview else { return }
         guard !busy, !refreshing, !hasConflict else { throw AppProxySettingsError.staleState }
         guard let routing, valid else { throw AppProxySettingsError.invalidRoutes }
-        guard !extensionStatus.enabled || (routing.settings.applications == draft.applications
+        guard !extensionStatus.requiresDisableBeforeEditing || (routing.settings.applications == draft.applications
             && routing.settings.bypass == draft.bypass) else { throw AppProxySettingsError.staleState }
         guard dirty else { return }
         mutating = true; defer { mutating = false }
@@ -481,6 +487,7 @@ public final class AppProxyStore: ObservableObject {
             updateStatus(try await service.status(settings: routing?.settings ?? draft))
             error = nil
         } catch {
+            if let requested = service.requestedState { extensionStatus.requestedEnabled = requested }
             if let status = try? await service.status(settings: routing?.settings ?? draft) { updateStatus(status) }
             self.error = error.localizedDescription
             throw error

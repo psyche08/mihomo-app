@@ -206,8 +206,13 @@ The signed application additionally embeds
 The AppKit `AppProxyCoordinator` owns user-scoped NetworkExtension preferences
 and macOS activation requests. SwiftUI receives only typed service actions;
 node configuration still goes through `ControlGateway` and authenticated root
-XPC (`app-proxy.status`, `app-proxy.set-routing`). No host CLI subprocess or
-additional Mihomo process participates in this control path.
+XPC (`app-proxy.status`, `app-proxy.set-routing`). Starting in 1.1.1, master
+on/off and cold recovery use the same signed host executable with fixed
+`--app-proxy on/off` arguments in a short-lived process. This isolates the
+NetworkExtension activation session from GUI polling. It reuses existing
+consent, has a 180-second deadline, and performs privileged actions only through
+the existing authenticated XPC interface. It cannot install components and does
+not create another Mihomo process. Preference callbacks have 15-second deadlines.
 
 The extension reuses the audited experiment's flow handling and signature
 inspection, but `MAIN_APP_PROXY` requires the per-application routing schema

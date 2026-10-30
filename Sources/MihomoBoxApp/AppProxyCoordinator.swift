@@ -16,6 +16,7 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
     private var busy = false
     private let crossProcess = AppProxyMutationLock()
     private let codeAccess = AppProxyCodeAccessClient()
+    private let usesHeadlessActivation: Bool
     private var maintenance: Task<Void, Never>?
     private var identityIssue: String?
     private var discoveryIssues: [String: Int] = [:]
@@ -37,19 +38,22 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         get { UserDefaults.standard.bool(forKey: masterKey) }
         set { UserDefaults.standard.set(newValue, forKey: masterKey) }
     }
+    var requestedState: Bool? { UserDefaults.standard.object(forKey: masterKey) as? Bool }
     private func migrateSelection(_ manager: NEAppProxyProviderManager?) {
         guard UserDefaults.standard.object(forKey: selectionKey) == nil else { return }
         let raw = (manager?.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration
         let snapshot = (raw?["identitySnapshot"] as? Data).flatMap { try? AppProxyIdentitySnapshot.decode($0) }
         requestedIDs = Set(snapshot?.records.map(\.category).filter { $0 != "cli_host" } ?? [])
-        requestedEnabled = manager?.isEnabled == true && snapshot != nil
+        if requestedState == nil { requestedEnabled = manager?.isEnabled == true && snapshot != nil }
     }
     override convenience init() { self.init(maintenance: true) }
     /// A headless `--app-proxy` run performs one action and skips the 20-second maintenance loop.
     init(maintenance enabled: Bool) {
+        usesHeadlessActivation = enabled
         super.init()
         guard enabled else { return }
         maintenance = Task { [weak self] in
+            await self?.maintainIdentities()
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(20))
                 guard !Task.isCancelled else { return }
@@ -76,6 +80,10 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         NSError(domain: "MihomoBox.AppProxy", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
     }
     func status(settings: AppProxySettings) async throws -> AppProxyExtensionStatus {
+        // Serialize preference/session reads with renewal and policy publication.
+        try await waitUntilIdle()
+        defer { crossProcess?.unlock() }
+        busy = true; defer { busy = false }
         let isAvailable = available
         let manager = isAvailable ? try await load() : nil
         liveManager = manager
@@ -102,7 +110,7 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
                      requiresReactivation: manager?.isEnabled == true && (!current || (configuration?["bypassCIDRs"] as? [String]) != settings.bypass.cidrs),
                      identityReady: ready, verifiedTargetCount: ready ? live?.verifiedTargets ?? 0 : 0,
                      identityIssue: identityIssue ?? live?.failure?.rawValue ?? (manager?.connection.status == .connected ? liveIssue : nil),
-                     diagnostics: live, discoveryIssues: discoveryIssues, applications: states)
+                     diagnostics: live, discoveryIssues: discoveryIssues, applications: states, requestedEnabled: requestedEnabled)
     }
 
     func discoverExecutables(applications: [AppProxyEntry]) async throws -> [AppProxyExecutable] {
@@ -118,7 +126,9 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
 
     /// Which verified process owns each provider connection to a Mihomo listener.
     func flowOwners() async -> AppProxyFlowOwners? {
-        guard available else { return nil }
+        guard !busy, available, crossProcess?.tryLock() ?? true else { return nil }
+        defer { crossProcess?.unlock() }
+        busy = true; defer { busy = false }
         if liveManager == nil { liveManager = try? await load() }
         guard let manager = liveManager, manager.connection.status == .connected else { return nil }
         do { return try await message(.init(.flowOwners), to: manager).flowOwners }
@@ -170,11 +180,23 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         }
     }
     func setEnabled(_ enabled: Bool, settings: AppProxySettings) async throws {
+        if usesHeadlessActivation {
+            try await waitUntilIdle()
+            busy = true
+            requestedEnabled = enabled
+            crossProcess?.unlock() // The signed child acquires this lock itself.
+            defer { busy = false }
+            try await runHeadlessToggle(enabled)
+            liveManager = nil; identityIssue = nil
+            return
+        }
         try await waitUntilIdle()
         defer { crossProcess?.unlock() }
+        requestedEnabled = enabled // Persist accepted intent before runtime work.
         guard available else { throw failure("The bundled App Proxy extension is unavailable.") }
         busy = true; defer { busy = false }
         let existing = try await load(); migrateSelection(existing)
+        requestedEnabled = enabled
         if !enabled {
             requestedEnabled = false
             if let existing { try await disable(existing) }
@@ -363,15 +385,39 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
          "bypassCIDRs": settings.bypass.cidrs,
          "ports": Dictionary(uniqueKeysWithValues: settings.applications.map { ($0.id, Int($0.port)) })]
     }
+    enum ProviderTransportFailure: String, Error, LocalizedError {
+        case emptyReply, oversizedReply, preferencesTimeout
+        var errorDescription: String? { "App Proxy provider reply unavailable: " + rawValue }
+    }
     private func message(_ request: AppProxyRuntimeMessage, to manager: NEAppProxyProviderManager) async throws -> AppProxyRuntimeStatus {
+        try await Self.withProviderReplyRetry(action: request.action) {
+            try await self.messageOnce(request, to: manager)
+        }
+    }
+    static func withProviderReplyRetry<T>(action: AppProxyRuntimeMessage.Action,
+        pause: @MainActor () async throws -> Void = { try await Task.sleep(for: .seconds(1)) },
+        operation: @MainActor () async throws -> T) async throws -> T {
+        let retryable = [.status, .flowOwners, .renew].contains(action)
+        for attempt in 0..<3 {
+            do { return try await operation() }
+            catch ProviderTransportFailure.emptyReply where retryable && attempt < 2 {
+                // Saving app rules may briefly replace the provider IPC channel.
+                // Only idempotent reads/renewal may retry an unobserved reply.
+                try await pause()
+            }
+        }
+        throw ProviderTransportFailure.emptyReply
+    }
+    private func messageOnce(_ request: AppProxyRuntimeMessage, to manager: NEAppProxyProviderManager) async throws -> AppProxyRuntimeStatus {
         guard let session = manager.connection as? NETunnelProviderSession else { throw AppProxyIdentityFailure.unavailable }
         let data = try JSONEncoder().encode(request)
         return try await withCheckedThrowingContinuation { c in
-            let box = AppProxyMessageCompletion(c)
+            let box = AppProxyCompletion(c)
             do {
                 try session.sendProviderMessage(data) { data in
                     do {
-                        guard let data, data.count <= 65536 else { throw AppProxyIdentityFailure.unavailable }
+                        guard let data else { throw ProviderTransportFailure.emptyReply }
+                        guard data.count <= 65536 else { throw ProviderTransportFailure.oversizedReply }
                         box.finish(.success(try JSONDecoder().decode(AppProxyRuntimeStatus.self, from: data)))
                     } catch { box.finish(.failure(error)) }
                 }
@@ -384,12 +430,22 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
     }
     private func maintainIdentities() async {
         guard !busy, available, crossProcess?.tryLock() ?? true else { return }
-        defer { crossProcess?.unlock() }
+        var holdsLock = true
+        defer { if holdsLock { crossProcess?.unlock() } }
         busy = true; defer { busy = false }
         var managed: NEAppProxyProviderManager?
         do {
             let manager = try await load(); managed = manager; migrateSelection(manager)
-            guard requestedEnabled else { return }
+            guard requestedEnabled else {
+                if let manager, manager.isEnabled || manager.connection.status == .connected {
+                    if usesHeadlessActivation {
+                        holdsLock = false; crossProcess?.unlock()
+                        try await runHeadlessToggle(false)
+                        liveManager = nil
+                    } else { try await disable(manager) }
+                }
+                return
+            }
             let settings = try await ControlGateway().fetchAppProxyRouting().settings
             // After an update the bundled provider is newer than the running one, and only a
             // non-live install activates it. Do that here, in the background after launch,
@@ -400,14 +456,53 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
                 AppLog.info("event=app_proxy_extension_upgrade phase=started bundled=\(bundledExtensionVersion ?? "unknown")")
                 try await disable(manager)
             }
-            try await reconcile(settings: settings, existing: manager, interactiveID: nil)
+            if usesHeadlessActivation,
+               manager?.isEnabled != true || manager?.connection.status != .connected {
+                holdsLock = false; crossProcess?.unlock()
+                try await runHeadlessToggle(true)
+                liveManager = nil; identityIssue = nil
+            } else {
+                try await reconcile(settings: settings, existing: manager, interactiveID: nil)
+            }
             if upgrading { AppLog.info("event=app_proxy_extension_upgrade result=success") }
         } catch {
             identityIssue = "maintenance:" + Self.issueCode(error)
             AppLog.error("event=app_proxy_policy_failure phase=maintenance issue=\(Self.issueCode(error))")
             // System-wide failures (console owner, transport, ambiguous publication)
             // remain fail-closed. Per-app discovery/consent failures are handled above.
-            if let managed { do { try await disable(managed) } catch { identityIssue = "rollbackUnverified" } }
+            if holdsLock, let managed { do { try await disable(managed) } catch { identityIssue = "rollbackUnverified" } }
+        }
+    }
+
+    /// Reuse the fixed signed operator entry point for master activation. A fresh
+    /// host avoids retaining a GUI NetworkExtension session across stop/start.
+    /// The child never receives --approve, so only existing consent can be used.
+    private func runHeadlessToggle(_ enabled: Bool) async throws {
+        guard let executable = Bundle.main.executableURL else { throw failure("The signed App Proxy host is unavailable.") }
+        let arguments = [AppProxyCommand.argument, enabled ? "on" : "off"]
+        let (data, status) = try await Task.detached(priority: .userInitiated) {
+            let process = Process(), output = Pipe()
+            process.executableURL = executable
+            process.arguments = arguments
+            process.standardInput = FileHandle.nullDevice
+            process.standardOutput = output
+            process.standardError = FileHandle.nullDevice
+            try process.run()
+            let timeout = DispatchWorkItem { if process.isRunning { process.terminate() } }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 180, execute: timeout)
+            defer { timeout.cancel() }
+            let result = output.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            guard result.count <= 131072 else { throw ProviderTransportFailure.oversizedReply }
+            return (result, process.terminationStatus)
+        }.value
+        guard let result = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw failure("The App Proxy host returned no usable result.")
+        }
+        if let error = result["error"] as? String { throw failure(error) }
+        guard status == 0, result["enabled"] as? Bool == enabled,
+              !enabled || (result["connected"] as? Bool == true && result["identityReady"] as? Bool == true) else {
+            throw failure("The App Proxy host could not confirm the requested state.")
         }
     }
 
@@ -416,7 +511,7 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         var errorDescription: String? { "App Proxy policy verification failed: " + rawValue }
     }
     static func issueCode(_ error: Error) -> String {
-        (error as? PolicyCheckFailure)?.rawValue ?? (error as? AppProxyIdentityFailure ?? .unavailable).rawValue
+        (error as? ProviderTransportFailure)?.rawValue ?? (error as? PolicyCheckFailure)?.rawValue ?? (error as? AppProxyIdentityFailure ?? .unavailable).rawValue
     }
     static func requireProvider(_ status: AppProxyRuntimeStatus, generation: UUID) throws {
         if let failure = status.failure { throw failure }
@@ -459,11 +554,22 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
             }
         }
     }
+    private func preferenceRequest<Value>(_ operation: String, _ start: (@escaping (Result<Value, Error>) -> Void) -> Void) async throws -> Value {
+        try await withCheckedThrowingContinuation { continuation in
+            let completion = AppProxyCompletion(continuation)
+            let timeout = DispatchWorkItem {
+                AppLog.error("event=app_proxy_preferences_timeout operation=\(operation)")
+                completion.finish(.failure(ProviderTransportFailure.preferencesTimeout))
+            }
+            start { timeout.cancel(); completion.finish($0) }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 15, execute: timeout)
+        }
+    }
     private func load() async throws -> NEAppProxyProviderManager? {
-        let managers: [NEAppProxyProviderManager] = try await withCheckedThrowingContinuation { continuation in
+        let managers: [NEAppProxyProviderManager] = try await preferenceRequest("loadAll") { finish in
             NEAppProxyProviderManager.loadAllFromPreferences { values, error in
-                if let error { continuation.resume(throwing: error) }
-                else { continuation.resume(returning: values ?? []) }
+                if let error { finish(.failure(error)) }
+                else { finish(.success(values ?? [])) }
             }
         }
         let matches = managers.filter { ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == extensionID }
@@ -490,16 +596,16 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         return "\(manager.isEnabled ? 1 : 0):\(manager.appRules.count):\(toolCount):\(matches ? 1 : 0)"
     }
     private func save(_ manager: NEAppProxyProviderManager) async throws {
-        try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
+        let _: Void = try await preferenceRequest("save") { finish in
             manager.saveToPreferences { error in
-                if let error { c.resume(throwing: error) } else { c.resume() }
+                if let error { finish(.failure(error)) } else { finish(.success(())) }
             }
         }
     }
     private func reload(_ manager: NEAppProxyProviderManager) async throws {
-        try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
+        let _: Void = try await preferenceRequest("reload") { finish in
             manager.loadFromPreferences { error in
-                if let error { c.resume(throwing: error) } else { c.resume() }
+                if let error { finish(.failure(error)) } else { finish(.success(())) }
             }
         }
     }
@@ -663,11 +769,11 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
 }
 
 // Continuation is consumed exactly once under the lock, including timeout and interruption.
-private final class AppProxyMessageCompletion: @unchecked Sendable {
+private final class AppProxyCompletion<Value>: @unchecked Sendable {
     private let lock = NSLock()
-    private var continuation: CheckedContinuation<AppProxyRuntimeStatus, Error>?
-    init(_ continuation: CheckedContinuation<AppProxyRuntimeStatus, Error>) { self.continuation = continuation }
-    func finish(_ result: Result<AppProxyRuntimeStatus, Error>) {
+    private var continuation: CheckedContinuation<Value, Error>?
+    init(_ continuation: CheckedContinuation<Value, Error>) { self.continuation = continuation }
+    func finish(_ result: Result<Value, Error>) {
         lock.lock(); let c = continuation; continuation = nil; lock.unlock(); c?.resume(with: result)
     }
 }

@@ -27,6 +27,14 @@ struct MihomoBoxMain {
       do { invocation = try AppProxyCommand.parse(Array(ProcessInfo.processInfo.arguments.dropFirst())) } catch {
         FileHandle.standardError.write(Data((error.localizedDescription + "\n").utf8)); exit(64)
       }
+      // Master toggles are also used by the GUI. Bound their lifetime even if
+      // the parent exits or a system preference callback never arrives.
+      if invocation.action == "on" || invocation.action == "off" {
+        DispatchQueue.global().asyncAfter(deadline: .now() + 180) {
+          FileHandle.standardOutput.write(Data("{\"error\":\"App Proxy toggle timed out\"}\n".utf8))
+          exit(124)
+        }
+      }
       // Headless: no tray, window, component sync or maintenance loop.
       application.setActivationPolicy(.accessory)
       Task { @MainActor in exit(await AppProxyCommand.run(invocation)) }

@@ -7,7 +7,8 @@ Swift executable. `NSApplicationDelegate` owns the accessory lifecycle,
 `NSStatusItem` owns the tray, and `NSHostingController` owns the SwiftUI
 dashboard. The user process talks directly to the existing authenticated XPC
 client library; there is no WebView, Rust FFI, loopback bridge, or CLI child in
-the desktop control path.
+the general desktop controller path. The App Proxy master activation exception
+introduced in 1.1.1 is described in [architecture](architecture.md).
 
 The executable remains named `mihomo-app`, the bundle identifier remains
 `dev.linsheng.mihomo-app`, and the installed bundle remains `MihomoBox.app`.

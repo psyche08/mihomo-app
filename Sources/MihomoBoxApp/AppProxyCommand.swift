@@ -42,7 +42,10 @@ import MihomoControl
     static func run(_ invocation: Invocation) async -> Int32 {
         let coordinator = AppProxyCoordinator(maintenance: false)
         do {
-            let settings = try await ControlGateway().fetchAppProxyRouting().settings
+            let settings: AppProxySettings
+            if invocation.action == "off" {
+                settings = (try? await ControlGateway().fetchAppProxyRouting().settings) ?? AppProxySettings()
+            } else { settings = try await ControlGateway().fetchAppProxyRouting().settings }
             func entry() throws -> AppProxyEntry {
                 guard let id = invocation.application, let entry = settings.applications.first(where: { $0.id == id }) else {
                     throw AppProxySettingsError.staleState
@@ -87,7 +90,7 @@ import MihomoControl
 
     static func summary(_ status: AppProxyExtensionStatus) -> [String: Any] {
         [
-            "available": status.available, "enabled": status.enabled, "connected": status.connected,
+            "available": status.available, "enabled": status.enabled, "requestedEnabled": status.requestedEnabled, "connected": status.connected,
             "identityReady": status.identityReady, "verifiedTargets": status.verifiedTargetCount,
             "identityIssue": status.identityIssue.map { $0 as Any } ?? NSNull(),
             "discoveryIssues": status.discoveryIssues,

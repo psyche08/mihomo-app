@@ -11,6 +11,7 @@ final class ControlDispatcher: @unchecked Sendable {
     private let agent: AgentSupervisor
     private let controller: ControllerBroker
     private let systemProxy: SystemProxyController
+    private let configurationPath: String
     private let profiles: ProfileBroker
     private let localDoH: LocalDoHManager
     private let localDoHServer: IndependentLocalDoHServer
@@ -26,6 +27,7 @@ final class ControlDispatcher: @unchecked Sendable {
         startupClock: MonotonicStartupClock = MonotonicStartupClock()
     ) throws {
         self.agent = agent
+        configurationPath = configPath
         systemProxy = SystemProxyController(configPath: configPath)
         self.startupClock = startupClock
         let controllerBroker = ControllerBroker(configPath: configPath)
@@ -99,8 +101,8 @@ final class ControlDispatcher: @unchecked Sendable {
             scheduleDaemonRestart()
             return
         }
-        let preserveFallback = agent.globalDNSFallbackConfigured
         let resumeEnhancedTUN = agent.resumesEnhancedTUN
+        let preserveFallback = agent.globalDNSFallbackConfigured && resumeEnhancedTUN
         // Restore using the OLD DNS owner before changing daemon.json, or a
         // persisted 198.18.0.1 backup would be compared against 127.0.0.53.
         guard agent.stopAndRestoreVerified() else {
@@ -117,7 +119,7 @@ final class ControlDispatcher: @unchecked Sendable {
         do {
             if !preserveFallback {
                 try profiles.ensureLocalHttpDNSBaseConfiguration(
-                    allowEnhancedTUN: enhancedPrerequisitePrepared
+                    allowEnhancedTUN: resumeEnhancedTUN && enhancedPrerequisitePrepared
                 )
             }
         } catch {
@@ -138,7 +140,7 @@ final class ControlDispatcher: @unchecked Sendable {
         do {
             if !preserveFallback {
                 try profiles.ensureLocalHttpDNSBaseConfiguration(
-                    allowEnhancedTUN: enhancedPrerequisitePrepared && localStarted
+                    allowEnhancedTUN: resumeEnhancedTUN && enhancedPrerequisitePrepared && localStarted
                 )
             }
         } catch {
@@ -176,6 +178,7 @@ final class ControlDispatcher: @unchecked Sendable {
             }
             if resumeEnhancedTUN { try resumeEnhancedRuntimeLocked() }
             try components.commitPendingBootValidation()
+            do { try refreshSystemProxy(restoreSavedChoice: true) } catch { ServiceLog.error("event=system_proxy_restore result=failed") }
             ServiceLog.info("event=initial_runtime result=ready")
             logInitialRuntimeStartup(result: "ready")
         } catch {
@@ -294,6 +297,8 @@ final class ControlDispatcher: @unchecked Sendable {
                 payload = try JSONSerialization.data(withJSONObject: [
                     "agent_running": agentRunning,
                     "system_proxy_enabled": (try? systemProxy.enabled()) as Any? ?? NSNull(),
+                    "system_proxy_requested": agent.requestsSystemProxy,
+                    "enhanced_tun_requested": agent.resumesEnhancedTUN,
                     "snapshot": snapshot ?? NSNull(),
                     "profiles": profileState,
                     "health": health ?? NSNull(),
@@ -306,10 +311,12 @@ final class ControlDispatcher: @unchecked Sendable {
                 try agent.start()
                 try ensureStartedRuntimeLocked()
                 if agent.resumesEnhancedTUN { try resumeEnhancedRuntimeLocked() }
+                else if agent.expectsEnhancedTUN { try profiles.setEnhancedTUN(false) }
                 payload = nil
             case .setSystemProxy:
                 guard request.arguments.count == 1, request.payload == nil,
                       let raw = request.arguments["enabled"], let enabled = ["true":true,"false":false][raw] else { throw serverError("System proxy enabled state is required") }
+                try RuntimeSwitchPreferences.setSystemProxy(enabled, configurationPath: configurationPath)
                 var port = 7897
                 if enabled {
                     guard agent.isRunning else { throw serverError("Start the managed proxy before enabling system proxy") }
@@ -483,15 +490,17 @@ final class ControlDispatcher: @unchecked Sendable {
                 // exactly when the agent stopped and every stream was dying.
                 payload = try controller.perform(request, owner: owner)
             case .setTUN:
+                guard request.arguments.count == 1, request.payload == nil,
+                      let raw = request.arguments["enabled"],
+                      let enabled = ["true": true, "false": false][raw] else {
+                    throw serverError("Enhanced TUN enabled state is required")
+                }
+                try RuntimeSwitchPreferences.setTUN(enabled, configurationPath: configurationPath)
                 guard !profiles.activationRequired else {
                     throw serverError("activate a profile before enabling Enhanced TUN")
                 }
                 guard agent.isRunning else {
                     throw serverError("Mihomo agent is not running")
-                }
-                guard let raw = request.arguments["enabled"],
-                      let enabled = ["true": true, "false": false][raw] else {
-                    throw serverError("Enhanced TUN enabled state is required")
                 }
                 if agent.globalDNSFallbackConfigured {
                     if enabled {
@@ -534,8 +543,8 @@ final class ControlDispatcher: @unchecked Sendable {
                 }
                 payload = try controller.perform(request, owner: owner)
             }
-            if [.importProfile, .switchProfile, .reloadProfile, .controllerRequest, .restartAgent].contains(request.operation) {
-                try refreshSystemProxy()
+            if [.importProfile, .switchProfile, .reloadProfile, .controllerRequest, .restartAgent, .startAgent].contains(request.operation) {
+                do { try refreshSystemProxy(restoreSavedChoice: request.operation == .startAgent) } catch { ServiceLog.error("event=system_proxy_reconcile result=failed") }
             }
             if auditRoutineLifecycle {
                 ServiceLog.info("event=control_request operation=\(operation) result=success")
@@ -629,6 +638,10 @@ final class ControlDispatcher: @unchecked Sendable {
     }
 
     private func ensureRuntimePrerequisiteLocked() throws {
+        guard agent.resumesEnhancedTUN else {
+            if agent.expectsEnhancedTUN { try profiles.setEnhancedTUN(false) }
+            return
+        }
         if agent.globalDNSFallbackConfigured { return }
         guard agent.localHttpDNSBaseConfigured else {
             throw serverError("repair the LocalHttpDns base service before starting Mihomo")
@@ -652,13 +665,19 @@ final class ControlDispatcher: @unchecked Sendable {
         }
     }
 
-    private func refreshSystemProxy() throws {
-        guard systemProxy.hasSavedState else { return }
-        guard agent.isRunning else { try systemProxy.setEnabled(false); return }
+    private func refreshSystemProxy(restoreSavedChoice: Bool = false) throws {
+        guard agent.requestsSystemProxy, agent.isRunning else {
+            if systemProxy.hasSavedState { try systemProxy.setEnabled(false) }
+            return
+        }
         let data = try controller.perform(ControlRequest(operation:.snapshot))
         if let object = try JSONSerialization.jsonObject(with:data) as? [String:Any],
            let config = object["configs"] as? [String:Any], let port = config["mixed-port"] as? Int {
-            try systemProxy.updatePortIfNeeded(port)
+            if systemProxy.hasSavedState && !restoreSavedChoice {
+                try systemProxy.updatePortIfNeeded(port)
+            } else {
+                try systemProxy.setEnabled(true, port: port)
+            }
         }
     }
 

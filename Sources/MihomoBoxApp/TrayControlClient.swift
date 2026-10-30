@@ -22,6 +22,8 @@ struct TrayControlPoll: Sendable {
   var profiles: [String]
   var activeProfile: String?
   var systemProxyEnabled: Bool? = nil
+  var systemProxyRequested: Bool? = nil
+  var enhancedTUNRequested: Bool? = nil
 }
 
 enum TrayControlError: Error, LocalizedError {
@@ -261,7 +263,9 @@ actor TrayControlClient {
         proxies: [],
         profiles: envelope.profiles.profiles,
         activeProfile: envelope.profiles.activeProfile,
-        systemProxyEnabled: envelope.systemProxyEnabled
+        systemProxyEnabled: envelope.systemProxyEnabled,
+        systemProxyRequested: envelope.systemProxyRequested,
+        enhancedTUNRequested: envelope.enhancedTUNRequested
       )
     }
 
@@ -304,7 +308,9 @@ actor TrayControlClient {
       proxies: nodes,
       profiles: envelope.profiles.profiles,
       activeProfile: envelope.profiles.activeProfile,
-      systemProxyEnabled: envelope.systemProxyEnabled
+      systemProxyEnabled: envelope.systemProxyEnabled,
+        systemProxyRequested: envelope.systemProxyRequested,
+        enhancedTUNRequested: envelope.enhancedTUNRequested
     )
   }
 
@@ -330,10 +336,14 @@ private struct TrayStateEnvelope: Decodable {
   var profiles: ProfileList
   var health: TrayHealth?
   var systemProxyEnabled: Bool?
+  var systemProxyRequested: Bool?
+  var enhancedTUNRequested: Bool?
 
   enum CodingKeys: String, CodingKey {
     case agentRunning = "agent_running"
     case systemProxyEnabled = "system_proxy_enabled"
+    case systemProxyRequested = "system_proxy_requested"
+    case enhancedTUNRequested = "enhanced_tun_requested"
     case snapshot, profiles, health
   }
 }

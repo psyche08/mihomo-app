@@ -69,6 +69,10 @@ final class AgentSupervisor: @unchecked Sendable {
         (try? ProxyConfiguration.load(path: configPath).expectsEnhancedTUN) ?? true
     }
 
+    var requestsSystemProxy: Bool {
+        (try? ProxyConfiguration.load(path: configPath).systemProxyEnabled) ?? false
+    }
+
     var resumesEnhancedTUN: Bool {
         (try? ProxyConfiguration.load(path: configPath).resumesEnhancedTUN) ?? false
     }

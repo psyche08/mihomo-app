@@ -3,6 +3,21 @@ import XCTest
 @testable import MihomoBoxApp
 
 final class TrayModelTests: XCTestCase {
+  func testSavedSwitchesDoNotMisrepresentRuntimeHealth() {
+    let runtime = TraySnapshot(enhancedTUN: false, systemProxyEnabled: false, appProxyEnabled: false)
+    var saved = runtime
+    saved.enhancedTUNRequested = true
+    saved.systemProxyRequested = true
+    saved.appProxyRequested = true
+    XCTAssertTrue(saved.tunSwitchOn)
+    XCTAssertEqual(saved.systemProxySwitchOn, true)
+    XCTAssertEqual(saved.appProxySwitchOn, true)
+    XCTAssertFalse(saved.enhancedTUN)
+    XCTAssertEqual(saved.systemProxyEnabled, false)
+    XCTAssertEqual(saved.appProxyEnabled, false)
+    XCTAssertNotEqual(saved.menuSignature, runtime.menuSignature)
+    XCTAssertFalse(runtime.tunSwitchOn)
+  }
   func testDelayOnlyChangeRepaintsWithoutRebuildingTrackedMenu() {
     let rendered = snapshot(delay: 180)
     let incoming = snapshot(delay: 420)

@@ -57,7 +57,7 @@ final class TrayStateCoordinator: TrayService {
   var canCheckForUpdates: Bool { updates.canCheckForUpdates }
 
   private let control: TrayControlClient
-  private let appProxyControl = AppProxyCoordinator(maintenance: false)
+  private let appProxyControl: AppProxyCoordinator
   private let profiles: ProfileCoordinator
   private let installer: InstallerCoordinator
   private let localDoH: LocalDoHCoordinator
@@ -84,9 +84,11 @@ final class TrayStateCoordinator: TrayService {
     login: LoginAutostartController,
     updates: SparkleUpdateController,
     mutationGate: AppMutationGate,
-    fileManager: FileManager = .default
+    fileManager: FileManager = .default,
+    appProxyControl: AppProxyCoordinator? = nil
   ) {
     self.control = control
+    self.appProxyControl = appProxyControl ?? AppProxyCoordinator(maintenance: false)
     self.profiles = profiles
     self.installer = installer
     self.localDoH = LocalDoHCoordinator(control: control)
@@ -163,12 +165,6 @@ final class TrayStateCoordinator: TrayService {
         let poll = try await self.control.poll()
         self.consecutivePollFailures = 0
         self.apply(poll, retainDelays: !authoritative)
-        if let routing = try? await ControlGateway().fetchAppProxyRouting(),
-           let state = try? await self.appProxyControl.status(settings: routing.settings) {
-          var value = self.currentSnapshot
-          value.appProxyEnabled = state.available ? state.enabled : nil
-          self.publish(value)
-        }
         if !self.didRecordFirstSuccessfulPoll {
           self.didRecordFirstSuccessfulPoll = true
           AppStartupTimeline.mark(.firstControlSnapshot)
@@ -179,7 +175,9 @@ final class TrayStateCoordinator: TrayService {
           self.currentSnapshot.activeProfile != nil {
           self.didAttemptEnhancedStartup = true
           let startup = try await self.control.localDoHStatus()
-          if startup.resumeEnhancedTUN == true, !self.currentSnapshot.enhancedTUN {
+          let restoreTUN = startup.resumeEnhancedTUN.map { $0 != self.currentSnapshot.enhancedTUN } ?? false
+          let restoreSystemProxy = self.currentSnapshot.systemProxyRequested.map { $0 != self.currentSnapshot.systemProxyEnabled } ?? false
+          if restoreTUN || restoreSystemProxy {
             do {
               try await self.withShellMutation {
                 var busy = self.currentSnapshot
@@ -195,9 +193,19 @@ final class TrayStateCoordinator: TrayService {
                 self.clearError()
               }
             } catch {
-              self.publishError("Automatic Enhanced TUN startup failed. Retry from the Enhanced TUN switch.")
+              self.publishError("Saved proxy settings could not be restored. Check the proxy switches.")
             }
           }
+        }
+        var savedSwitches = self.currentSnapshot
+        savedSwitches.appProxyRequested = self.appProxyControl.requestedState
+        self.publish(savedSwitches)
+        if let routing = try? await ControlGateway().fetchAppProxyRouting(),
+           let state = try? await self.appProxyControl.status(settings: routing.settings) {
+          var value = self.currentSnapshot
+          value.appProxyEnabled = state.available ? state.enabled : nil
+          value.appProxyRequested = state.requestedEnabled
+          self.publish(value)
         }
       } catch let error as ControlError {
         if case .protocolVersionMismatch(let expected, let received) = error {
@@ -231,18 +239,38 @@ final class TrayStateCoordinator: TrayService {
   }
 
   func setSystemProxyEnabled(_ enabled: Bool) async throws {
-    try await withShellMutation {
-      self.apply(try await self.control.setSystemProxyEnabled(enabled), retainDelays: true)
+    do {
+      try await withShellMutation {
+        self.apply(try await self.control.setSystemProxyEnabled(enabled), retainDelays: true)
+        self.clearError()
+      }
+    } catch {
+      publishError("System Proxy: " + error.localizedDescription)
+      throw error
     }
   }
 
   func setAppProxyEnabled(_ enabled: Bool) async throws {
-    try await withShellMutation {
-      let routing = try await ControlGateway().fetchAppProxyRouting()
-      try await self.appProxyControl.setEnabled(enabled, settings: routing.settings)
-      let status = try await self.appProxyControl.status(settings: routing.settings)
-      guard status.enabled == enabled else { throw TrayControlError.readbackMismatch("App Proxy") }
-      var value = self.currentSnapshot; value.appProxyEnabled = status.enabled; self.publish(value)
+    do {
+      try await withShellMutation {
+        let settings: AppProxySettings
+        if enabled { settings = try await ControlGateway().fetchAppProxyRouting().settings }
+        else { settings = (try? await ControlGateway().fetchAppProxyRouting().settings) ?? AppProxySettings() }
+        try await self.appProxyControl.setEnabled(enabled, settings: settings)
+        let status = try await self.appProxyControl.status(settings: settings)
+        guard status.enabled == enabled else { throw TrayControlError.readbackMismatch("App Proxy") }
+        var value = self.currentSnapshot
+        value.appProxyEnabled = status.enabled
+        value.appProxyRequested = status.requestedEnabled
+        self.publish(value)
+        self.clearError()
+      }
+    } catch {
+      var saved = currentSnapshot
+      saved.appProxyRequested = appProxyControl.requestedState
+      publish(saved)
+      publishError("App Proxy: " + error.localizedDescription)
+      throw error
     }
   }
 
@@ -276,7 +304,7 @@ final class TrayStateCoordinator: TrayService {
         clearError()
         return
       }
-      if currentSnapshot.enhancedTUN { return }
+      if currentSnapshot.enhancedTUN && currentSnapshot.tunSwitchOn { return }
       let daemonInstalled = Self.daemonInstalled(fileManager: fileManager)
       let resolved = EnhancedTUNActionPolicy.resolve(
         enhancedTUN: currentSnapshot.enhancedTUN,
@@ -566,7 +594,10 @@ final class TrayStateCoordinator: TrayService {
         ),
         actionError: currentSnapshot.actionError,
         systemProxyEnabled: poll.systemProxyEnabled,
-        appProxyEnabled: currentSnapshot.appProxyEnabled
+        appProxyEnabled: currentSnapshot.appProxyEnabled,
+        enhancedTUNRequested: poll.enhancedTUNRequested,
+        systemProxyRequested: poll.systemProxyRequested,
+        appProxyRequested: currentSnapshot.appProxyRequested
       ))
   }
 
@@ -853,7 +884,6 @@ private final class LiveAppShellCoordinator: AppShellCoordinating {
     updates.start()
     DashboardStore.shared.configureUpdatePreference(updates)
     DashboardStore.shared.configureLocalDoHService(localDoH)
-    DashboardStore.shared.appProxy.configure(AppProxyCoordinator())
   }
 
   func stopBackgroundServices() {
@@ -870,7 +900,8 @@ enum AppComposition {
     let localDoH = LocalDoHCoordinator()
     DashboardStore.shared.configureUpdatePreference(updates)
     DashboardStore.shared.configureLocalDoHService(localDoH)
-    DashboardStore.shared.appProxy.configure(AppProxyCoordinator())
+    let appProxy = AppProxyCoordinator()
+    DashboardStore.shared.appProxy.configure(appProxy)
     let mutationGate = AppMutationGate()
     let tray = TrayStateCoordinator(
       control: control,
@@ -878,7 +909,8 @@ enum AppComposition {
       installer: InstallerCoordinator(),
       login: LoginAutostartController(),
       updates: updates,
-      mutationGate: mutationGate
+      mutationGate: mutationGate,
+      appProxyControl: appProxy
     )
     return LiveAppShellCoordinator(
       trayService: tray,

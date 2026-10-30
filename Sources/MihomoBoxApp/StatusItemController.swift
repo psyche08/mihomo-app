@@ -182,18 +182,18 @@ final class StatusItemController: NSObject, NSMenuDelegate, ApplicationStatusIte
     }
 
     let tun = item("Enhanced TUN", action: #selector(toggleEnhancedTUN(_:)))
-    tun.state = snapshot.enhancedTUN ? .on : .off
+    tun.state = snapshot.tunSwitchOn ? .on : .off
     tun.isEnabled = TrayMenuActionPolicy.enhancedTUNEnabled(snapshot)
     menu.addItem(tun)
     let systemProxy = item("System Proxy", action: #selector(toggleSystemProxy(_:)))
-    systemProxy.state = snapshot.systemProxyEnabled == true ? .on : .off
+    systemProxy.state = snapshot.systemProxySwitchOn == true ? .on : .off
     systemProxy.isEnabled = snapshot.systemProxyEnabled != nil && !snapshot.mutationOperationInFlight
       && !snapshot.daemonCompatibility.blocksControlActions && (snapshot.controllerReachable || snapshot.systemProxyEnabled == true)
     menu.addItem(systemProxy)
     let appProxy = item("App Proxy", action: #selector(toggleAppProxy(_:)))
-    appProxy.state = snapshot.appProxyEnabled == true ? .on : .off
-    appProxy.isEnabled = snapshot.appProxyEnabled != nil && !snapshot.mutationOperationInFlight
-      && !snapshot.daemonCompatibility.blocksControlActions && (snapshot.controllerReachable || snapshot.appProxyEnabled == true)
+    appProxy.state = snapshot.appProxySwitchOn == true ? .on : .off
+    appProxy.isEnabled = (snapshot.appProxyEnabled != nil || snapshot.appProxyRequested == true) && !snapshot.mutationOperationInFlight
+      && !snapshot.daemonCompatibility.blocksControlActions && (snapshot.controllerReachable || snapshot.appProxySwitchOn == true)
     menu.addItem(appProxy)
     menu.addItem(.separator())
 
@@ -353,7 +353,7 @@ final class StatusItemController: NSObject, NSMenuDelegate, ApplicationStatusIte
   }
 
   @objc private func toggleEnhancedTUN(_ sender: NSMenuItem) {
-    let displayedValue = renderedSnapshot?.enhancedTUN ?? latestSnapshot.enhancedTUN
+    let displayedValue = renderedSnapshot?.tunSwitchOn ?? latestSnapshot.tunSwitchOn
     // AppKit can optimistically toggle a check item. Restore the daemon-owned
     // value immediately; only authenticated readback may change the mark.
     sender.state = displayedValue ? .on : .off
@@ -363,7 +363,7 @@ final class StatusItemController: NSObject, NSMenuDelegate, ApplicationStatusIte
     }
     switch TrayEnhancedTUNClickPolicy.decision(
       displayedEnhancedTUN: displayedValue,
-      latestEnhancedTUN: latestSnapshot.enhancedTUN
+      latestEnhancedTUN: latestSnapshot.tunSwitchOn
     ) {
     case .refreshAuthoritatively:
       // The menu is showing a structural state that arrived just before or
@@ -380,18 +380,18 @@ final class StatusItemController: NSObject, NSMenuDelegate, ApplicationStatusIte
   }
 
   @objc private func toggleSystemProxy(_ sender: NSMenuItem) {
-    let displayed = renderedSnapshot?.systemProxyEnabled
+    let displayed = renderedSnapshot?.systemProxySwitchOn
     sender.state = displayed == true ? .on : .off
-    guard let displayed, displayed == latestSnapshot.systemProxyEnabled, !latestSnapshot.mutationOperationInFlight else {
+    guard let displayed, displayed == latestSnapshot.systemProxySwitchOn, !latestSnapshot.mutationOperationInFlight else {
       service.refresh(authoritative: true); return
     }
     perform { try await $0.setSystemProxyEnabled(!displayed) }
   }
 
   @objc private func toggleAppProxy(_ sender: NSMenuItem) {
-    let displayed = renderedSnapshot?.appProxyEnabled
+    let displayed = renderedSnapshot?.appProxySwitchOn
     sender.state = displayed == true ? .on : .off
-    guard let displayed, displayed == latestSnapshot.appProxyEnabled, !latestSnapshot.mutationOperationInFlight else {
+    guard let displayed, displayed == latestSnapshot.appProxySwitchOn, !latestSnapshot.mutationOperationInFlight else {
       service.refresh(authoritative: true); return
     }
     perform { try await $0.setAppProxyEnabled(!displayed) }

@@ -424,6 +424,40 @@ extension ConfiguratorTests {
         XCTAssertFalse(try ProxyConfiguration.load(path: path.path).resumesEnhancedTUN)
     }
 
+    func testIndependentSavedSwitchesSurviveRuntimeFailureAndRestartMigration() throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("daemon.json")
+        for tun in [false, true] {
+            for proxy in [false, true] {
+                // The old running state deliberately differs from the new choice.
+                try JSONEncoder().encode(ProxyConfiguration(
+                    manageSystemDNS: false, enhancedTUNEnabled: !tun,
+                    localDoH: LocalDoHConfiguration()
+                )).write(to: path)
+                try RuntimeSwitchPreferences.setTUN(tun, configurationPath: path.path)
+                try RuntimeSwitchPreferences.setSystemProxy(proxy, configurationPath: path.path)
+                let beforeTransition = try Data(contentsOf: path)
+                var saved = try ProxyConfiguration.load(path: path.path)
+                XCTAssertEqual(saved.expectsEnhancedTUN, !tun, "Intent is not runtime success")
+                XCTAssertEqual(saved.resumesEnhancedTUN, tun)
+                XCTAssertEqual(saved.systemProxyEnabled, proxy)
+                // A runtime transaction restores its checkpoint on failure.
+                try LocalDoHConfigurationStore.setEnhancedTUN(tun, configurationPath: path.path)
+                try beforeTransition.write(to: path)
+                try LocalDoHConfigurationStore.ensureBaseService(configurationPath: path.path)
+                saved = try ProxyConfiguration.load(path: path.path)
+                XCTAssertEqual(saved.resumesEnhancedTUN, tun)
+                XCTAssertEqual(saved.systemProxyEnabled, proxy)
+                XCTAssertFalse(saved.expectsEnhancedTUN)
+                XCTAssertEqual((try FileManager.default.attributesOfItem(atPath: path.path)[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+            }
+        }
+        let legacy = try JSONDecoder().decode(ProxyConfiguration.self, from: JSONEncoder().encode(ProxyConfiguration()))
+        XCTAssertNil(legacy.systemProxyEnabled)
+        XCTAssertTrue(legacy.resumesEnhancedTUN)
+    }
+
     func testLegacyStickyHistoryCannotOverrideLastTUNChoice() throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

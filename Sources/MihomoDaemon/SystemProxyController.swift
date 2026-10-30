@@ -75,7 +75,7 @@ final class SystemProxyController {
         guard (1024...65535).contains(port) else { throw failure("Invalid managed mixed proxy port") }
         if !enabled, try backup().isEmpty { return }
         let p = try preferences()
-        guard SCPreferencesLock(p, true) else { throw failure("Could not lock system proxy preferences") }
+        guard SCPreferencesLock(p, false) else { throw failure("Could not lock system proxy preferences") }
         defer { SCPreferencesUnlock(p) }
         SCPreferencesSynchronize(p)
         var saved = try backup()

@@ -5,6 +5,14 @@ import XCTest
 @testable import MihomoBoxApp
 
 final class TrayControlClientTests: XCTestCase {
+  func testSavedChoicesDecodeIndependentlyFromActualState() throws {
+    let data = Data(#"{"agent_running":false,"profiles":{"profiles":[]},"snapshot":null,"system_proxy_enabled":false,"system_proxy_requested":true,"enhanced_tun_requested":true}"#.utf8)
+    let poll = try TrayControlClient.decodePoll(data)
+    XCTAssertEqual(poll.systemProxyRequested, true)
+    XCTAssertEqual(poll.enhancedTUNRequested, true)
+    XCTAssertEqual(poll.systemProxyEnabled, false)
+    XCTAssertFalse(poll.enhancedTUN)
+  }
   func testSystemProxyRequiresAuthoritativeReadbackAndSupportsOlderDaemon() async throws {
     for observed in [true, false, nil] as [Bool?] {
       var object: [String:Any] = ["agent_running":true, "profiles":["profiles":[]], "snapshot":NSNull()]

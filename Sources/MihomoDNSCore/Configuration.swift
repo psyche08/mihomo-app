@@ -54,6 +54,8 @@ public struct ProxyConfiguration: Codable, Equatable {
     public var enhancedTUNPreviouslyEnabled: Bool?
     /// Last explicit choice, preserved while migration temporarily enters standby.
     public var enhancedTUNResumeEnabled: Bool?
+    /// Saved System Proxy choice; absence in older configurations means off.
+    public var systemProxyEnabled: Bool?
     public var loopbackInterface: String
     public var loopbackAlias: String
     public var loopbackNetmask: String
@@ -75,6 +77,7 @@ public struct ProxyConfiguration: Codable, Equatable {
         enhancedTUNEnabled: Bool? = nil,
         enhancedTUNPreviouslyEnabled: Bool? = nil,
         enhancedTUNResumeEnabled: Bool? = nil,
+        systemProxyEnabled: Bool? = nil,
         loopbackInterface: String = "lo0",
         loopbackAlias: String = "127.0.0.53",
         loopbackNetmask: String = "255.0.0.0",
@@ -95,6 +98,7 @@ public struct ProxyConfiguration: Codable, Equatable {
         self.enhancedTUNEnabled = enhancedTUNEnabled
         self.enhancedTUNPreviouslyEnabled = enhancedTUNPreviouslyEnabled
         self.enhancedTUNResumeEnabled = enhancedTUNResumeEnabled
+        self.systemProxyEnabled = systemProxyEnabled
         self.loopbackInterface = loopbackInterface
         self.loopbackAlias = loopbackAlias
         self.loopbackNetmask = loopbackNetmask
@@ -230,6 +234,27 @@ public struct ProxyConfiguration: Codable, Equatable {
                 throw ConfigurationError.incompatibleDNSOwnership
             }
         }
+    }
+}
+
+/// User choices are committed before runtime transitions and survive rollback.
+public enum RuntimeSwitchPreferences {
+    public static func setTUN(_ enabled: Bool, configurationPath: String) throws {
+        var configuration = try ProxyConfiguration.load(path: configurationPath)
+        configuration.enhancedTUNResumeEnabled = enabled
+        configuration.enhancedTUNPreviouslyEnabled = enabled
+        try write(configuration, path: configurationPath)
+    }
+    public static func setSystemProxy(_ enabled: Bool, configurationPath: String) throws {
+        var configuration = try ProxyConfiguration.load(path: configurationPath)
+        configuration.systemProxyEnabled = enabled
+        try write(configuration, path: configurationPath)
+    }
+    private static func write(_ configuration: ProxyConfiguration, path: String) throws {
+        try configuration.validate()
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(configuration).write(to: URL(fileURLWithPath: path), options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
     }
 }
 
