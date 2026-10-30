@@ -18,6 +18,13 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
     private let codeAccess = AppProxyCodeAccessClient()
     private let usesHeadlessActivation: Bool
     private var maintenance: Task<Void, Never>?
+    private var leaseKeeper: Task<Void, Never>?
+    private var leaseTarget: (manager: NEAppProxyProviderManager, generation: UUID)?
+    private let leaseRenewer = AppProxyLeaseRenewer()
+    private let preferenceGate = AppProxyPreferenceGate()
+    private var preferencesObserver: NSObjectProtocol?
+    private var preferencesDirty = true
+    private var preferenceRevision = 0
     private var identityIssue: String?
     private var discoveryIssues: [String: Int] = [:]
     private var lastReadbackObservation: String?
@@ -51,6 +58,20 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
     init(maintenance enabled: Bool) {
         usesHeadlessActivation = enabled
         super.init()
+        preferencesObserver = NotificationCenter.default.addObserver(forName: .NEVPNConfigurationChange, object: nil,
+            queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.preferencesChanged() }
+            }
+        // Renewal does not acquire the preferences/mutation lock. Its only
+        // authority is an already validated generation, revalidated by the
+        // provider on every renewal. Slow OS preference callbacks cannot starve it.
+        leaseKeeper = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(20)) } catch { return }
+                guard !Task.isCancelled else { return }
+                await self?.renewCachedLease()
+            }
+        }
         guard enabled else { return }
         maintenance = Task { [weak self] in
             await self?.maintainIdentities()
@@ -61,7 +82,46 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
             }
         }
     }
-    deinit { maintenance?.cancel() }
+    deinit {
+        maintenance?.cancel(); leaseKeeper?.cancel()
+        if let preferencesObserver { NotificationCenter.default.removeObserver(preferencesObserver) }
+    }
+
+    private func preferencesChanged() {
+        preferencesDirty = true
+        preferenceRevision &+= 1
+    }
+    private func observedManager() async throws -> NEAppProxyProviderManager? {
+        if preferencesDirty { return try await load() }
+        return liveManager
+    }
+    private func rememberLease(_ manager: NEAppProxyProviderManager) {
+        let raw = (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration
+        guard manager.isEnabled, manager.connection.status == .connected,
+              raw?["routing"] as? String == "per-application-v4",
+              Self.rulesDigest(manager.appRules) == raw?["rulesDigest"] as? String,
+              let data = raw?["identitySnapshot"] as? Data,
+              let snapshot = try? AppProxyIdentitySnapshot.decode(data), snapshot.ownerUID == getuid() else { leaseTarget = nil; return }
+        leaseTarget = (manager, snapshot.generation)
+    }
+    private func renew(_ manager: NEAppProxyProviderManager, generation: UUID) async throws {
+        try await leaseRenewer.run(generation: generation) {
+            try Self.requireProvider(try await self.message(.init(.renew, expected: generation), to: manager), generation: generation)
+        }
+    }
+    private func renewCachedLease() async {
+        guard requestedEnabled, let target = leaseTarget else { return }
+        do {
+            try await renew(target.manager, generation: target.generation)
+        } catch {
+            // A concurrent commit may have replaced this generation. Never stop
+            // the new provider or publish old readiness because that renewal failed.
+            guard leaseTarget?.generation == target.generation else { return }
+            identityIssue = "renewal:" + Self.issueCode(error)
+            preferencesDirty = true
+            AppLog.error("event=app_proxy_policy_failure phase=renewal issue=\(Self.issueCode(error))")
+        }
+    }
 
     private var available: Bool {
         guard Bundle.main.bundleURL.pathExtension == "app", FileManager.default.fileExists(atPath:
@@ -80,12 +140,12 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         NSError(domain: "MihomoBox.AppProxy", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
     }
     func status(settings: AppProxySettings) async throws -> AppProxyExtensionStatus {
-        // Serialize preference/session reads with renewal and policy publication.
+        // Policy reads remain serialized with publication; renewal is independent.
         try await waitUntilIdle()
         defer { crossProcess?.unlock() }
         busy = true; defer { busy = false }
         let isAvailable = available
-        let manager = isAvailable ? try await load() : nil
+        let manager = isAvailable ? try await observedManager() : nil
         liveManager = manager
         migrateSelection(manager)
         let configuration = (manager?.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration
@@ -129,10 +189,10 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         guard !busy, available, crossProcess?.tryLock() ?? true else { return nil }
         defer { crossProcess?.unlock() }
         busy = true; defer { busy = false }
-        if liveManager == nil { liveManager = try? await load() }
+        if preferencesDirty { liveManager = try? await observedManager() }
         guard let manager = liveManager, manager.connection.status == .connected else { return nil }
         do { return try await message(.init(.flowOwners), to: manager).flowOwners }
-        catch { liveManager = nil; return nil }
+        catch { return nil }
     }
 
     func launchHosts() async -> [AppProxyLaunchHost] {
@@ -187,7 +247,7 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
             crossProcess?.unlock() // The signed child acquires this lock itself.
             defer { busy = false }
             try await runHeadlessToggle(enabled)
-            liveManager = nil; identityIssue = nil
+            liveManager = nil; preferencesDirty = true; identityIssue = nil
             return
         }
         try await waitUntilIdle()
@@ -258,7 +318,7 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         if let existing, let old, existing.isEnabled, existing.connection.status == .connected {
             do {
                 plan = try await AppProxyAuthorizationLease.run(renew: {
-                    try Self.requireProvider(try await self.message(.init(.renew, expected: old.generation), to: existing), generation: old.generation)
+                    try await self.renew(existing, generation: old.generation)
                 }, operation: prepare)
             } catch { try await disable(existing); throw error }
         } else { plan = try await prepare() }
@@ -278,8 +338,8 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
            previous?.providerConfiguration?["ports"] as? [String: Int] == Dictionary(uniqueKeysWithValues: settings.applications.map { ($0.id, Int($0.port)) }),
            previous?.providerConfiguration?["bypassCIDRs"] as? [String] == settings.bypass.cidrs {
             do {
-                let state = try await message(.init(.renew, expected: old.generation), to: existing)
-                try Self.requireProvider(state, generation: old.generation)
+                try await renew(existing, generation: old.generation)
+                rememberLease(existing)
                 identityIssue = nil
                 await syncProcessRoutes(snapshot)
                 return
@@ -289,7 +349,7 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
                 try await disable(existing)
             }
         }
-        try await install(settings: settings, targets: targets, snapshot: snapshot, existing: existing)
+        try await install(settings: settings, targets: targets, snapshot: snapshot)
         await syncProcessRoutes(snapshot)
     }
 
@@ -308,9 +368,11 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
     }
 
     private func install(settings: AppProxySettings, targets: AIAppTargets,
-                         snapshot: AppProxyIdentitySnapshot, existing: NEAppProxyProviderManager?) async throws {
+                         snapshot: AppProxyIdentitySnapshot) async throws {
         try await removeLegacyPacketConfigurations()
-        let manager = existing ?? Self.makeManager()
+        // A cached manager can renew an existing lease, but cannot authorize a
+        // policy mutation. Always read current preferences before prepare/save.
+        let manager = try await load() ?? Self.makeManager()
         guard manager.routingMethod == .sourceApplication else { throw failure("The saved VPN is not an application routing configuration.") }
         let previous = manager.protocolConfiguration as? NETunnelProviderProtocol
         let previousRules = manager.appRules
@@ -347,12 +409,14 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
                     let committed = status.generation == snapshot.generation ? status
                         : try await message(.init(.commit, expected: snapshot.generation), to: manager)
                     try Self.requireProvider(committed, generation: snapshot.generation)
+                    leaseTarget = (manager, snapshot.generation)
                     if !liveUpdate {
                         manager.appRules = targets.rules
                         try await save(manager); try await reload(manager)
                     }
                     try requireSameRules(manager.appRules, targets.rules, phase: "enable")
                     try Self.requireProvider(try await message(.init(.status), to: manager), generation: snapshot.generation)
+                    liveManager = manager; rememberLease(manager)
                     identityIssue = nil; return
                 }
                 try await Task.sleep(for: .seconds(1))
@@ -386,7 +450,7 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
          "ports": Dictionary(uniqueKeysWithValues: settings.applications.map { ($0.id, Int($0.port)) })]
     }
     enum ProviderTransportFailure: String, Error, LocalizedError {
-        case emptyReply, oversizedReply, preferencesTimeout
+        case emptyReply, oversizedReply, preferencesTimeout, preferencesBusy
         var errorDescription: String? { "App Proxy provider reply unavailable: " + rawValue }
     }
     private func message(_ request: AppProxyRuntimeMessage, to manager: NEAppProxyProviderManager) async throws -> AppProxyRuntimeStatus {
@@ -435,13 +499,13 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         busy = true; defer { busy = false }
         var managed: NEAppProxyProviderManager?
         do {
-            let manager = try await load(); managed = manager; migrateSelection(manager)
+            let manager = try await observedManager(); managed = manager; migrateSelection(manager)
             guard requestedEnabled else {
                 if let manager, manager.isEnabled || manager.connection.status == .connected {
                     if usesHeadlessActivation {
                         holdsLock = false; crossProcess?.unlock()
                         try await runHeadlessToggle(false)
-                        liveManager = nil
+                        liveManager = nil; preferencesDirty = true
                     } else { try await disable(manager) }
                 }
                 return
@@ -460,7 +524,7 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
                manager?.isEnabled != true || manager?.connection.status != .connected {
                 holdsLock = false; crossProcess?.unlock()
                 try await runHeadlessToggle(true)
-                liveManager = nil; identityIssue = nil
+                liveManager = nil; preferencesDirty = true; identityIssue = nil
             } else {
                 try await reconcile(settings: settings, existing: manager, interactiveID: nil)
             }
@@ -470,7 +534,10 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
             AppLog.error("event=app_proxy_policy_failure phase=maintenance issue=\(Self.issueCode(error))")
             // System-wide failures (console owner, transport, ambiguous publication)
             // remain fail-closed. Per-app discovery/consent failures are handled above.
-            if holdsLock, let managed { do { try await disable(managed) } catch { identityIssue = "rollbackUnverified" } }
+            let readUnavailable = (error as? ProviderTransportFailure).map { [.preferencesTimeout, .preferencesBusy].contains($0) } == true
+            if !readUnavailable, holdsLock, let managed {
+                do { try await disable(managed) } catch { identityIssue = "rollbackUnverified" }
+            }
         }
     }
 
@@ -536,10 +603,10 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         return manager
     }
     private func removeLegacyPacketConfigurations() async throws {
-        let managers: [NETunnelProviderManager] = try await withCheckedThrowingContinuation { c in
+        let managers: [NETunnelProviderManager] = try await preferenceRequest("legacyLoadAll") { finish in
             NETunnelProviderManager.loadAllFromPreferences { values, error in
-                if let error { c.resume(throwing: error) }
-                else { c.resume(returning: values ?? []) }
+                if let error { finish(.failure(error)) }
+                else { finish(.success(values ?? [])) }
             }
         }
         for manager in managers where !(manager is NEAppProxyProviderManager)
@@ -547,21 +614,25 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
             guard !manager.isEnabled, [.disconnected, .invalid].contains(manager.connection.status) else {
                 throw failure("Disable the earlier VPN configuration for MihomoBox in System Settings before retrying.")
             }
-            try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
+            let _: Void = try await preferenceRequest("legacyRemove") { finish in
                 manager.removeFromPreferences { error in
-                    if let error { c.resume(throwing: error) } else { c.resume() }
+                    if let error { finish(.failure(error)) } else { finish(.success(())) }
                 }
             }
         }
     }
     private func preferenceRequest<Value>(_ operation: String, _ start: (@escaping (Result<Value, Error>) -> Void) -> Void) async throws -> Value {
-        try await withCheckedThrowingContinuation { continuation in
+        guard let ticket = preferenceGate.begin() else { throw ProviderTransportFailure.preferencesBusy }
+        let gate = preferenceGate
+        return try await withCheckedThrowingContinuation { continuation in
             let completion = AppProxyCompletion(continuation)
             let timeout = DispatchWorkItem {
                 AppLog.error("event=app_proxy_preferences_timeout operation=\(operation)")
                 completion.finish(.failure(ProviderTransportFailure.preferencesTimeout))
             }
-            start { timeout.cancel(); completion.finish($0) }
+            // Timing out does not cancel the OS request. Keep the gate occupied
+            // until its real callback arrives instead of growing nehelper's queue.
+            start { gate.finish(ticket); timeout.cancel(); completion.finish($0) }
             // A newly signed host/extension can spend over 15 seconds in macOS
             // assessment during an in-place upgrade. Keep a finite budget without
             // misclassifying normal first activation as an unavailable service.
@@ -569,6 +640,7 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         }
     }
     private func load() async throws -> NEAppProxyProviderManager? {
+        let revision = preferenceRevision
         let managers: [NEAppProxyProviderManager] = try await preferenceRequest("loadAll") { finish in
             NEAppProxyProviderManager.loadAllFromPreferences { values, error in
                 if let error { finish(.failure(error)) }
@@ -577,7 +649,10 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         }
         let matches = managers.filter { ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == extensionID }
         guard matches.count <= 1 else { throw failure("Multiple App Proxy configurations require review in System Settings.") }
-        guard let manager = matches.first else { return nil }
+        guard let manager = matches.first else {
+            liveManager = nil; leaseTarget = nil; preferencesDirty = preferenceRevision != revision
+            return nil
+        }
         // Use a current preference read for policy decisions; do not authorize from
         // an enumerated manager's potentially older view. Reload failure propagates.
         let enumerated = Self.readbackObservation(manager)
@@ -588,6 +663,8 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
             lastReadbackObservation = observation
             AppLog.info("event=app_proxy_preference_readback \(observation)")
         }
+        liveManager = manager; rememberLease(manager)
+        preferencesDirty = preferenceRevision != revision
         return manager
     }
     // Bounded, non-identifying metadata only. Never emit rules, paths, requirements,
@@ -613,6 +690,7 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         }
     }
     private func disable(_ manager: NEAppProxyProviderManager) async throws {
+        leaseTarget = nil; preferencesDirty = true
         manager.connection.stopVPNTunnel()
         manager.isEnabled = false
         try await save(manager); try await reload(manager)
@@ -795,4 +873,20 @@ final class AppProxyMutationLock {
     deinit { close(descriptor) }
     func tryLock() -> Bool { flock(descriptor, LOCK_EX | LOCK_NB) == 0 }
     func unlock() { flock(descriptor, LOCK_UN) }
+}
+
+/// An expired caller must not enqueue another OS request behind its still-live
+/// predecessor. A late callback releases only its own ticket.
+final class AppProxyPreferenceGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pending: UUID?
+    func begin() -> UUID? {
+        lock.lock(); defer { lock.unlock() }
+        guard pending == nil else { return nil }
+        let ticket = UUID(); pending = ticket; return ticket
+    }
+    func finish(_ ticket: UUID) {
+        lock.lock(); defer { lock.unlock() }
+        if pending == ticket { pending = nil }
+    }
 }

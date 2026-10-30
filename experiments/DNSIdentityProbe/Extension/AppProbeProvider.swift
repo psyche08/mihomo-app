@@ -9,6 +9,8 @@ private let appLog = Logger(subsystem: "dev.linsheng.mihomo-dns-probe", category
 
 final class AppProbeProvider: NEAppProxyProvider {
     private let queue = DispatchQueue(label: "app-probe.flows")
+    private let validationQueue = DispatchQueue(label: "app-probe.identity-validation", qos: .utility)
+    private var renewal: (generation: UUID, replies: [(Data?) -> Void])?
     private var closers: [UUID: () -> Void] = [:]
     private var counts: [String: Int] = [:]
     private var expiry: DispatchWorkItem?
@@ -239,11 +241,12 @@ final class AppProbeProvider: NEAppProxyProvider {
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + 5, repeating: 5)
         timer.setEventHandler { [weak self] in
-            guard let self, let snapshot = self.accessLease?.snapshot else { return }
+            guard let self, self.active, let snapshot = self.accessLease?.snapshot else { return }
             if self.generationGate?.expirePrepared(now: ProcessInfo.processInfo.systemUptime) == true { self.pendingAccess = nil }
             if Self.consoleUID() != snapshot.ownerUID || ProcessInfo.processInfo.systemUptime - self.lastRenewal > 90 {
                 self.lastFailure = Self.consoleUID() != snapshot.ownerUID ? .wrongUser : .staleAuthorization
                 self.active = false
+                appLog.error("app_authorization_expired reason=\(self.lastFailure!.rawValue, privacy: .public)")
                 self.cancelProxyWithError(NSError(domain: "MihomoBox.AppProxy.Authorization", code: 2))
             }
         }
@@ -280,19 +283,59 @@ final class AppProbeProvider: NEAppProxyProvider {
                 case .abort: self.pendingAccess = nil; self.generationGate?.abort()
                 case .renew:
                     guard message.expected == lease.snapshot.generation else { throw AppProxyIdentityFailure.generationMismatch }
-                    try lease.revalidate()
-                    self.lastRenewal = ProcessInfo.processInfo.systemUptime
+                    try self.generationGate?.validateRenewal(expected: lease.snapshot.generation, active: self.active,
+                        lastRenewal: self.lastRenewal, now: ProcessInfo.processInfo.systemUptime)
+                    try self.renewLease(lease, reply: completionHandler)
+                    return
                 }
             } catch { failure = error as? AppProxyIdentityFailure ?? .malformed }
-            let status = AppProxyRuntimeStatus(generation: self.accessLease?.snapshot.generation,
-                ready: self.active && failure == nil && self.lastFailure == nil,
-                verifiedTargets: self.accessLease?.snapshot.records.count ?? 0,
-                failure: failure ?? self.lastFailure,
-                // The owner table replaces receipts and counters to stay within the message limit.
-                counters: owners == nil ? self.counts : [:], recentFlows: owners == nil ? self.flowEvidence : [],
-                flowOwners: owners, providerVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)
-            completionHandler?(try? JSONEncoder().encode(status))
+            completionHandler?(self.runtimeReply(failure: failure, owners: owners))
         }
+    }
+
+    /// Full-package signature checks may be slow. Keep data forwarding, status
+    /// reads, and the hard lease deadline on the flow queue while validating.
+    private func renewLease(_ lease: AppProxyAccessLease, reply: ((Data?) -> Void)?) throws {
+        let generation = lease.snapshot.generation
+        if let pending = renewal {
+            guard pending.generation == generation else { throw AppProxyIdentityFailure.generationMismatch }
+            guard pending.replies.count < 8 else { throw AppProxyIdentityFailure.capacity }
+            if let reply { renewal?.replies.append(reply) }
+            return
+        }
+        renewal = (generation, reply.map { [$0] } ?? [])
+        let started = ProcessInfo.processInfo.systemUptime
+        validationQueue.async {
+            let result = Result { try lease.revalidate() }
+            self.queue.async {
+                let replies = self.renewal?.replies ?? []
+                self.renewal = nil
+                var failure: AppProxyIdentityFailure?
+                do {
+                    guard Self.consoleUID() == lease.snapshot.ownerUID else { throw AppProxyIdentityFailure.wrongUser }
+                    guard self.accessLease === lease else { throw AppProxyIdentityFailure.generationMismatch }
+                    guard let gate = self.generationGate else { throw AppProxyIdentityFailure.staleAuthorization }
+                    try gate.validateRenewal(expected: generation, active: self.active,
+                        lastRenewal: self.lastRenewal, now: ProcessInfo.processInfo.systemUptime)
+                    try result.get()
+                    self.lastRenewal = ProcessInfo.processInfo.systemUptime
+                    self.count("lease_renewed")
+                    let elapsed = Int((self.lastRenewal - started) * 1000)
+                    self.counts["lease_validation_ms_max"] = max(self.counts["lease_validation_ms_max"] ?? 0, elapsed)
+                } catch { failure = error as? AppProxyIdentityFailure ?? .malformed }
+                let data = self.runtimeReply(failure: failure)
+                replies.forEach { $0(data) }
+            }
+        }
+    }
+    private func runtimeReply(failure: AppProxyIdentityFailure?, owners: AppProxyFlowOwners? = nil) -> Data? {
+        let status = AppProxyRuntimeStatus(generation: accessLease?.snapshot.generation,
+            ready: active && failure == nil && lastFailure == nil,
+            verifiedTargets: accessLease?.snapshot.records.count ?? 0,
+            failure: failure ?? lastFailure,
+            counters: owners == nil ? counts : [:], recentFlows: owners == nil ? flowEvidence : [],
+            flowOwners: owners, providerVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)
+        return try? JSONEncoder().encode(status)
     }
 
     private func reject(_ flow: NEAppProxyFlow) {

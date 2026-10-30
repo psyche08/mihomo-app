@@ -42,7 +42,8 @@ public final class ProxyService {
         )
         self.globalDNS = GlobalDNSPreferences(
             servers: configuration.managedSystemDNSServers,
-            backupPath: configuration.systemDNSBackupPath
+            backupPath: configuration.systemDNSBackupPath,
+            includeLegacyTUNDNS: configuration.usesGlobalDNSFallback
         )
         self.mihomoSupervisor = configuration.mihomoProcess.map(MihomoSupervisor.init)
     }
@@ -54,9 +55,7 @@ public final class ProxyService {
         if configuration.manageSystemDNS {
             try globalDNS.restore()
             try aliasManager.removeIfManaged()
-            if !configuration.usesGlobalDNSFallback {
-                try aliasManager.ensure()
-            }
+            try aliasManager.ensure()
         }
         try networkState.start()
 
@@ -81,7 +80,7 @@ public final class ProxyService {
         )
 
         do {
-            if configuration.localDoH == nil && !configuration.usesGlobalDNSFallback {
+            if configuration.localDoH == nil {
                 channels.append(try startUDP(endpoint: configuration.systemDNSListen, forwarder: systemDNSForwarder))
                 channels.append(try startTCP(endpoint: configuration.systemDNSListen, forwarder: systemDNSForwarder))
             }
@@ -160,7 +159,8 @@ public final class ProxyService {
         MihomoRuntimeInspector.flushMihomoDNSCaches(configuration: configuration)
         let preferences = GlobalDNSPreferences(
             servers: configuration.managedSystemDNSServers,
-            backupPath: configuration.systemDNSBackupPath
+            backupPath: configuration.systemDNSBackupPath,
+            includeLegacyTUNDNS: configuration.usesGlobalDNSFallback
         )
         try preferences.restore()
         let alias = LoopbackAliasManager(
@@ -176,7 +176,8 @@ public final class ProxyService {
     public static func isSystemDNSApplied(configuration: ProxyConfiguration) throws -> Bool {
         let preferences = GlobalDNSPreferences(
             servers: configuration.managedSystemDNSServers,
-            backupPath: configuration.systemDNSBackupPath
+            backupPath: configuration.systemDNSBackupPath,
+            includeLegacyTUNDNS: configuration.usesGlobalDNSFallback
         )
         return try preferences.isApplied()
     }
@@ -184,7 +185,8 @@ public final class ProxyService {
     public static func isSystemDNSRestored(configuration: ProxyConfiguration) throws -> Bool {
         let preferences = GlobalDNSPreferences(
             servers: configuration.managedSystemDNSServers,
-            backupPath: configuration.systemDNSBackupPath
+            backupPath: configuration.systemDNSBackupPath,
+            includeLegacyTUNDNS: configuration.usesGlobalDNSFallback
         )
         let persistentlyPresent = try preferences.containsManagedServerPersistently()
         let dynamicallyPresent = try preferences.containsManagedServerEffectively()

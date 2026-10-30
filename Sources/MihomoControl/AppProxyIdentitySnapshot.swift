@@ -431,6 +431,12 @@ public struct AppProxyGenerationGate {
         return false
     }
     public mutating func abort() { pending = nil }
+    /// Validation may complete after a stop, expiry, or a policy commit. A late
+    /// success must never resurrect expired authority or renew another generation.
+    public func validateRenewal(expected: UUID, active: Bool, lastRenewal: TimeInterval, now: TimeInterval) throws {
+        guard expected == current else { throw AppProxyIdentityFailure.generationMismatch }
+        guard active, now >= lastRenewal, now - lastRenewal <= 90 else { throw AppProxyIdentityFailure.staleAuthorization }
+    }
 }
 
 extension AppProxyIdentityFailure: LocalizedError {

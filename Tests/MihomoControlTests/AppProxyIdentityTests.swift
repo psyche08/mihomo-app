@@ -207,3 +207,21 @@ final class AppProxyIdentityTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(AppProxyRuntimeStatus.self, from: JSONEncoder().encode(current)).providerVersion, "1.0.9")
     }
 }
+
+extension AppProxyIdentityTests {
+    func testLateSignatureValidationCannotRenewExpiredStoppedOrReplacedLease() throws {
+        let generation = UUID(), next = UUID()
+        var gate = AppProxyGenerationGate(generation)
+        XCTAssertNoThrow(try gate.validateRenewal(expected: generation, active: true, lastRenewal: 10, now: 90))
+        for (active, now) in [(false, 90.0), (true, 100.01), (true, 9.0)] {
+            XCTAssertThrowsError(try gate.validateRenewal(expected: generation, active: active, lastRenewal: 10, now: now)) {
+                XCTAssertEqual($0 as? AppProxyIdentityFailure, .staleAuthorization)
+            }
+        }
+        try gate.prepare(next, expected: generation, now: 20)
+        try gate.commit(next, now: 21)
+        XCTAssertThrowsError(try gate.validateRenewal(expected: generation, active: true, lastRenewal: 21, now: 22)) {
+            XCTAssertEqual($0 as? AppProxyIdentityFailure, .generationMismatch)
+        }
+    }
+}

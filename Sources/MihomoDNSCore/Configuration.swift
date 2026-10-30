@@ -44,8 +44,8 @@ public struct ProxyConfiguration: Codable, Equatable {
     public var upstreamListen: Endpoint
     public var manageSystemDNS: Bool
     /// Persisted Global DNS mode, explicitly selected or entered as fallback
-    /// when LocalHttpDns is unavailable. macOS DNS points at Mihomo's Fake-IP
-    /// gateway and therefore requires Enhanced TUN to remain enabled.
+    /// when LocalHttpDns is unavailable. macOS DNS uses the independent
+    /// loopback bridge; Enhanced TUN remains required for Fake-IP traffic.
     public var globalDNSFallbackEnabled: Bool?
     /// Persisted desired TUN state. `nil` is accepted only for upgrades from
     /// older installations and means the previously always-on TUN behavior.
@@ -171,11 +171,11 @@ public struct ProxyConfiguration: Codable, Equatable {
     }
 
     public var managedSystemDNSServers: [String] {
-        usesGlobalDNSFallback ? [ManagedTUNDNS.server] : [systemDNSListen.host]
+        [systemDNSListen.host]
     }
 
     public var managedDNSProbeEndpoint: Endpoint {
-        usesGlobalDNSFallback ? Endpoint(host: ManagedTUNDNS.server, port: 53) : systemDNSListen
+        systemDNSListen
     }
 
     public func validate() throws {

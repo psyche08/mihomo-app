@@ -697,7 +697,7 @@ final class CoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: backupPath))
     }
 
-    func testGlobalDNSUpgradeRestoresLegacyBackupBeforeApplyingPeerAddress() throws {
+    func testGlobalDNSUpgradeRestoresLegacyBackupBeforeApplyingLoopbackBridge() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -716,7 +716,7 @@ final class CoreTests: XCTestCase {
         }
         let old = GlobalDNSPreferences(servers: ["198.18.0.1"], backupPath: backupPath, preferencesID: preferencesPath)
         try old.apply()
-        let upgraded = GlobalDNSPreferences(servers: ["198.18.0.2"], backupPath: backupPath, preferencesID: preferencesPath)
+        let upgraded = GlobalDNSPreferences(servers: ["127.0.0.53"], backupPath: backupPath, includeLegacyTUNDNS: true, preferencesID: preferencesPath)
         XCTAssertFalse(try upgraded.isApplied(), "Old local address must not satisfy the new DNS health check")
         XCTAssertTrue(try upgraded.containsManagedServerPersistently(), "Legacy DNS must block stopped-state success")
         try upgraded.restore()
@@ -1983,5 +1983,40 @@ private final class QueuedAsyncForwarder: AsyncDNSForwarding, @unchecked Sendabl
         defer { lock.unlock() }
         calls += 1
         return futures.removeFirst()
+    }
+}
+
+extension CoreTests {
+    func testBridgeFailureDoesNotRestartHealthyKernelOrRewriteDNSOnEveryProbe() {
+        let health = NetworkConsistencyHealth(controllerReachable: true, tunEnabled: true, tunInterface: "utun7",
+            fakeIPMode: true, fakeIPRouteReady: true, dnsBridgeReady: false, mihomoDNSReady: true,
+            systemDNSManaged: true, networkConsistent: false)
+        XCTAssertTrue(health.enhancedKernelReady)
+        var bridge = DNSBridgeFailurePolicy(), runtime = RuntimeRecoveryPolicy(), acquisition = DNSAcquisitionPolicy()
+        for ready in [false, true, false, true, false, true] {
+            XCTAssertNotEqual(bridge.decide(bridgeReady: ready, upstreamRuntimeReady: health.enhancedKernelReady,
+                networkOwned: true), .restoreOriginalDNS)
+            XCTAssertEqual(runtime.decide(runtimeReady: health.enhancedKernelReady, networkOwned: true, nowNanoseconds: 1), .none)
+        }
+        for _ in 0..<2 {
+            XCTAssertEqual(bridge.decide(bridgeReady: false, upstreamRuntimeReady: true, networkOwned: true), .debounce)
+        }
+        XCTAssertEqual(bridge.decide(bridgeReady: false, upstreamRuntimeReady: true, networkOwned: true), .restoreOriginalDNS)
+        acquisition.recordManageFailed(nowNanoseconds: 10_000_000_000)
+        for tick in 11...14 {
+            XCTAssertEqual(acquisition.decide(upstreamRuntimeReady: true, dnsBridgeReady: true,
+                systemDNSManaged: false, nowNanoseconds: UInt64(tick) * 1_000_000_000), .none)
+        }
+        XCTAssertEqual(acquisition.decide(upstreamRuntimeReady: true, dnsBridgeReady: true,
+            systemDNSManaged: false, nowNanoseconds: 15_000_000_000), .manage)
+    }
+    func testLoopbackFallbackMigrationDoesNotClaimScopedOrMixedLegacyResolvers() {
+        let sets = ManagedDNSDictionaryCleanup.restorationServerSets(for: ["127.0.0.53"], includeLegacyTUNDNS: true)
+        let key = kSCPropNetDNSServerAddresses as String
+        for address in ["127.0.0.53", "198.18.0.1", "198.18.0.2"] {
+            XCTAssertEqual(ManagedDNSDictionaryCleanup.matchingServers(sets, in: [key: [address]]), [address])
+            XCTAssertNil(ManagedDNSDictionaryCleanup.matchingServers(sets, in: [key: [address], "ServiceIdentifier": 2]))
+            XCTAssertNil(ManagedDNSDictionaryCleanup.matchingServers(sets, in: [key: [address, "192.0.2.53"]]))
+        }
     }
 }

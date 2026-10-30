@@ -39,13 +39,31 @@ mihomoboxctl app-proxy on
 mihomoboxctl app-proxy off
 ```
 
-The menu and App Proxy page share one host coordinator. Preference/session
-reads are serialized with enable/disable and authorization renewal, including
-headless CLI requests; diagnostic reads may wait for an active operation.
+The menu and App Proxy page share one host coordinator. In 1.1.2, diagnostics
+reuse the last loaded manager until NetworkExtension reports a configuration
+change. Policy mutations still require fresh preference readback. Existing
+provider authorization renews independently of preference reads and their lock;
+every renewal revalidates the same generation and approved code. A timed-out OS
+request retains its single-flight slot until its actual callback arrives, so
+background retries cannot build an unbounded nehelper request queue. Cold start
+still requires a successful OS preference read.
+
+Provider signature renewal runs on a separate validation queue; socket relay,
+status and the unchanged 90-second expiry remain responsive. A late validation
+cannot revive a stopped, expired or replaced generation. Concurrent requests for
+the same renewal are coalesced. Diagnostic counters `lease_renewed` and
+`lease_validation_ms_max` expose progress and duration without identifying code.
 A transient empty provider reply can be retried twice for status, flow-owner
-reads or renewal. Prepare/commit/abort, validation failures and timeouts are
-never replayed by this recovery. Startup and TUN decisions precede App Proxy
-polling, and failed menu actions retain a visible error.
+reads or renewal. Prepare/commit/abort and validation errors are never replayed.
+
+For sustained combined-mode acceptance, keep App Proxy and TUN on and System
+Proxy off for longer than the previous failure interval (at least 75 minutes on
+m4pro). Record bounded samples of health, switch state, lease counters, app
+inbound byte progress and client reconnect errors. Require successful UDP/TCP
+loopback DNS probes, no repeated DNS ownership transitions, no preference or
+lease-expiry errors, and separately attributed Claude/Codex traffic on their
+App Proxy inbounds. An idle client or a working TUN connection alone cannot
+establish stream stability. Publish only after this acceptance passes.
 
 All three switches persist their requested state independently. TUN and System
 Proxy choices live in root-owned `daemon.json`; App Proxy uses the existing

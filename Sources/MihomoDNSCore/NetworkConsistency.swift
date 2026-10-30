@@ -51,6 +51,12 @@ public struct NetworkConsistencyHealth: Codable, Equatable, Sendable {
     public var systemDNSManaged: Bool
     public var networkConsistent: Bool
 
+    /// Recovery concerns the owned core, independently of DNS bridge health.
+    var enhancedKernelReady: Bool {
+        controllerReachable && tunEnabled && tunInterface != nil
+            && fakeIPMode && fakeIPRouteReady && mihomoDNSReady
+    }
+
     enum CodingKeys: String, CodingKey {
         case controllerReachable = "controller_reachable"
         case tunEnabled = "tun_enabled"
@@ -204,7 +210,8 @@ public enum MihomoRuntimeInspector {
         } else {
             preferences = GlobalDNSPreferences(
                 servers: configuration.managedSystemDNSServers,
-                backupPath: configuration.systemDNSBackupPath
+                backupPath: configuration.systemDNSBackupPath,
+                includeLegacyTUNDNS: configuration.usesGlobalDNSFallback
             )
         }
         let systemDNSManaged = ((try? preferences.isApplied()) == true) && preferences.isEffective()
@@ -857,9 +864,6 @@ public final class NetworkConsistencyController: @unchecked Sendable {
         queue.sync {
             runtimeReloadInProgress = true
             safetyState.setRuntimeReady(false)
-            if configuration.usesGlobalDNSFallback {
-                restoreSafeNetwork(source: "tun_dns_reload")
-            }
             invalidateEgressMeasurement()
             healthGeneration.replace(with: generation)
             if let healthSnapshotPath {
@@ -990,9 +994,9 @@ public final class NetworkConsistencyController: @unchecked Sendable {
             globalDNS: globalDNS,
             preexistingFakeIPRouteInterface: preexistingFakeIPRouteInterface
         )
-        let kernelReady = before.controllerReachable && before.tunEnabled && before.tunInterface != nil
-        let enhancedRuntimeReady = kernelReady && before.fakeIPMode && before.mihomoDNSReady
-            && (configuration.localDoH != nil || before.dnsBridgeReady)
+        // The independent DNS bridge is not the kernel. A bridge failure must
+        // not restart a healthy Mihomo child or bypass the failure debounce.
+        let enhancedRuntimeReady = before.enhancedKernelReady
         let standbyRuntimeReady = before.controllerReachable && !before.tunEnabled
             && before.mihomoDNSReady && before.networkConsistent
         let upstreamRuntimeReady = configuration.expectsEnhancedTUN
@@ -1006,14 +1010,6 @@ public final class NetworkConsistencyController: @unchecked Sendable {
         var bridgeReadyForPolicies = before.dnsBridgeReady
         var changed = false
         var action = "observe"
-        // A TUN DNS address has no independent listener to serve through a
-        // kernel outage. Restore immediately; keep recovery counters running
-        // separately so transient route changes do not cause restart storms.
-        if configuration.usesGlobalDNSFallback, !upstreamRuntimeReady, networkOwned {
-            restoreSafeNetwork(source: "tun_dns_unavailable")
-            changed = true
-            action = "restore_tun_dns"
-        }
         let acquisitionDecision = configuration.manageSystemDNS
             ? acquisitionPolicy.decide(
                 upstreamRuntimeReady: upstreamRuntimeReady,
@@ -1030,9 +1026,7 @@ public final class NetworkConsistencyController: @unchecked Sendable {
                 let result = try DNSAcquisitionAttempt.run(
                     reprobeBridge: acquisitionDecision == .reacquireBridge,
                     ensureAlias: {
-                        if !configuration.usesGlobalDNSFallback {
-                            try aliasManager.ensure()
-                        }
+                        try aliasManager.ensure()
                     },
                     bridgeReady: {
                         MihomoRuntimeInspector.systemDNSBridgeResponds(
@@ -1043,6 +1037,7 @@ public final class NetworkConsistencyController: @unchecked Sendable {
                 )
                 switch result {
                 case .bridgeUnavailable:
+                    acquisitionPolicy.recordManageFailed(nowNanoseconds: DispatchTime.now().uptimeNanoseconds)
                     action = "reacquire_dns_bridge"
                     changed = true
                 case .managed:
@@ -1070,12 +1065,10 @@ public final class NetworkConsistencyController: @unchecked Sendable {
                 changed = true
             }
         case .maintain:
-            if !configuration.usesGlobalDNSFallback {
-                do {
-                    try aliasManager.ensure()
-                } catch {
-                    ServiceLog.error("event=network_transition_failed action=repair_loopback_alias")
-                }
+            do {
+                try aliasManager.ensure()
+            } catch {
+                ServiceLog.error("event=network_transition_failed action=repair_loopback_alias")
             }
         }
 
@@ -1095,6 +1088,7 @@ public final class NetworkConsistencyController: @unchecked Sendable {
         case .restoreOriginalDNS:
             safetyState.setRuntimeReady(false)
             restoreSafeNetwork(source: "dns_bridge_unhealthy")
+            acquisitionPolicy.recordManageFailed(nowNanoseconds: DispatchTime.now().uptimeNanoseconds)
             action = "restore_original_dns"
             changed = true
             ServiceLog.error(

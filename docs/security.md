@@ -264,3 +264,12 @@ file stamps and console-owner leases. No arbitrary root read API or broad
 sandbox exception is introduced. New publishers and ad-hoc code replacements
 need explicit approval. Same-UID and separate root sandbox fixture success are not evidence that real
 NetworkExtension or Claude end-to-end behavior has been validated.
+
+In 1.1.2, renewal of a previously loaded generation is independent of preference
+I/O. This cannot publish new rules: policy changes still require fresh stored
+configuration readback, and every renewal verifies the approved files/scopes,
+console owner, current generation, active session and unchanged 90-second lease.
+Slow signature verification runs outside the socket relay queue; its completion
+rechecks generation, lease identity and expiry before extending authorization.
+A configuration-read timeout cannot itself authorize a new generation. An OS
+request that has timed out remains single-flight until its actual completion.

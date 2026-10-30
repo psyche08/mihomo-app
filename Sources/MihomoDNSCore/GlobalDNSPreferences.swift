@@ -76,8 +76,11 @@ struct ResolverTopologyObservation: Equatable, Sendable {
 enum ManagedDNSDictionaryCleanup {
     /// The previous Global DNS address must remain recognizable during upgrade
     /// and restore, but it must never count as the newly applied resolver.
-    static func restorationServerSets(for servers: [String]) -> [[String]] {
-        servers == [ManagedTUNDNS.server]
+    static func restorationServerSets(for servers: [String], includeLegacyTUNDNS: Bool = false) -> [[String]] {
+        if includeLegacyTUNDNS {
+            return Array(Set([servers, [ManagedTUNDNS.server], [ManagedTUNDNS.legacyServer]]))
+        }
+        return servers == [ManagedTUNDNS.server]
             ? [servers, [ManagedTUNDNS.legacyServer]] : [servers]
     }
 
@@ -122,11 +125,12 @@ public final class GlobalDNSPreferences: @unchecked Sendable {
     public init(
         servers: [String],
         backupPath: String,
+        includeLegacyTUNDNS: Bool = false,
         preferencesID: String? = nil,
         primaryServiceIDOverride: String? = nil
     ) {
         self.servers = servers
-        self.restorationServerSets = ManagedDNSDictionaryCleanup.restorationServerSets(for: servers)
+        self.restorationServerSets = ManagedDNSDictionaryCleanup.restorationServerSets(for: servers, includeLegacyTUNDNS: includeLegacyTUNDNS)
         self.backupPath = backupPath
         self.preferencesID = preferencesID
         self.primaryServiceIDOverride = primaryServiceIDOverride

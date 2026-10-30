@@ -312,3 +312,35 @@ extension AppProxyCoordinatorTests {
         }
     }
 }
+
+extension AppProxyCoordinatorTests {
+    func testTimedOutPreferenceRequestStaysSingleFlightUntilRealCallback() throws {
+        let gate = AppProxyPreferenceGate(), first = try XCTUnwrap(AppProxyPreferenceGate().begin())
+        let pending = try XCTUnwrap(gate.begin())
+        // Caller timeout must not release the uncancellable OS request.
+        for _ in 0..<100 { XCTAssertNil(gate.begin()) }
+        gate.finish(first)
+        XCTAssertNil(gate.begin(), "An unrelated late completion cannot release the gate")
+        gate.finish(pending)
+        let next = try XCTUnwrap(gate.begin())
+        gate.finish(pending)
+        XCTAssertNil(gate.begin(), "A duplicate old completion cannot release a new request")
+        gate.finish(next)
+        XCTAssertNotNil(gate.begin())
+    }
+    @MainActor func testRenewalProgressesWhilePreferencesRemainBlockedAndCoalesces() async throws {
+        let gate = AppProxyPreferenceGate(), ticket = try XCTUnwrap(gate.begin())
+        let renewer = AppProxyLeaseRenewer(), generation = UUID()
+        var calls = 0
+        let operation: @MainActor () async throws -> Void = {
+            calls += 1
+            try await Task.sleep(for: .milliseconds(30))
+        }
+        async let first: Void = renewer.run(generation: generation, operation: operation)
+        async let second: Void = renewer.run(generation: generation, operation: operation)
+        try await first; try await second
+        XCTAssertEqual(calls, 1)
+        XCTAssertNil(gate.begin(), "Renewal must not consume or unlock the preference operation")
+        gate.finish(ticket)
+    }
+}

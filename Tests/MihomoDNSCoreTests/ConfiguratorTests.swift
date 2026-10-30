@@ -491,8 +491,8 @@ extension ConfiguratorTests {
         XCTAssertTrue(fallback.expectsEnhancedTUN)
         XCTAssertTrue(fallback.manageSystemDNS)
         XCTAssertNil(fallback.localDoH)
-        XCTAssertEqual(fallback.managedSystemDNSServers, ["198.18.0.2"])
-        XCTAssertEqual(fallback.managedDNSProbeEndpoint, Endpoint(host: "198.18.0.2", port: 53))
+        XCTAssertEqual(fallback.managedSystemDNSServers, ["127.0.0.53"])
+        XCTAssertEqual(fallback.managedDNSProbeEndpoint, Endpoint(host: "127.0.0.53", port: 53))
         XCTAssertEqual(fallback.upstreamListen, Endpoint(host: "127.0.0.1", port: 1054))
 
         let config = directory.appendingPathComponent("config.yaml")

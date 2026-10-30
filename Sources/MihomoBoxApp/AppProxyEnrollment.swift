@@ -84,3 +84,16 @@ struct AppProxyEnrollment {
         return try result.get()
     }
 }
+
+/// Periodic maintenance and a long consent/prepare operation can request the
+/// same renewal concurrently. Share one provider validation per generation.
+@MainActor final class AppProxyLeaseRenewer {
+    private var pending: (generation: UUID, ticket: UUID, task: Task<Void, Error>)?
+    func run(generation: UUID, operation: @escaping @MainActor () async throws -> Void) async throws {
+        if let pending, pending.generation == generation { return try await pending.task.value }
+        let ticket = UUID(), task = Task { try await operation() }
+        pending = (generation, ticket, task)
+        defer { if pending?.ticket == ticket { pending = nil } }
+        try await task.value
+    }
+}
