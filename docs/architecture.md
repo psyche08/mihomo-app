@@ -212,7 +212,7 @@ on/off and cold recovery use the same signed host executable with fixed
 NetworkExtension activation session from GUI polling. It reuses existing
 consent, has a 180-second deadline, and performs privileged actions only through
 the existing authenticated XPC interface. It cannot install components and does
-not create another Mihomo process. Preference callbacks have 15-second deadlines.
+not create another Mihomo process. Preference callbacks have 60-second deadlines to accommodate macOS assessment during upgrades.
 
 The extension reuses the audited experiment's flow handling and signature
 inspection, but `MAIN_APP_PROXY` requires the per-application routing schema

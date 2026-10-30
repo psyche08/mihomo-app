@@ -562,7 +562,10 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
                 completion.finish(.failure(ProviderTransportFailure.preferencesTimeout))
             }
             start { timeout.cancel(); completion.finish($0) }
-            DispatchQueue.global().asyncAfter(deadline: .now() + 15, execute: timeout)
+            // A newly signed host/extension can spend over 15 seconds in macOS
+            // assessment during an in-place upgrade. Keep a finite budget without
+            // misclassifying normal first activation as an unavailable service.
+            DispatchQueue.global().asyncAfter(deadline: .now() + 60, execute: timeout)
         }
     }
     private func load() async throws -> NEAppProxyProviderManager? {
