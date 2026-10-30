@@ -82,7 +82,8 @@ projects; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 Fresh App Proxy settings route OpenAI (`2DC432GLL2`, ChatGPT/Codex) and Anthropic
 (`Q6L2SF6YDW`, Claude) by verified Team ID. Choose a proxy node and approve the
-code scope before activation. Existing saved routes and approvals are preserved.
+code scope before activation. Existing customized routes and approvals are preserved. Untouched four-entry presets
+can be migrated with “Use Team ID Defaults” or `mihomoboxctl app-proxy policy migrate-defaults`.
 Team discovery covers Applications, conventional CLI locations and the known
 vendor runtime locations; code elsewhere needs an explicit directory scope.
 

@@ -21,6 +21,7 @@ struct TrayControlPoll: Sendable {
   var proxies: [TrayProxyNode]
   var profiles: [String]
   var activeProfile: String?
+  var systemProxyEnabled: Bool? = nil
 }
 
 enum TrayControlError: Error, LocalizedError {
@@ -60,6 +61,13 @@ actor TrayControlClient {
     let payload = try send(ControlRequest(operation: .trayState), retryReadOnce: true)
     guard !payload.isEmpty else { throw TrayControlError.missingPayload }
     return try Self.decodePoll(payload)
+  }
+
+  func setSystemProxyEnabled(_ enabled: Bool) throws -> TrayControlPoll {
+    _ = try send(ControlRequest(operation: .setSystemProxy, arguments: ["enabled": enabled ? "true" : "false"]), retryReadOnce: false)
+    let observed = try poll()
+    guard observed.systemProxyEnabled == enabled else { throw TrayControlError.readbackMismatch("System Proxy") }
+    return observed
   }
 
   func enableEnhancedTUN() throws -> TrayControlPoll {
@@ -252,7 +260,8 @@ actor TrayControlClient {
         outboundMode: .rule,
         proxies: [],
         profiles: envelope.profiles.profiles,
-        activeProfile: envelope.profiles.activeProfile
+        activeProfile: envelope.profiles.activeProfile,
+        systemProxyEnabled: envelope.systemProxyEnabled
       )
     }
 
@@ -294,7 +303,8 @@ actor TrayControlClient {
       outboundMode: TrayOutboundMode(rawValue: snapshot.configs.mode.lowercased()) ?? .rule,
       proxies: nodes,
       profiles: envelope.profiles.profiles,
-      activeProfile: envelope.profiles.activeProfile
+      activeProfile: envelope.profiles.activeProfile,
+      systemProxyEnabled: envelope.systemProxyEnabled
     )
   }
 
@@ -319,9 +329,11 @@ private struct TrayStateEnvelope: Decodable {
   var snapshot: RuntimeSnapshotEnvelope?
   var profiles: ProfileList
   var health: TrayHealth?
+  var systemProxyEnabled: Bool?
 
   enum CodingKeys: String, CodingKey {
     case agentRunning = "agent_running"
+    case systemProxyEnabled = "system_proxy_enabled"
     case snapshot, profiles, health
   }
 }

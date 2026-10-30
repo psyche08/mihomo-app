@@ -120,8 +120,8 @@ final class NativeWindowCoordinator: NSObject, NSWindowDelegate {
     }
     constrainFrameToVisibleScreens(window)
 
-    // Do not change NSApp.activationPolicy here. The AppKit application shell
-    // intentionally keeps MihomoBox as an accessory/menu-bar application.
+    NSApp.setActivationPolicy(.regular)
+    NSApp.unhide(nil)
     window.makeKeyAndOrderFront(nil)
     NSApp.activate()
     return window.isVisible
@@ -134,6 +134,7 @@ final class NativeWindowCoordinator: NSObject, NSWindowDelegate {
     dashboardStore.stop()
     saveFrame(window)
     window?.orderOut(nil)
+    NSApp.setActivationPolicy(.accessory)
   }
 
   func shutdown() {
@@ -149,6 +150,7 @@ final class NativeWindowCoordinator: NSObject, NSWindowDelegate {
     window.contentViewController = nil
     window.close()
     self.window = nil
+    NSApp.setActivationPolicy(.accessory)
   }
 
   func windowShouldClose(_ sender: NSWindow) -> Bool {

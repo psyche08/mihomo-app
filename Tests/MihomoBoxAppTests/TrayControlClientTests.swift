@@ -5,6 +5,21 @@ import XCTest
 @testable import MihomoBoxApp
 
 final class TrayControlClientTests: XCTestCase {
+  func testSystemProxyRequiresAuthoritativeReadbackAndSupportsOlderDaemon() async throws {
+    for observed in [true, false, nil] as [Bool?] {
+      var object: [String:Any] = ["agent_running":true, "profiles":["profiles":[]], "snapshot":NSNull()]
+      if let observed { object["system_proxy_enabled"] = observed }
+      let data = try JSONSerialization.data(withJSONObject:object)
+      XCTAssertEqual(try TrayControlClient.decodePoll(data).systemProxyEnabled, observed)
+      let session = QueueSession(responses:[ControlResponse(success:true),ControlResponse(success:true,payload:data)])
+      let client = TrayControlClient(makeSession:{session})
+      do { _ = try await client.setSystemProxyEnabled(true); XCTAssertEqual(observed,true) }
+      catch { XCTAssertNotEqual(observed,true) }
+      XCTAssertEqual(session.operations,[.setSystemProxy,.trayState])
+      XCTAssertEqual(session.arguments.first?["enabled"],"true")
+    }
+  }
+
   func testStartAgentAcceptsDelayedControllerReadiness() async throws {
     let session = QueueSession(responses: [
       ControlResponse(success: true),

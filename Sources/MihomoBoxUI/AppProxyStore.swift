@@ -400,6 +400,10 @@ public final class AppProxyStore: ObservableObject {
 
     public func restoreDefaults() {
         guard !busy, !refreshing, !extensionStatus.enabled else { return }
+        if let migrated = draft.teamPresetMigration {
+            draft = migrated
+            return
+        }
         for entry in AppProxyEntry.defaults where !draft.applications.contains(where: { $0.id == entry.id }) {
             guard draft.applications.count < 32 else { break }
             draft.applications.append(entry)

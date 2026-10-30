@@ -55,6 +55,9 @@ env \
 /bin/bash Tests/test_app_proxy_configuration.sh
 /bin/bash Tests/test_app_proxy_code_access.sh
 /bin/bash Tests/test_release_product.sh
+/usr/bin/python3 Tests/test_release_profiles.py
+/bin/bash Tests/test_release_export.sh
+bash Tests/test_system_proxy.sh
 /bin/bash -n scripts/*.sh Tests/e2e.sh
 /bin/zsh -n scripts/*.zsh
 /usr/bin/plutil -lint deploy/dev.linsheng.mihomo.daemon.plist

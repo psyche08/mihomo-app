@@ -1,7 +1,7 @@
 # Tray and Controller Contract
 
 The main window is native SwiftUI and hidden at startup. A pure Swift
-`NSApplicationDelegate` keeps the macOS accessory activation policy and event
+`NSApplicationDelegate` starts with the macOS accessory activation policy and owns the event
 loop, `NSStatusItem` owns the tray, Sparkle owns App updates, and an in-process
 `NSHostingController` owns the dashboard window.
 
@@ -10,6 +10,12 @@ The status item loads the exact pinned `assets/Meta.png` bytes embedded as
 light/dark menu bars, and uses a system symbol only as a damaged-bundle
 fallback.
 
+The main window switches the application to regular activation while shown, so
+MihomoBox appears in the Dock. Closing/hiding the window returns to accessory
+mode and removes the Dock icon; minimizing keeps it available for restoring the
+window. Clicking the Dock icon reopens the existing window. The daemon and tray
+continue running throughout these transitions.
+
 ## Menu
 
 ```text
@@ -17,6 +23,8 @@ Show Main Window
 ───────────────
 Network: Healthy
 ✓ Enhanced TUN
+✓ System Proxy
+✓ App Proxy
 ───────────────
 Outbound Mode ›
   ✓ Rule
@@ -44,6 +52,22 @@ Tools ›
 Version X.Y.Z
 Exit
 ```
+
+**System Proxy** uses `runtime.set-system-proxy` over the signed XPC boundary.
+The daemon writes fixed `127.0.0.1` HTTP/HTTPS/SOCKS endpoints using the running
+core's mixed port on enabled Ethernet/Wi-Fi services, temporarily disabling PAC
+and auto-discovery. It saves a root-only recovery baseline before committing.
+Turning it off restores only owned fields that still match its last write;
+other applications' subsequent changes and bypass-list edits are preserved.
+Port changes are reconciled with the managed listener. Stop/shutdown restores
+the original settings. Older daemons omit this optional state and the switch
+stays unavailable until component upgrade; no new administrator prompt is used.
+
+**App Proxy** pauses/resumes the saved application selections through the same
+host coordinator as the App Proxy page. It reuses previous consent and does not
+authorize new Team scopes silently. A fresh setup requires Authorize & Enable
+on the App Proxy page first. Both checkmarks come from readback, share the
+mutation lock, and reject clicks on stale displayed state.
 
 Each imported profile is also available under **Edit Profile**. The native
 editor keeps the user-owned YAML mirror in the current user context, provides

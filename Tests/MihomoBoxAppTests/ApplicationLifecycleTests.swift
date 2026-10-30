@@ -6,6 +6,17 @@ import XCTest
 
 @MainActor
 final class ApplicationLifecycleTests: XCTestCase {
+  func testDockReopenShowsExistingWindowAndHideSuspendsIt() {
+    let service = LifecycleTrayService()
+    let window = LifecycleWindow()
+    let delegate = AppDelegate(coordinator: LifecycleCoordinator(trayService: service), mainWindow: window, showWindowAtLaunch: false)
+    XCTAssertFalse(delegate.applicationShouldHandleReopen(NSApplication.shared, hasVisibleWindows: false))
+    delegate.applicationDidHide(Notification(name: NSApplication.didHideNotification))
+    XCTAssertEqual(window.showCount, 1)
+    XCTAssertEqual(window.hideCount, 1)
+    XCTAssertEqual(window.shutdownCount, 0)
+  }
+
   func testVersionMenuUsesBundleShortVersion() throws {
     let root = FileManager.default.temporaryDirectory
       .appendingPathComponent("mihomobox-version-\(UUID().uuidString).bundle")
@@ -112,13 +123,14 @@ private final class LifecycleCoordinator: AppShellCoordinating {
 private final class LifecycleWindow: NativeWindowControlling {
   private(set) var showCount = 0
   private(set) var shutdownCount = 0
+  private(set) var hideCount = 0
 
   func show() -> Bool {
     showCount += 1
     return true
   }
 
-  func hide() {}
+  func hide() { hideCount += 1 }
   func shutdown() { shutdownCount += 1 }
 }
 

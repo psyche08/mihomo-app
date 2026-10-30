@@ -10,44 +10,101 @@ The export pins published Developer ID leaf
 The host and extension require valid installed provisioning profiles. The
 keychain must already be available; no script unlocks it.
 
-From a clean committed checkout, with pinned release tools already installed:
+### One-time operator setup
 
-```bash
-RELEASE_BUILD_NUMBER=2026103001 PREVIOUS_RELEASE_BUILD_NUMBER=<latest-published-build> \
-NOTARY_KEYCHAIN_PROFILE=<existing-profile> ./scripts/release-local.zsh prepare
-NOTARY_KEYCHAIN_PROFILE=<existing-profile> ./scripts/release-local.zsh resume
+Install Xcode, the Ruby `xcodeproj` gem used by project validation, and the
+published Developer ID identity including its private key. Keep the existing
+Sparkle private key at `~/.config/mihomobox/sparkle-private-ed25519.b64` (0600).
+Configure a notarytool Keychain profile once, using an Apple ID app-specific
+password or App Store Connect API key through `xcrun notarytool store-credentials`.
+Never put passwords or private-key contents in repository files or command logs.
+Keychain prompts remain operator-controlled; scripts never unlock a keychain.
+
+Save **non-secret** defaults in `~/.config/mihomobox/release.json`:
+
+```json
+{
+  "notary_profile": "mihomobox-release",
+  "profiles_directory": "/absolute/path/to/release-profiles",
+  "build_floor": 1100,
+  "ruby_gem_home": "/absolute/path/to/installed/ruby/gems"
+}
 ```
 
-Use an increasing numeric build number, greater than the latest published
-Sparkle build (including Cloud builds). `prepare` runs validation, archives,
-exports, seals the signed ZIP, notarizes, staples and generates the two-file
-release set. Logs and submission state are under
-`dist/.release-state/local-VERSION-COMMIT`. `resume` never rebuilds or re-signs;
-it verifies the sealed submission digest and queries the saved submission ID.
-An ambiguous submission fails closed for manual reconciliation. A failure before
-export requires inspecting the logs and explicitly preserving/relocating that
-failed state before starting a new prepare; resume cannot build a missing App.
+`profiles_directory` and `ruby_gem_home` are optional if Xcode's installed
+profiles and normal Ruby environment already suffice. `MIHOMOBOX_RELEASE_CONFIG`
+can select a different JSON file. `NOTARY_KEYCHAIN_PROFILE` and
+`RELEASE_PROFILE_DIR` override individual defaults. The JSON is parsed, never
+executed as shell code. Do not include API secrets in it.
 
-The final gate uses `prepare-cloud-release.zsh --local-zip` with the local
-certificate pin. The historical `--cloud-zip` path retains its Cloud pin.
-Both verify nested signatures, provisioning, Gatekeeper, the ticket, bundle and
-source identity, and the unchanged Sparkle public key. GitHub publication is a
-separate explicit operation via `release-github.zsh prepare` then `publish`.
-The existing ZIP plus signed `appcast.xml` format and feed URL remain unchanged.
+### Routine release
 
-Compatibility: keep both published local and Cloud leaves in the authenticated
-XPC migration allowlist; never replace them with Team ID-only authentication.
-Sparkle 0.8+ clients retain their key and feed, and 0.7 clients retain the
-historical legacy bridge. Existing App Proxy settings keep their routes and
-consent; fresh settings use OpenAI and Anthropic Team ID scopes. Live acceptance
-must cover a Cloud-signed older App/daemon upgrading to this local leaf, and
-operator-approved daemon repair. Preparing artifacts does not authorize
-installation or publication.
+Update `VERSION` and the checked-in Xcode version configuration, run validation,
+and commit the release source. From that clean checkout:
 
-The sections below describing Cloud production ownership and the five-file
-local release pipeline document **historical releases before 1.1.0**. Use the
-entry point above for new releases; `release-product.zsh` / `release-macos.sh`
-remain historical recovery tooling.
+```bash
+./scripts/release-local.zsh prepare
+# After interruption or a recoverable failure, use the same commit and state:
+./scripts/release-local.zsh resume
+# After signed-machine acceptance, publish the exact verified two-file set:
+RELEASE_NOTES_FILE=/absolute/path/release-notes.md ./scripts/release-local.zsh publish
+```
+
+`prepare` validates credentials, selects profiles, validates the repository,
+archives, exports, seals the signed ZIP, notarizes, staples and signs the feed.
+Pinned Sparkle tools/framework are staged from SwiftPM's downloaded artifact;
+the final gate checks the audited tool hashes and release-key challenge.
+`publish` is an explicit publication action. It verifies the accepted ZIP again,
+then uses the existing state-bound GitHub helper to prepare and publish the same
+draft. It does not imply that signed-machine acceptance can be skipped.
+
+Build numbers are reserved in `release.json`, increasing even after a failed
+attempt. The default is the larger of `major*1000 + minor*100 + patch` and the
+saved floor plus one. The initial floor is **1100**, covering public Cloud builds
+and historical private `58.x` builds. Optional `RELEASE_BUILD_NUMBER` and
+`PREVIOUS_RELEASE_BUILD_NUMBER` can raise this floor, never lower it. If other
+operators publish higher builds, update the saved floor before releasing.
+
+### Profile selection and interruption recovery
+
+`scripts/release-profiles.py` scans the configured directory and both standard
+Xcode profile directories. It accepts only unexpired macOS Developer ID profiles
+with all-device distribution, the exact host/extension App IDs, Team ID, pinned
+certificate, and required system-extension entitlements. Development profiles,
+wildcards, missing capabilities and other certificates are rejected. Renewed
+profiles are selected deterministically by expiration, creation time and UUID;
+conflicting copies of the same UUID fail closed.
+The export helper retries Apple timestamp-service outages at most three times,
+with identical frozen signing options. Other export failures stop immediately;
+individual attempt logs and partial outputs are retained.
+
+The helper installs the selected profiles in Xcode's user directory, freezes
+copies and SHA-256 values, and writes **manual** export options with explicit
+`provisioningProfiles` UUID mappings for both targets. Xcode automatic export
+selection is not used. Resume verifies the frozen options/profile hashes and
+eligibility, so an unrelated installed profile cannot silently change the export.
+
+State is under `dist/.release-state/local-VERSION-COMMIT`. Completed validation,
+archive and export stages have markers. Resume retries an unfinished stage,
+preserving incomplete archive/export output for diagnosis, and never repeats a
+completed export. Once `notary.zip` is sealed, no resume path rebuilds or
+re-signs it. An observed submission ID is recovered from its saved JSON; retries
+query the same ID. A submit attempt with no recoverable ID fails closed for
+operator reconciliation rather than uploading again. Stapling resumes from the
+sealed archive; the final ZIP is atomically completed. Do not delete release
+state to force another submission. A rejected or intentionally superseded build
+needs a new reserved build and retained old evidence.
+
+Compatibility keeps both historical signing leaves, bundle IDs, Sparkle key,
+feed URL and ZIP/appcast layout. Existing customized App Proxy policies remain
+intact. In 1.1.1, untouched four-route presets can be migrated with **Use Team ID Defaults**
+in App Proxy, or `mihomoboxctl app-proxy policy migrate-defaults`. Migration
+requires each vendor's desktop/CLI to use the same node, preserves bypasses and
+custom entries, and leaves interception off for ordinary scope review on enable.
+
+Historical Cloud artifacts and the frozen 0.9.1 bridge remain byte-preserved.
+The sections below describing Cloud ownership and the five-file pipeline are
+historical reference; use the local entry point above for new releases.
 
 ## Pinned Inputs
 

@@ -1,5 +1,90 @@
 # Operations
 
+## Migrating the old four App Proxy presets
+
+1.1.0 introduced OpenAI and Anthropic Team ID defaults for fresh settings. Existing
+four-entry settings were preserved. In the next App, the App Proxy page offers
+**Use Team ID Defaults** for untouched legacy presets. Turn interception off,
+select that action, then Apply. **Restore Team ID Defaults** performs the same
+migration when eligible. Re-enable through the normal code-scope review.
+
+For a signed operator CLI:
+
+```bash
+mihomoboxctl app-proxy policy migrate-defaults
+mihomoboxctl app-proxy policy show
+```
+
+The command disables interception through the signed host, writes through the
+authenticated typed daemon action with revision checking, and verifies readback.
+OpenAI uses `2DC432GLL2`, Anthropic uses `Q6L2SF6YDW`. Desktop node selections,
+network bypasses and unrelated custom applications are kept. Different desktop
+and CLI nodes or customized preset scopes block migration instead of discarding
+settings; reconcile those choices explicitly first. No root settings file is
+edited directly, and code-access consent is never inferred from old presets.
+
+## Menu-bar proxy switches
+
+Starting with 1.1.1, **System Proxy** controls the managed HTTP/HTTPS/SOCKS
+settings for enabled Ethernet/Wi-Fi services. It reads back actual owned
+settings and restores their previous values when disabled. **App Proxy**
+pauses/resumes previously authorized scopes. A fresh installation must select
+and authorize its scopes on the App Proxy page before using that switch.
+The equivalent signed CLI controls are:
+
+```bash
+mihomoboxctl rpc set-system-proxy true
+mihomoboxctl rpc set-system-proxy false
+mihomoboxctl app-proxy on
+mihomoboxctl app-proxy off
+```
+
+These switches are independent of **Enhanced TUN**. When checking combined
+App Proxy + TUN operation, keep System Proxy off and distinguish the two
+application-specific inbounds from `DEFAULT-TUN`. A Team ID application's
+working TUN connection is not evidence that App Proxy captured it.
+
+## Verify App Proxy without system proxy or TUN
+
+An active row proves enrollment, not that macOS diverted that application's
+sockets. For acceptance, disable HTTP/HTTPS/SOCKS and automatic system proxy
+settings, verify `scutil --proxy`, then use the signed operator CLI:
+
+```bash
+mihomoboxctl rpc set-tun false
+mihomoboxctl status --json
+mihomoboxctl app-proxy runtime
+mihomoboxctl app-proxy flows
+mihomoboxctl rpc connections
+```
+
+Require `health.tun_enabled=false`, `health.network_consistent=true`, both rows
+active and `identityReady=true`. Join each connection's metadata source port
+with the provider's `flows` table, verify the actual executable/PID, and require
+inbound `mihomobox-app-chatgpt` or `mihomobox-app-claude` with a remote proxy in
+its chain. Observe upload/download progress across multiple maintenance passes.
+`DEFAULT-MIXED`, `DEFAULT-TUN`, DNS receipts alone, or a selected proxy node do
+not satisfy this test. Do not turn TUN back on to hide a capture failure.
+
+On m4pro, Claude's already-running Electron Network Service continued opening
+uncaptured sockets even though its Team ID, signing identity and Mach-O UUID
+matched the enrolled on-disk code. Re-enabling the provider alone did not fix
+that state. After the network service was restarted and enrollment was restored,
+its replacement PID produced `providerValidated`/`upstream_connected` receipts
+and connections through `mihomobox-app-claude`, with system proxy and TUN both
+off. If reproducing this condition, finish or pause ongoing Claude operations
+before restarting the application or its verified Network Service; do not kill
+unrelated same-name helpers or automatically terminate user applications.
+
+Full-package identity checks for both publishers can outlast the former
+10-second provider or 20-second noninteractive broker deadline. Provider
+prepare/commit/renew and noninteractive broker checks now have a bounded
+60-second budget. Status/flow reads retain a 10-second deadline, interactive
+approval retains 300 seconds, and the provider's 90-second authorization lease
+and fail-closed behavior are unchanged. `codeAccessTimeout` and `providerTimeout`
+distinguish expiration from transport failure. A successful enable must remain
+healthy through subsequent renewals before being accepted.
+
 ## Per-application proxy settings
 
 App Proxy uses the same **Running Mode** as the tray and Config page. Its mode
@@ -103,7 +188,7 @@ A LoadBalance group is accepted only when every candidate
 resolves to a remote proxy. macOS may require Network Extension and VPN approval.
 Disable App Proxy before adding or removing entries. Removing an entry only
 removes its proxy routing, never the installed application. Apply saves these
-changes; Restore Default Apps brings back the four initial categories.
+changes; Restore Team ID Defaults restores the OpenAI and Anthropic presets.
 
 Each entry's **Policy** editor adds code that shares that entry's node, in three
 scopes, one entry per line (type, paste or drag in):

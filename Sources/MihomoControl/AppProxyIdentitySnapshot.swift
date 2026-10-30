@@ -6,6 +6,7 @@ import Security
 public enum AppProxyIdentityFailure: String, Error, Codable, Sendable {
     case malformed, permission, signature, changedFile, escapedPath, missingFile, staleAuthorization
     case wrongUser, generationMismatch, capacity, needsAuthorization, unavailable, runtimeIdentity, undiscoveredTarget
+    case codeAccessTimeout, providerTimeout
 }
 
 public struct AppProxyFileStamp: Codable, Equatable, Sendable {
@@ -448,6 +449,8 @@ extension AppProxyIdentityFailure: LocalizedError {
         case .runtimeIdentity: return "The operating system could not validate the running process identity. Inspect framework validation diagnostics."
         case .undiscoveredTarget: return "The running executable is not in the current application identity snapshot."
         case .unavailable: return "The code authorization service or provider did not respond."
+        case .codeAccessTimeout: return "Code access verification took too long. Retry after the application finishes updating."
+        case .providerTimeout: return "The App Proxy extension did not finish the request before its deadline."
         }
     }
 }

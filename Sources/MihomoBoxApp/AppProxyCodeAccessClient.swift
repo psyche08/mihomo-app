@@ -26,8 +26,10 @@ final class AppProxyCodeAccessClient {
                     completion.finish(.success(snapshot))
                 } catch { completion.finish(.failure(error)) }
             }
-            DispatchQueue.global().asyncAfter(deadline: .now() + (interactive ? 300 : 20)) {
-                completion.finish(.failure(AppProxyIdentityFailure.unavailable))
+            // A Team scope can include many separately sealed bundles. Keep complete
+            // verification bounded without cutting it off at the former 20-second limit.
+            DispatchQueue.global().asyncAfter(deadline: .now() + (interactive ? 300 : 60)) {
+                completion.finish(.failure(AppProxyIdentityFailure.codeAccessTimeout))
             }
         }
     }

@@ -185,6 +185,16 @@ final class StatusItemController: NSObject, NSMenuDelegate, ApplicationStatusIte
     tun.state = snapshot.enhancedTUN ? .on : .off
     tun.isEnabled = TrayMenuActionPolicy.enhancedTUNEnabled(snapshot)
     menu.addItem(tun)
+    let systemProxy = item("System Proxy", action: #selector(toggleSystemProxy(_:)))
+    systemProxy.state = snapshot.systemProxyEnabled == true ? .on : .off
+    systemProxy.isEnabled = snapshot.systemProxyEnabled != nil && !snapshot.mutationOperationInFlight
+      && !snapshot.daemonCompatibility.blocksControlActions && (snapshot.controllerReachable || snapshot.systemProxyEnabled == true)
+    menu.addItem(systemProxy)
+    let appProxy = item("App Proxy", action: #selector(toggleAppProxy(_:)))
+    appProxy.state = snapshot.appProxyEnabled == true ? .on : .off
+    appProxy.isEnabled = snapshot.appProxyEnabled != nil && !snapshot.mutationOperationInFlight
+      && !snapshot.daemonCompatibility.blocksControlActions && (snapshot.controllerReachable || snapshot.appProxyEnabled == true)
+    menu.addItem(appProxy)
     menu.addItem(.separator())
 
     menu.addItem(outboundModeMenu(for: snapshot))
@@ -367,6 +377,24 @@ final class StatusItemController: NSObject, NSMenuDelegate, ApplicationStatusIte
         try await service.setEnhancedTUNEnabled(requested)
       }
     }
+  }
+
+  @objc private func toggleSystemProxy(_ sender: NSMenuItem) {
+    let displayed = renderedSnapshot?.systemProxyEnabled
+    sender.state = displayed == true ? .on : .off
+    guard let displayed, displayed == latestSnapshot.systemProxyEnabled, !latestSnapshot.mutationOperationInFlight else {
+      service.refresh(authoritative: true); return
+    }
+    perform { try await $0.setSystemProxyEnabled(!displayed) }
+  }
+
+  @objc private func toggleAppProxy(_ sender: NSMenuItem) {
+    let displayed = renderedSnapshot?.appProxyEnabled
+    sender.state = displayed == true ? .on : .off
+    guard let displayed, displayed == latestSnapshot.appProxyEnabled, !latestSnapshot.mutationOperationInFlight else {
+      service.refresh(authoritative: true); return
+    }
+    perform { try await $0.setAppProxyEnabled(!displayed) }
   }
 
   @objc private func selectOutboundMode(_ sender: NSMenuItem) {

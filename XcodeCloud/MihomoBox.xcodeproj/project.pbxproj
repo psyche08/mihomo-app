@@ -7,318 +7,320 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		00C850377E5BF2897D0297BA /* StatusItemController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8FB655E9FEE8FB2ECC3488E /* StatusItemController.swift */; };
-		01024EFC78B3BEDE281E5039 /* LoginAutostartController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6B72B6CF0012F8AA7B7F1D5 /* LoginAutostartController.swift */; };
-		0163B2450BA163D262B26FF4 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 13F4018AFC1722FD14C83B5D /* Cocoa.framework */; };
-		0658CA909D38DFA5BDA28830 /* Network.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D5E1B2DD5A4792F937D67765 /* Network.framework */; };
-		0AB8B4995D8080215845B08B /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 44EFA567AAF5371A46D17DEE /* Security.framework */; };
-		0BCD1013758B0F68C37F7D48 /* CryptoKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 77B5D3E480D8C23504CC55DB /* CryptoKit.framework */; };
-		0F1DECFEFA5B2F6067FFE694 /* AppProxyCodeAccessClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FCA8554988DAE36431BF9F4 /* AppProxyCodeAccessClient.swift */; };
-		1571369D1D1E26F5D7B4549D /* MihomoDNSCore in Frameworks */ = {isa = PBXBuildFile; productRef = D84D9E2E7EF6A6AE6CABDF01 /* MihomoDNSCore */; };
-		1692D86AA492086BBC91CBC4 /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4F34F55FCC9D439FCFD6946A /* SystemConfiguration.framework */; };
-		184CF5E890F3A9F063DD1C66 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = E54B34D6153CE9075BB8680E /* Sparkle */; };
+		00C850377E5BF2897D0297BA /* SparkleUpdateController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8FB655E9FEE8FB2ECC3488E /* SparkleUpdateController.swift */; };
+		01024EFC78B3BEDE281E5039 /* LocalDoHCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6B72B6CF0012F8AA7B7F1D5 /* LocalDoHCoordinator.swift */; };
+		0658CA909D38DFA5BDA28830 /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9A01E7E617A853E9610D372F /* NetworkExtension.framework */; };
+		0AB8B4995D8080215845B08B /* MihomoDNSCore in Frameworks */ = {isa = PBXBuildFile; productRef = 44EFA567AAF5371A46D17DEE /* MihomoDNSCore */; };
+		0BCD1013758B0F68C37F7D48 /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FA936C96AEEB7D35E5F287F7 /* SystemConfiguration.framework */; };
+		0F1DECFEFA5B2F6067FFE694 /* AppLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FCA8554988DAE36431BF9F4 /* AppLog.swift */; };
+		11F6B65A47DA8F118A562161 /* Network.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3962B8276576D8E8AB05CCD2 /* Network.framework */; };
+		131B3C96E5214F044290CE54 /* CryptoKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F957AEFDC130AFA84BF5CE58 /* CryptoKit.framework */; };
+		1571369D1D1E26F5D7B4549D /* MihomoControl in Frameworks */ = {isa = PBXBuildFile; productRef = D84D9E2E7EF6A6AE6CABDF01 /* MihomoControl */; };
+		1692D86AA492086BBC91CBC4 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4F34F55FCC9D439FCFD6946A /* Security.framework */; };
+		184CF5E890F3A9F063DD1C66 /* MihomoBoxUI in Frameworks */ = {isa = PBXBuildFile; productRef = E54B34D6153CE9075BB8680E /* MihomoBoxUI */; };
 		1897B4EC2D5A04CC00875187 /* ProfileBroker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90FD7EBD87D2F80FEBEF952D /* ProfileBroker.swift */; };
-		1BEFD3EADCC576BD6F46A888 /* SOCKSDatagram.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32BE85EFD3512DE7A45EC028 /* SOCKSDatagram.swift */; };
+		1A60E50578F9AA3C498098E8 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 13F4018AFC1722FD14C83B5D /* Cocoa.framework */; };
+		1BEFD3EADCC576BD6F46A888 /* SOCKSConnect.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32BE85EFD3512DE7A45EC028 /* SOCKSConnect.swift */; };
 		1D8D167D0C50453632DC3D6D /* ControlServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = E486081D65C450621277681B /* ControlServer.swift */; };
-		1EB9785F6FE578FD669936BF /* ComponentSynchronizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E16015099E71717B86CED9A /* ComponentSynchronizer.swift */; };
-		22FBB9350BD72FCEE65CF8BC /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8709A3FBE110FD708D7E287D /* main.swift */; };
-		250D4A387A0B6E13EC0CDD3B /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D5261532CAD419B8887AB72 /* main.swift */; };
-		26AA597C3221668B314E447A /* SystemExtensions.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9A01E7E617A853E9610D372F /* SystemExtensions.framework */; };
-		2C965215CC7E64105694B1AC /* mihomo-daemon in Embed signed helper executables */ = {isa = PBXBuildFile; fileRef = C370E6B795E9B7E33E67784E /* mihomo-daemon */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
-		2D21CBD61D7BB55198DC858A /* mihomo-agent in Embed signed helper executables */ = {isa = PBXBuildFile; fileRef = 479C4001A4E67E4F3E8C7A06 /* mihomo-agent */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
-		3095D5B3EF9D70FF06318446 /* mihomo in Embed signed pinned Mihomo */ = {isa = PBXBuildFile; fileRef = 3AAE1CF2DE0E90CCFE5689F7 /* mihomo */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
-		35AD05C0850D367118FF9429 /* MihomoDNSCore in Frameworks */ = {isa = PBXBuildFile; productRef = F4DE031FD7FE136E5C5A39D1 /* MihomoDNSCore */; };
-		37344E932E14F2BF6D783D71 /* AppProbeProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B781EAF9836FBD93E7BDD2E /* AppProbeProvider.swift */; };
-		37656AF3A173CEE5D3FF52AE /* MihomoBoxUI in Frameworks */ = {isa = PBXBuildFile; productRef = FDE748A3AAF6378F03B477C2 /* MihomoBoxUI */; };
-		3962B8276576D8E8AB05CCD2 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 44EFA567AAF5371A46D17DEE /* Security.framework */; };
-		3CAD424AD8F39CFAE99C05E1 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 44EFA567AAF5371A46D17DEE /* Security.framework */; };
-		3CCD552459D1F923F335F37F /* MihomoControl in Frameworks */ = {isa = PBXBuildFile; productRef = 8ACFB4D95FF3735EB9BA8AD9 /* MihomoControl */; };
-		437C533FFDF7363816FFB347 /* MihomoControl in Frameworks */ = {isa = PBXBuildFile; productRef = F3C444C4CB7E9AC5FD1652FB /* MihomoControl */; };
-		43DCECAF0B39F63999ADBB40 /* AppProxyDNSRequest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50207AB554B6E902FBFAB442 /* AppProxyDNSRequest.swift */; };
-		43E4D3E2D38A83CC52156D6E /* mihomoboxctl in Embed signed helper executables */ = {isa = PBXBuildFile; fileRef = 6756BF8F368CC59A15493FF9 /* mihomoboxctl */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
-		48C78DC7424A17349DA448BD /* AppLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9B54E17E98F74D99366FA73 /* AppLog.swift */; };
-		513AC5782C6ACD6C4A6F9FD2 /* MihomoControl in Frameworks */ = {isa = PBXBuildFile; productRef = 28EE0092E9529CF0724154CA /* MihomoControl */; };
-		5B84C01AB0593830F8B9F25A /* MihomoBoxMain.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9E4798F2D5DBE4C42DFD092 /* MihomoBoxMain.swift */; };
-		5C4AC1C7F9CD02693873B89A /* SOCKSConnect.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1C70763232D825E9FEFDEF9 /* SOCKSConnect.swift */; };
-		6816C8F368E1D01B274CC45E /* IOKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2B3C8CE3093799B4C41BA8DA /* IOKit.framework */; };
-		72C1F82965891EBD8250208D /* AppProxyCommand.swift in Sources */ = {isa = PBXBuildFile; fileRef = 048148D6F15A519C68068D05 /* AppProxyCommand.swift */; };
-		748A0DED5697A9F4C54A3FAA /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 13F4018AFC1722FD14C83B5D /* Cocoa.framework */; };
-		79E26AF9B4C54ADE83FD0B7B /* MihomoDNSCore in Frameworks */ = {isa = PBXBuildFile; productRef = 9496E62A642F63C607877114 /* MihomoDNSCore */; };
-		7AA0CC485D3FE56CB9088FCE /* dev.linsheng.mihomo-app.app-proxy.systemextension in Embed App Proxy system extension */ = {isa = PBXBuildFile; fileRef = 861665DC4A71642FB7D34B4F /* dev.linsheng.mihomo-app.app-proxy.systemextension */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
-		7AF6AD642194428FD672AC97 /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4F34F55FCC9D439FCFD6946A /* SystemConfiguration.framework */; };
-		7DBED8F5B30C7901ADE7E3BD /* InstallerCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1357B94EF3ADB2E8A3357FBF /* InstallerCoordinator.swift */; };
-		862A18DC0AF750EF893CEED3 /* AppProxyBypassPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64C6A1283F5D053B8A2F29B5 /* AppProxyBypassPolicy.swift */; };
-		872737AC0EB8911B6BEE2AED /* ProfileEditorPrompt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58954311EA3816E8D9C89BC1 /* ProfileEditorPrompt.swift */; };
-		8F17EE0AE9F87DAEE1951702 /* Provider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D81D1510F8AE5C21F01857A /* Provider.swift */; };
-		91023ACD71C239B312BDE5EA /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 13F4018AFC1722FD14C83B5D /* Cocoa.framework */; };
-		945F95C1D1DD906A9F40E8E6 /* AIAppTargets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A60E50578F9AA3C498098E8 /* AIAppTargets.swift */; };
-		9783D5E519CF1697FDF50530 /* AppProxyEnrollment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FC1578C336FCE0739145892 /* AppProxyEnrollment.swift */; };
+		1EB9785F6FE578FD669936BF /* AppProxyExtensionActivationCommand.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E16015099E71717B86CED9A /* AppProxyExtensionActivationCommand.swift */; };
+		22FBB9350BD72FCEE65CF8BC /* SystemProxyController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8709A3FBE110FD708D7E287D /* SystemProxyController.swift */; };
+		250D4A387A0B6E13EC0CDD3B /* SOCKSDatagram.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D5261532CAD419B8887AB72 /* SOCKSDatagram.swift */; };
+		26AA597C3221668B314E447A /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9A01E7E617A853E9610D372F /* NetworkExtension.framework */; };
+		31C69C6C885BB0880D9C7409 /* mihomo in Embed signed pinned Mihomo */ = {isa = PBXBuildFile; fileRef = 3095D5B3EF9D70FF06318446 /* mihomo */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		35AD05C0850D367118FF9429 /* MihomoControl in Frameworks */ = {isa = PBXBuildFile; productRef = F4DE031FD7FE136E5C5A39D1 /* MihomoControl */; };
+		37344E932E14F2BF6D783D71 /* AIProxyConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B781EAF9836FBD93E7BDD2E /* AIProxyConfiguration.swift */; };
+		37656AF3A173CEE5D3FF52AE /* MihomoDNSCore in Frameworks */ = {isa = PBXBuildFile; productRef = FDE748A3AAF6378F03B477C2 /* MihomoDNSCore */; };
+		382FB7484F2F658C0300DA46 /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FA936C96AEEB7D35E5F287F7 /* SystemConfiguration.framework */; };
+		3AAE1CF2DE0E90CCFE5689F7 /* mihomoboxctl in Embed signed helper executables */ = {isa = PBXBuildFile; fileRef = 57CE5ADA91165E2BF1C3019C /* mihomoboxctl */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		3AC1EB45446A96E2E627C369 /* mihomo-agent in Embed signed helper executables */ = {isa = PBXBuildFile; fileRef = 8FBC96AA441C0E613579EBBF /* mihomo-agent */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		3CCD552459D1F923F335F37F /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8ACFB4D95FF3735EB9BA8AD9 /* main.swift */; };
+		3E8F31CAF79902F46600E497 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4F34F55FCC9D439FCFD6946A /* Security.framework */; };
+		416EA616C2BC271B67B008F6 /* IOKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D84ADFE14FAEEC88B4229773 /* IOKit.framework */; };
+		417D8B3F2F89BE88AC0FFC01 /* AppKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3CAD424AD8F39CFAE99C05E1 /* AppKit.framework */; };
+		437C533FFDF7363816FFB347 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3C444C4CB7E9AC5FD1652FB /* main.swift */; };
+		43DCECAF0B39F63999ADBB40 /* AppProxyConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50207AB554B6E902FBFAB442 /* AppProxyConnection.swift */; };
+		43E4D3E2D38A83CC52156D6E /* mihomo-daemon in Embed signed helper executables */ = {isa = PBXBuildFile; fileRef = C370E6B795E9B7E33E67784E /* mihomo-daemon */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		48C78DC7424A17349DA448BD /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9B54E17E98F74D99366FA73 /* AppDelegate.swift */; };
+		513AC5782C6ACD6C4A6F9FD2 /* TrayStateCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28EE0092E9529CF0724154CA /* TrayStateCoordinator.swift */; };
+		523E14332D8F9F26BF5BB38D /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 13F4018AFC1722FD14C83B5D /* Cocoa.framework */; };
+		5B84C01AB0593830F8B9F25A /* LoginAutostartController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9E4798F2D5DBE4C42DFD092 /* LoginAutostartController.swift */; };
+		5C4AC1C7F9CD02693873B89A /* Provider.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1C70763232D825E9FEFDEF9 /* Provider.swift */; };
+		64C6A1283F5D053B8A2F29B5 /* dev.linsheng.mihomo-app.app-proxy.systemextension in Embed App Proxy system extension */ = {isa = PBXBuildFile; fileRef = 040A80588D1F84CAC68827CF /* dev.linsheng.mihomo-app.app-proxy.systemextension */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		6816C8F368E1D01B274CC45E /* MihomoDNSCore in Frameworks */ = {isa = PBXBuildFile; productRef = 2B3C8CE3093799B4C41BA8DA /* MihomoDNSCore */; };
+		72C1F82965891EBD8250208D /* AppProxyCodeAccessClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 048148D6F15A519C68068D05 /* AppProxyCodeAccessClient.swift */; };
+		77B5D3E480D8C23504CC55DB /* AppProxyIdentitySnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7AF6AD642194428FD672AC97 /* AppProxyIdentitySnapshot.swift */; };
+		79E26AF9B4C54ADE83FD0B7B /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9496E62A642F63C607877114 /* main.swift */; };
+		7DBED8F5B30C7901ADE7E3BD /* ComponentSynchronizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1357B94EF3ADB2E8A3357FBF /* ComponentSynchronizer.swift */; };
+		872737AC0EB8911B6BEE2AED /* ProfileCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58954311EA3816E8D9C89BC1 /* ProfileCoordinator.swift */; };
+		89199B25F8809A5131B433D3 /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FA936C96AEEB7D35E5F287F7 /* SystemConfiguration.framework */; };
+		898CB8919DBCA947740F1B6C /* MihomoCodeAccess in Embed code access service */ = {isa = PBXBuildFile; fileRef = C2822979CF31C38B3CDCB052 /* MihomoCodeAccess */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		8A9A40B5663ACC53E81A3568 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4F34F55FCC9D439FCFD6946A /* Security.framework */; };
+		8D464BA15DA23325A30C049E /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 13F4018AFC1722FD14C83B5D /* Cocoa.framework */; };
+		8F17EE0AE9F87DAEE1951702 /* ProbeSessionConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D81D1510F8AE5C21F01857A /* ProbeSessionConfiguration.swift */; };
+		9783D5E519CF1697FDF50530 /* AppProxyCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FC1578C336FCE0739145892 /* AppProxyCoordinator.swift */; };
 		98C089059EDF05B1CDFCD6D5 /* ComponentUpdater.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94FC2085623B0EC98B98BCFD /* ComponentUpdater.swift */; };
-		A1CA59241450969B5039C0A5 /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AF4722B9F2CECC30044AD5E1 /* NetworkExtension.framework */; };
-		A98374C69C5C1C826210A55B /* AppKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9BC474A99EC4978E2FC195D4 /* AppKit.framework */; };
-		AA971BB7DF956F80CC08B9E1 /* SparkleUpdateController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 718411A53B8D16BC13ADA862 /* SparkleUpdateController.swift */; };
-		ABDB0BE47EA6B2E45C11D443 /* LocalDoHCertificateTrust.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1BE78C294AFD759604BECDD /* LocalDoHCertificateTrust.swift */; };
-		ABE4500FB13878E577E13E45 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 44EFA567AAF5371A46D17DEE /* Security.framework */; };
-		B18875440114C193A53B3E61 /* LocalDoHCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 496022A584D45D845C0528E7 /* LocalDoHCoordinator.swift */; };
-		B25750680BBF5E5167613C53 /* AppKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9BC474A99EC4978E2FC195D4 /* AppKit.framework */; };
+		A1CA59241450969B5039C0A5 /* UniformTypeIdentifiers.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AF4722B9F2CECC30044AD5E1 /* UniformTypeIdentifiers.framework */; };
+		A58AC3B0B78ECB5BD5FAF0D2 /* CryptoKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F957AEFDC130AFA84BF5CE58 /* CryptoKit.framework */; };
+		A98374C69C5C1C826210A55B /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB3EE88945A39C8C98C91D11 /* main.swift */; };
+		AA971BB7DF956F80CC08B9E1 /* ProfileEditorPrompt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 718411A53B8D16BC13ADA862 /* ProfileEditorPrompt.swift */; };
+		ABDB0BE47EA6B2E45C11D443 /* InstallerCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1BE78C294AFD759604BECDD /* InstallerCoordinator.swift */; };
+		AC04F8C2A98D3DA07422F550 /* SystemExtensions.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 17BD2821BD25BDA85976E344 /* SystemExtensions.framework */; };
+		AEDF44553ED5CE10F7F62DE6 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 13F4018AFC1722FD14C83B5D /* Cocoa.framework */; };
+		B18875440114C193A53B3E61 /* LocalDoHCertificateTrust.swift in Sources */ = {isa = PBXBuildFile; fileRef = 496022A584D45D845C0528E7 /* LocalDoHCertificateTrust.swift */; };
+		B25750680BBF5E5167613C53 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 9BC474A99EC4978E2FC195D4 /* Sparkle */; };
 		B80B59C1113C3B556EBFAAD5 /* LocalDoHStatusProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DD11BCE5CF49DD4C8501295 /* LocalDoHStatusProvider.swift */; };
-		BCB4288678927588E4DD9AA2 /* CryptoKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 77B5D3E480D8C23504CC55DB /* CryptoKit.framework */; };
-		BE0BE43E9C3372C5EC1C4A36 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 44EFA567AAF5371A46D17DEE /* Security.framework */; };
-		C08C7DF11C751BBED2935FA6 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 13F4018AFC1722FD14C83B5D /* Cocoa.framework */; };
-		C46AD4293F9ECBC7E4D93BA6 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEA80889E8746F737E8D7962 /* main.swift */; };
-		C5C4128013F12C28E076155C /* ProfileCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E200B8257A25EF8AFE99F6A /* ProfileCoordinator.swift */; };
-		C86FC512C80191FECE75DEB9 /* TrayControlClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CF649478DB0B254DBBEC755 /* TrayControlClient.swift */; };
-		CB9E60A0EC83C1AFFDBB52D6 /* TrayStateCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 099B4FF1A8340951979EB921 /* TrayStateCoordinator.swift */; };
-		CD7DAF4D00C8F28A4E244E1C /* AppProxyExtensionActivationCommand.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41C2006547C1940BC0116658 /* AppProxyExtensionActivationCommand.swift */; };
-		CE17864963E43F6282D01748 /* AppProxyIdentitySnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6ECA2D84B3F0578BF4EC61D /* AppProxyIdentitySnapshot.swift */; };
+		BCB4288678927588E4DD9AA2 /* AppKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3CAD424AD8F39CFAE99C05E1 /* AppKit.framework */; };
+		BE0BE43E9C3372C5EC1C4A36 /* AppProxyIdentitySnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7AF6AD642194428FD672AC97 /* AppProxyIdentitySnapshot.swift */; };
+		C5C4128013F12C28E076155C /* MihomoProfileLanguage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E200B8257A25EF8AFE99F6A /* MihomoProfileLanguage.swift */; };
+		C86FC512C80191FECE75DEB9 /* StatusItemController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CF649478DB0B254DBBEC755 /* StatusItemController.swift */; };
+		CB9E60A0EC83C1AFFDBB52D6 /* TrayModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 099B4FF1A8340951979EB921 /* TrayModel.swift */; };
+		CD7DAF4D00C8F28A4E244E1C /* AppProxyEnrollment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41C2006547C1940BC0116658 /* AppProxyEnrollment.swift */; };
+		CE17864963E43F6282D01748 /* AppProxyBypassPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6ECA2D84B3F0578BF4EC61D /* AppProxyBypassPolicy.swift */; };
 		CE5382F9E431C280B3670D2C /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 13F4018AFC1722FD14C83B5D /* Cocoa.framework */; };
-		D19379172AEB8EE9BD7E01D5 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 523E14332D8F9F26BF5BB38D /* main.swift */; };
 		D4A209842538AAE3F3D21C1B /* LocalDoHManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12FE68725B51DA4DB03D050F /* LocalDoHManager.swift */; };
-		D5235DCD4ECF63B2BDF626AE /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 13F4018AFC1722FD14C83B5D /* Cocoa.framework */; };
+		D5E1B2DD5A4792F937D67765 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = E16DDF393690A778A7845A5E /* main.swift */; };
 		D6F34BB1AE03242C7ACF7A82 /* ControllerBroker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E050E31E79C948D86A09618 /* ControllerBroker.swift */; };
-		D84ADFE14FAEEC88B4229773 /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4F34F55FCC9D439FCFD6946A /* SystemConfiguration.framework */; };
-		DB5A4383660AB9376FE07BB1 /* AppProxyConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C7C7808BD18934F515B7DE0 /* AppProxyConnection.swift */; };
-		DE60B3F770F449286528CEAA /* MihomoProfileLanguage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6800BBB4BA267C89F221FA17 /* MihomoProfileLanguage.swift */; };
-		E05088CE7CA6FCA29029B983 /* AppProxyCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 586E4D5711F05FD9C34C5443 /* AppProxyCoordinator.swift */; };
-		E16DDF393690A778A7845A5E /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AF4722B9F2CECC30044AD5E1 /* NetworkExtension.framework */; };
-		E3F4CC94B81E0423971D5B30 /* MihomoCodeAccess in Embed code access service */ = {isa = PBXBuildFile; fileRef = 7325A0539D0FF5073C68BB06 /* MihomoCodeAccess */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
-		F05E6785C89698A525A214EF /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D464BA15DA23325A30C049E /* main.swift */; };
+		DB5A4383660AB9376FE07BB1 /* AppProbeProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C7C7808BD18934F515B7DE0 /* AppProbeProvider.swift */; };
+		DE60B3F770F449286528CEAA /* MihomoBoxMain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6800BBB4BA267C89F221FA17 /* MihomoBoxMain.swift */; };
+		DEA80889E8746F737E8D7962 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 13F4018AFC1722FD14C83B5D /* Cocoa.framework */; };
+		E05088CE7CA6FCA29029B983 /* AppProxyCommand.swift in Sources */ = {isa = PBXBuildFile; fileRef = 586E4D5711F05FD9C34C5443 /* AppProxyCommand.swift */; };
 		F0FDCB40C3291F3329DC37AF /* AgentSupervisor.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1A7CE955B5C29E6A00F7F01 /* AgentSupervisor.swift */; };
-		F2142EC81028E4D27A9AF979 /* TrayModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AE34E5D4FA89C9156694329 /* TrayModel.swift */; };
-		F363F883EE1B00D86EB8E7CD /* UniformTypeIdentifiers.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 417D8B3F2F89BE88AC0FFC01 /* UniformTypeIdentifiers.framework */; };
-		F5D2A2F9FB88807569A2F7F8 /* ProbeSessionConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4372DC577717F9861FB1134 /* ProbeSessionConfiguration.swift */; };
-		FB3EE88945A39C8C98C91D11 /* AppProxyIdentitySnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6ECA2D84B3F0578BF4EC61D /* AppProxyIdentitySnapshot.swift */; };
-		FB91AA89344954D3042C08DF /* AIProxyConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEDF44553ED5CE10F7F62DE6 /* AIProxyConfiguration.swift */; };
-		FBBC371C0377215ABAD6F051 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 481CFD4AFFFEE7AA13347A6B /* AppDelegate.swift */; };
-		FE796BCAE5DDC17C54F8E90D /* AppProxyUDPBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = B64DA966852E68B34E83CF96 /* AppProxyUDPBridge.swift */; };
+		F2142EC81028E4D27A9AF979 /* TrayControlClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AE34E5D4FA89C9156694329 /* TrayControlClient.swift */; };
+		F363F883EE1B00D86EB8E7CD /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4F34F55FCC9D439FCFD6946A /* Security.framework */; };
+		F5D2A2F9FB88807569A2F7F8 /* AppProxyUDPBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4372DC577717F9861FB1134 /* AppProxyUDPBridge.swift */; };
+		F7D14065FC73E464AB203B7B /* MihomoControl in Frameworks */ = {isa = PBXBuildFile; productRef = ABE4500FB13878E577E13E45 /* MihomoControl */; };
+		F80D0F3B23C706FA9C3CF8DE /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4F34F55FCC9D439FCFD6946A /* Security.framework */; };
+		FBBC371C0377215ABAD6F051 /* AIAppTargets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 481CFD4AFFFEE7AA13347A6B /* AIAppTargets.swift */; };
+		FE796BCAE5DDC17C54F8E90D /* AppProxyDNSRequest.swift in Sources */ = {isa = PBXBuildFile; fileRef = B64DA966852E68B34E83CF96 /* AppProxyDNSRequest.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
-		11F6B65A47DA8F118A562161 /* PBXContainerItemProxy */ = {
+		25532C483AC517A0398E2A67 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 7E096FA01C24845AEA35A678 /* Project object */;
 			proxyType = 1;
-			remoteGlobalIDString = 1C1A798CA3D1532E55A52313;
+			remoteGlobalIDString = 5E1DF5F25D650B8724225A80;
+			remoteInfo = MihomoBoxCLI;
+		};
+		2CBBA142F1FE33949F63798F /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 7E096FA01C24845AEA35A678 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 394831A4517299F390E9D28F;
 			remoteInfo = MihomoAppProxy;
 		};
-		17BD2821BD25BDA85976E344 /* PBXContainerItemProxy */ = {
+		35C9B9947595C98E1AD7CD6A /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 7E096FA01C24845AEA35A678 /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = A293E4A61E02D254370C10B4;
 			remoteInfo = MihomoDaemon;
 		};
-		35C9B9947595C98E1AD7CD6A /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 7E096FA01C24845AEA35A678 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = FA936C96AEEB7D35E5F287F7;
-			remoteInfo = MihomoAgent;
-		};
 		76AB3429625F939E42989EBC /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 7E096FA01C24845AEA35A678 /* Project object */;
 			proxyType = 1;
-			remoteGlobalIDString = 416EA616C2BC271B67B008F6;
-			remoteInfo = MihomoBoxCLI;
+			remoteGlobalIDString = A40E0E7DEAB3A827F549CFBE;
+			remoteInfo = MihomoAgent;
 		};
-		8A9A40B5663ACC53E81A3568 /* PBXContainerItemProxy */ = {
+		F4F3D32402A88E497D03F511 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 7E096FA01C24845AEA35A678 /* Project object */;
 			proxyType = 1;
-			remoteGlobalIDString = F957AEFDC130AFA84BF5CE58;
+			remoteGlobalIDString = 5ECC858C3B024FACF6E6728B;
 			remoteInfo = MihomoCodeAccess;
 		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
-		2CBBA142F1FE33949F63798F /* Embed App Proxy system extension */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = Contents/Library/SystemExtensions;
-			dstSubfolderSpec = 1;
-			files = (
-				7AA0CC485D3FE56CB9088FCE /* dev.linsheng.mihomo-app.app-proxy.systemextension in Embed App Proxy system extension */,
-			);
-			name = "Embed App Proxy system extension";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		4A44326FDB59F2775FD62D06 /* Embed signed pinned Mihomo */ = {
+		1C1A798CA3D1532E55A52313 /* Embed signed pinned Mihomo */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
 			dstPath = "";
 			dstSubfolderSpec = 6;
 			files = (
-				3095D5B3EF9D70FF06318446 /* mihomo in Embed signed pinned Mihomo */,
+				31C69C6C885BB0880D9C7409 /* mihomo in Embed signed pinned Mihomo */,
 			);
 			name = "Embed signed pinned Mihomo";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		700E8F93E3CBFC103A3125F2 /* Embed signed helper executables */ = {
+		2D21CBD61D7BB55198DC858A /* Embed signed helper executables */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
 			dstPath = "";
 			dstSubfolderSpec = 6;
 			files = (
-				2C965215CC7E64105694B1AC /* mihomo-daemon in Embed signed helper executables */,
-				2D21CBD61D7BB55198DC858A /* mihomo-agent in Embed signed helper executables */,
-				43E4D3E2D38A83CC52156D6E /* mihomoboxctl in Embed signed helper executables */,
+				43E4D3E2D38A83CC52156D6E /* mihomo-daemon in Embed signed helper executables */,
+				3AC1EB45446A96E2E627C369 /* mihomo-agent in Embed signed helper executables */,
+				3AAE1CF2DE0E90CCFE5689F7 /* mihomoboxctl in Embed signed helper executables */,
 			);
 			name = "Embed signed helper executables";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		F4F3D32402A88E497D03F511 /* Embed code access service */ = {
+		316ED8AE50ACAEE508391A1B /* Embed code access service */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
 			dstPath = Contents/XPCServices;
 			dstSubfolderSpec = 1;
 			files = (
-				E3F4CC94B81E0423971D5B30 /* MihomoCodeAccess in Embed code access service */,
+				898CB8919DBCA947740F1B6C /* MihomoCodeAccess in Embed code access service */,
 			);
 			name = "Embed code access service";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B6E4359806CADCB25C3585B8 /* Embed App Proxy system extension */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = Contents/Library/SystemExtensions;
+			dstSubfolderSpec = 1;
+			files = (
+				64C6A1283F5D053B8A2F29B5 /* dev.linsheng.mihomo-app.app-proxy.systemextension in Embed App Proxy system extension */,
+			);
+			name = "Embed App Proxy system extension";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
-		048148D6F15A519C68068D05 /* AppProxyCommand.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppProxyCommand.swift; sourceTree = "<group>"; };
-		099B4FF1A8340951979EB921 /* TrayStateCoordinator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TrayStateCoordinator.swift; sourceTree = "<group>"; };
-		0D81D1510F8AE5C21F01857A /* Provider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Provider.swift; sourceTree = "<group>"; };
+		040A80588D1F84CAC68827CF /* dev.linsheng.mihomo-app.app-proxy.systemextension */ = {isa = PBXFileReference; explicitFileType = "wrapper.system-extension"; includeInIndex = 0; path = "dev.linsheng.mihomo-app.app-proxy.systemextension"; sourceTree = BUILT_PRODUCTS_DIR; };
+		048148D6F15A519C68068D05 /* AppProxyCodeAccessClient.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppProxyCodeAccessClient.swift; sourceTree = "<group>"; };
+		099B4FF1A8340951979EB921 /* TrayModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TrayModel.swift; sourceTree = "<group>"; };
+		0D81D1510F8AE5C21F01857A /* ProbeSessionConfiguration.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ProbeSessionConfiguration.swift; sourceTree = "<group>"; };
 		12FE68725B51DA4DB03D050F /* LocalDoHManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LocalDoHManager.swift; sourceTree = "<group>"; };
-		1357B94EF3ADB2E8A3357FBF /* InstallerCoordinator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = InstallerCoordinator.swift; sourceTree = "<group>"; };
-		13F4018AFC1722FD14C83B5D /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.15.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
-		1A60E50578F9AA3C498098E8 /* AIAppTargets.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AIAppTargets.swift; sourceTree = "<group>"; };
-		1CF649478DB0B254DBBEC755 /* TrayControlClient.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TrayControlClient.swift; sourceTree = "<group>"; };
+		1357B94EF3ADB2E8A3357FBF /* ComponentSynchronizer.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ComponentSynchronizer.swift; sourceTree = "<group>"; };
+		13F4018AFC1722FD14C83B5D /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
+		17BD2821BD25BDA85976E344 /* SystemExtensions.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SystemExtensions.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/SystemExtensions.framework; sourceTree = DEVELOPER_DIR; };
+		1CF649478DB0B254DBBEC755 /* StatusItemController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = StatusItemController.swift; sourceTree = "<group>"; };
 		1E050E31E79C948D86A09618 /* ControllerBroker.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ControllerBroker.swift; sourceTree = "<group>"; };
-		1E16015099E71717B86CED9A /* ComponentSynchronizer.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ComponentSynchronizer.swift; sourceTree = "<group>"; };
-		2B3C8CE3093799B4C41BA8DA /* IOKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = IOKit.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.15.sdk/System/Library/Frameworks/IOKit.framework; sourceTree = DEVELOPER_DIR; };
-		32BE85EFD3512DE7A45EC028 /* SOCKSDatagram.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SOCKSDatagram.swift; sourceTree = "<group>"; };
-		3AAE1CF2DE0E90CCFE5689F7 /* mihomo */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "compiled.mach-o.executable"; name = mihomo; path = .build/staging/mihomo; sourceTree = "<group>"; };
-		3D5261532CAD419B8887AB72 /* main.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
-		417D8B3F2F89BE88AC0FFC01 /* UniformTypeIdentifiers.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UniformTypeIdentifiers.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.15.sdk/System/Library/Frameworks/UniformTypeIdentifiers.framework; sourceTree = DEVELOPER_DIR; };
-		41C2006547C1940BC0116658 /* AppProxyExtensionActivationCommand.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppProxyExtensionActivationCommand.swift; sourceTree = "<group>"; };
-		44EFA567AAF5371A46D17DEE /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.15.sdk/System/Library/Frameworks/Security.framework; sourceTree = DEVELOPER_DIR; };
-		479C4001A4E67E4F3E8C7A06 /* mihomo-agent */ = {isa = PBXFileReference; includeInIndex = 0; path = "mihomo-agent"; sourceTree = BUILT_PRODUCTS_DIR; };
-		481CFD4AFFFEE7AA13347A6B /* AppDelegate.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
-		496022A584D45D845C0528E7 /* LocalDoHCoordinator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LocalDoHCoordinator.swift; sourceTree = "<group>"; };
+		1E16015099E71717B86CED9A /* AppProxyExtensionActivationCommand.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppProxyExtensionActivationCommand.swift; sourceTree = "<group>"; };
+		28EE0092E9529CF0724154CA /* TrayStateCoordinator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TrayStateCoordinator.swift; sourceTree = "<group>"; };
+		3095D5B3EF9D70FF06318446 /* mihomo */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "compiled.mach-o.executable"; name = mihomo; path = .build/staging/mihomo; sourceTree = "<group>"; };
+		32BE85EFD3512DE7A45EC028 /* SOCKSConnect.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SOCKSConnect.swift; sourceTree = "<group>"; };
+		3962B8276576D8E8AB05CCD2 /* Network.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Network.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Network.framework; sourceTree = DEVELOPER_DIR; };
+		3CAD424AD8F39CFAE99C05E1 /* AppKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppKit.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/AppKit.framework; sourceTree = DEVELOPER_DIR; };
+		3D5261532CAD419B8887AB72 /* SOCKSDatagram.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SOCKSDatagram.swift; sourceTree = "<group>"; };
+		41C2006547C1940BC0116658 /* AppProxyEnrollment.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppProxyEnrollment.swift; sourceTree = "<group>"; };
+		481CFD4AFFFEE7AA13347A6B /* AIAppTargets.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AIAppTargets.swift; sourceTree = "<group>"; };
+		496022A584D45D845C0528E7 /* LocalDoHCertificateTrust.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LocalDoHCertificateTrust.swift; sourceTree = "<group>"; };
 		4DD11BCE5CF49DD4C8501295 /* LocalDoHStatusProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LocalDoHStatusProvider.swift; sourceTree = "<group>"; };
-		4E200B8257A25EF8AFE99F6A /* ProfileCoordinator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ProfileCoordinator.swift; sourceTree = "<group>"; };
-		4F34F55FCC9D439FCFD6946A /* SystemConfiguration.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SystemConfiguration.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.15.sdk/System/Library/Frameworks/SystemConfiguration.framework; sourceTree = DEVELOPER_DIR; };
-		50207AB554B6E902FBFAB442 /* AppProxyDNSRequest.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppProxyDNSRequest.swift; sourceTree = "<group>"; };
-		523E14332D8F9F26BF5BB38D /* main.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
-		586E4D5711F05FD9C34C5443 /* AppProxyCoordinator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppProxyCoordinator.swift; sourceTree = "<group>"; };
-		58954311EA3816E8D9C89BC1 /* ProfileEditorPrompt.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ProfileEditorPrompt.swift; sourceTree = "<group>"; };
-		64C6A1283F5D053B8A2F29B5 /* AppProxyBypassPolicy.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AppProxyBypassPolicy.swift; path = ../Sources/MihomoControl/AppProxyBypassPolicy.swift; sourceTree = "<group>"; };
-		6756BF8F368CC59A15493FF9 /* mihomoboxctl */ = {isa = PBXFileReference; includeInIndex = 0; path = mihomoboxctl; sourceTree = BUILT_PRODUCTS_DIR; };
-		6800BBB4BA267C89F221FA17 /* MihomoProfileLanguage.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MihomoProfileLanguage.swift; sourceTree = "<group>"; };
-		718411A53B8D16BC13ADA862 /* SparkleUpdateController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SparkleUpdateController.swift; sourceTree = "<group>"; };
-		7325A0539D0FF5073C68BB06 /* MihomoCodeAccess */ = {isa = PBXFileReference; includeInIndex = 0; path = MihomoCodeAccess; sourceTree = BUILT_PRODUCTS_DIR; };
-		77B5D3E480D8C23504CC55DB /* CryptoKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CryptoKit.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.15.sdk/System/Library/Frameworks/CryptoKit.framework; sourceTree = DEVELOPER_DIR; };
+		4E200B8257A25EF8AFE99F6A /* MihomoProfileLanguage.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MihomoProfileLanguage.swift; sourceTree = "<group>"; };
+		4F34F55FCC9D439FCFD6946A /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Security.framework; sourceTree = DEVELOPER_DIR; };
+		50207AB554B6E902FBFAB442 /* AppProxyConnection.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppProxyConnection.swift; sourceTree = "<group>"; };
+		57CE5ADA91165E2BF1C3019C /* mihomoboxctl */ = {isa = PBXFileReference; includeInIndex = 0; path = mihomoboxctl; sourceTree = BUILT_PRODUCTS_DIR; };
+		586E4D5711F05FD9C34C5443 /* AppProxyCommand.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppProxyCommand.swift; sourceTree = "<group>"; };
+		58954311EA3816E8D9C89BC1 /* ProfileCoordinator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ProfileCoordinator.swift; sourceTree = "<group>"; };
+		6800BBB4BA267C89F221FA17 /* MihomoBoxMain.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MihomoBoxMain.swift; sourceTree = "<group>"; };
+		718411A53B8D16BC13ADA862 /* ProfileEditorPrompt.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ProfileEditorPrompt.swift; sourceTree = "<group>"; };
+		7AF6AD642194428FD672AC97 /* AppProxyIdentitySnapshot.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AppProxyIdentitySnapshot.swift; path = ../Sources/MihomoControl/AppProxyIdentitySnapshot.swift; sourceTree = "<group>"; };
 		7B2C8F14781855B8649F10B7 /* XcodeCloud.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; path = XcodeCloud.xcconfig; sourceTree = "<group>"; };
-		861665DC4A71642FB7D34B4F /* dev.linsheng.mihomo-app.app-proxy.systemextension */ = {isa = PBXFileReference; explicitFileType = "wrapper.system-extension"; includeInIndex = 0; path = "dev.linsheng.mihomo-app.app-proxy.systemextension"; sourceTree = BUILT_PRODUCTS_DIR; };
-		8709A3FBE110FD708D7E287D /* main.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
-		8C7C7808BD18934F515B7DE0 /* AppProxyConnection.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppProxyConnection.swift; sourceTree = "<group>"; };
-		8D464BA15DA23325A30C049E /* main.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
-		8FC1578C336FCE0739145892 /* AppProxyEnrollment.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppProxyEnrollment.swift; sourceTree = "<group>"; };
+		8709A3FBE110FD708D7E287D /* SystemProxyController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SystemProxyController.swift; sourceTree = "<group>"; };
+		8ACFB4D95FF3735EB9BA8AD9 /* main.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		8C7C7808BD18934F515B7DE0 /* AppProbeProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppProbeProvider.swift; sourceTree = "<group>"; };
+		8FBC96AA441C0E613579EBBF /* mihomo-agent */ = {isa = PBXFileReference; includeInIndex = 0; path = "mihomo-agent"; sourceTree = BUILT_PRODUCTS_DIR; };
+		8FC1578C336FCE0739145892 /* AppProxyCoordinator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppProxyCoordinator.swift; sourceTree = "<group>"; };
 		90FD7EBD87D2F80FEBEF952D /* ProfileBroker.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ProfileBroker.swift; sourceTree = "<group>"; };
+		9496E62A642F63C607877114 /* main.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		94FC2085623B0EC98B98BCFD /* ComponentUpdater.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ComponentUpdater.swift; sourceTree = "<group>"; };
-		9A01E7E617A853E9610D372F /* SystemExtensions.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SystemExtensions.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.15.sdk/System/Library/Frameworks/SystemExtensions.framework; sourceTree = DEVELOPER_DIR; };
-		9AE34E5D4FA89C9156694329 /* TrayModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TrayModel.swift; sourceTree = "<group>"; };
-		9B781EAF9836FBD93E7BDD2E /* AppProbeProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppProbeProvider.swift; sourceTree = "<group>"; };
-		9BC474A99EC4978E2FC195D4 /* AppKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppKit.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.15.sdk/System/Library/Frameworks/AppKit.framework; sourceTree = DEVELOPER_DIR; };
-		9FCA8554988DAE36431BF9F4 /* AppProxyCodeAccessClient.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppProxyCodeAccessClient.swift; sourceTree = "<group>"; };
-		A1C70763232D825E9FEFDEF9 /* SOCKSConnect.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SOCKSConnect.swift; sourceTree = "<group>"; };
+		9A01E7E617A853E9610D372F /* NetworkExtension.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = NetworkExtension.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/NetworkExtension.framework; sourceTree = DEVELOPER_DIR; };
+		9AE34E5D4FA89C9156694329 /* TrayControlClient.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TrayControlClient.swift; sourceTree = "<group>"; };
+		9B781EAF9836FBD93E7BDD2E /* AIProxyConfiguration.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AIProxyConfiguration.swift; sourceTree = "<group>"; };
+		9FCA8554988DAE36431BF9F4 /* AppLog.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppLog.swift; sourceTree = "<group>"; };
+		A1C70763232D825E9FEFDEF9 /* Provider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Provider.swift; sourceTree = "<group>"; };
 		A2627158FF6F3C0731951B8D /* XcodeCloud-Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = "XcodeCloud-Info.plist"; sourceTree = "<group>"; };
-		AEDF44553ED5CE10F7F62DE6 /* AIProxyConfiguration.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AIProxyConfiguration.swift; sourceTree = "<group>"; };
-		AF4722B9F2CECC30044AD5E1 /* NetworkExtension.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = NetworkExtension.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.15.sdk/System/Library/Frameworks/NetworkExtension.framework; sourceTree = DEVELOPER_DIR; };
+		AB54A6757D4D0F2BFAEF850F /* MihomoBox.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MihomoBox.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AF4722B9F2CECC30044AD5E1 /* UniformTypeIdentifiers.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UniformTypeIdentifiers.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/UniformTypeIdentifiers.framework; sourceTree = DEVELOPER_DIR; };
 		B1A7CE955B5C29E6A00F7F01 /* AgentSupervisor.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AgentSupervisor.swift; sourceTree = "<group>"; };
-		B4372DC577717F9861FB1134 /* ProbeSessionConfiguration.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ProbeSessionConfiguration.swift; sourceTree = "<group>"; };
-		B64DA966852E68B34E83CF96 /* AppProxyUDPBridge.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppProxyUDPBridge.swift; sourceTree = "<group>"; };
-		B6B72B6CF0012F8AA7B7F1D5 /* LoginAutostartController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LoginAutostartController.swift; sourceTree = "<group>"; };
-		B6ECA2D84B3F0578BF4EC61D /* AppProxyIdentitySnapshot.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AppProxyIdentitySnapshot.swift; path = ../Sources/MihomoControl/AppProxyIdentitySnapshot.swift; sourceTree = "<group>"; };
-		B8FB655E9FEE8FB2ECC3488E /* StatusItemController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = StatusItemController.swift; sourceTree = "<group>"; };
+		B4372DC577717F9861FB1134 /* AppProxyUDPBridge.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppProxyUDPBridge.swift; sourceTree = "<group>"; };
+		B64DA966852E68B34E83CF96 /* AppProxyDNSRequest.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppProxyDNSRequest.swift; sourceTree = "<group>"; };
+		B6B72B6CF0012F8AA7B7F1D5 /* LocalDoHCoordinator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LocalDoHCoordinator.swift; sourceTree = "<group>"; };
+		B6ECA2D84B3F0578BF4EC61D /* AppProxyBypassPolicy.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AppProxyBypassPolicy.swift; path = ../Sources/MihomoControl/AppProxyBypassPolicy.swift; sourceTree = "<group>"; };
+		B8FB655E9FEE8FB2ECC3488E /* SparkleUpdateController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SparkleUpdateController.swift; sourceTree = "<group>"; };
+		C2822979CF31C38B3CDCB052 /* MihomoCodeAccess */ = {isa = PBXFileReference; includeInIndex = 0; path = MihomoCodeAccess; sourceTree = BUILT_PRODUCTS_DIR; };
 		C370E6B795E9B7E33E67784E /* mihomo-daemon */ = {isa = PBXFileReference; includeInIndex = 0; path = "mihomo-daemon"; sourceTree = BUILT_PRODUCTS_DIR; };
-		C9E4798F2D5DBE4C42DFD092 /* MihomoBoxMain.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MihomoBoxMain.swift; sourceTree = "<group>"; };
-		D5E1B2DD5A4792F937D67765 /* Network.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Network.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.15.sdk/System/Library/Frameworks/Network.framework; sourceTree = DEVELOPER_DIR; };
-		DEA80889E8746F737E8D7962 /* main.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		C9E4798F2D5DBE4C42DFD092 /* LoginAutostartController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LoginAutostartController.swift; sourceTree = "<group>"; };
+		D84ADFE14FAEEC88B4229773 /* IOKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = IOKit.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/IOKit.framework; sourceTree = DEVELOPER_DIR; };
+		E16DDF393690A778A7845A5E /* main.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		E486081D65C450621277681B /* ControlServer.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ControlServer.swift; sourceTree = "<group>"; };
-		F1BE78C294AFD759604BECDD /* LocalDoHCertificateTrust.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LocalDoHCertificateTrust.swift; sourceTree = "<group>"; };
-		F9B54E17E98F74D99366FA73 /* AppLog.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppLog.swift; sourceTree = "<group>"; };
-		FEF3485FD40C4DA54679BD0C /* MihomoBox.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MihomoBox.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F1BE78C294AFD759604BECDD /* InstallerCoordinator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = InstallerCoordinator.swift; sourceTree = "<group>"; };
+		F3C444C4CB7E9AC5FD1652FB /* main.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		F957AEFDC130AFA84BF5CE58 /* CryptoKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CryptoKit.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/CryptoKit.framework; sourceTree = DEVELOPER_DIR; };
+		F9B54E17E98F74D99366FA73 /* AppDelegate.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		FA936C96AEEB7D35E5F287F7 /* SystemConfiguration.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SystemConfiguration.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/SystemConfiguration.framework; sourceTree = DEVELOPER_DIR; };
+		FB3EE88945A39C8C98C91D11 /* main.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		040A80588D1F84CAC68827CF /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				91023ACD71C239B312BDE5EA /* Cocoa.framework in Frameworks */,
-				E16DDF393690A778A7845A5E /* NetworkExtension.framework in Frameworks */,
-				0658CA909D38DFA5BDA28830 /* Network.framework in Frameworks */,
-				3962B8276576D8E8AB05CCD2 /* Security.framework in Frameworks */,
-				7AF6AD642194428FD672AC97 /* SystemConfiguration.framework in Frameworks */,
-				0BCD1013758B0F68C37F7D48 /* CryptoKit.framework in Frameworks */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		4D7BBBC77371DC94A17A5FE8 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 				CE5382F9E431C280B3670D2C /* Cocoa.framework in Frameworks */,
-				437C533FFDF7363816FFB347 /* MihomoControl in Frameworks */,
-				1571369D1D1E26F5D7B4549D /* MihomoDNSCore in Frameworks */,
-				0AB8B4995D8080215845B08B /* Security.framework in Frameworks */,
-				1692D86AA492086BBC91CBC4 /* SystemConfiguration.framework in Frameworks */,
+				1571369D1D1E26F5D7B4549D /* MihomoControl in Frameworks */,
+				0AB8B4995D8080215845B08B /* MihomoDNSCore in Frameworks */,
+				1692D86AA492086BBC91CBC4 /* Security.framework in Frameworks */,
+				89199B25F8809A5131B433D3 /* SystemConfiguration.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		57CE5ADA91165E2BF1C3019C /* Frameworks */ = {
+		569B3442920599208B9D1F62 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				0163B2450BA163D262B26FF4 /* Cocoa.framework in Frameworks */,
-				3CCD552459D1F923F335F37F /* MihomoControl in Frameworks */,
-				ABE4500FB13878E577E13E45 /* Security.framework in Frameworks */,
+				523E14332D8F9F26BF5BB38D /* Cocoa.framework in Frameworks */,
+				6816C8F368E1D01B274CC45E /* MihomoDNSCore in Frameworks */,
+				416EA616C2BC271B67B008F6 /* IOKit.framework in Frameworks */,
+				382FB7484F2F658C0300DA46 /* SystemConfiguration.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		8FBC96AA441C0E613579EBBF /* Frameworks */ = {
+		748A0DED5697A9F4C54A3FAA /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				D5235DCD4ECF63B2BDF626AE /* Cocoa.framework in Frameworks */,
-				79E26AF9B4C54ADE83FD0B7B /* MihomoDNSCore in Frameworks */,
-				6816C8F368E1D01B274CC45E /* IOKit.framework in Frameworks */,
-				D84ADFE14FAEEC88B4229773 /* SystemConfiguration.framework in Frameworks */,
+				DEA80889E8746F737E8D7962 /* Cocoa.framework in Frameworks */,
+				BCB4288678927588E4DD9AA2 /* AppKit.framework in Frameworks */,
+				8A9A40B5663ACC53E81A3568 /* Security.framework in Frameworks */,
+				131B3C96E5214F044290CE54 /* CryptoKit.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		AB54A6757D4D0F2BFAEF850F /* Frameworks */ = {
+		91023ACD71C239B312BDE5EA /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				C08C7DF11C751BBED2935FA6 /* Cocoa.framework in Frameworks */,
-				513AC5782C6ACD6C4A6F9FD2 /* MihomoControl in Frameworks */,
-				35AD05C0850D367118FF9429 /* MihomoDNSCore in Frameworks */,
-				37656AF3A173CEE5D3FF52AE /* MihomoBoxUI in Frameworks */,
-				184CF5E890F3A9F063DD1C66 /* Sparkle in Frameworks */,
-				B25750680BBF5E5167613C53 /* AppKit.framework in Frameworks */,
-				3CAD424AD8F39CFAE99C05E1 /* Security.framework in Frameworks */,
-				F363F883EE1B00D86EB8E7CD /* UniformTypeIdentifiers.framework in Frameworks */,
-				A1CA59241450969B5039C0A5 /* NetworkExtension.framework in Frameworks */,
-				26AA597C3221668B314E447A /* SystemExtensions.framework in Frameworks */,
+				AEDF44553ED5CE10F7F62DE6 /* Cocoa.framework in Frameworks */,
+				0658CA909D38DFA5BDA28830 /* NetworkExtension.framework in Frameworks */,
+				11F6B65A47DA8F118A562161 /* Network.framework in Frameworks */,
+				3E8F31CAF79902F46600E497 /* Security.framework in Frameworks */,
+				0BCD1013758B0F68C37F7D48 /* SystemConfiguration.framework in Frameworks */,
+				A58AC3B0B78ECB5BD5FAF0D2 /* CryptoKit.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		C2822979CF31C38B3CDCB052 /* Frameworks */ = {
+		9AF4CB1D9A04D47FAE90522C /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				748A0DED5697A9F4C54A3FAA /* Cocoa.framework in Frameworks */,
-				A98374C69C5C1C826210A55B /* AppKit.framework in Frameworks */,
-				BE0BE43E9C3372C5EC1C4A36 /* Security.framework in Frameworks */,
-				BCB4288678927588E4DD9AA2 /* CryptoKit.framework in Frameworks */,
+				8D464BA15DA23325A30C049E /* Cocoa.framework in Frameworks */,
+				F7D14065FC73E464AB203B7B /* MihomoControl in Frameworks */,
+				F80D0F3B23C706FA9C3CF8DE /* Security.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C08C7DF11C751BBED2935FA6 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1A60E50578F9AA3C498098E8 /* Cocoa.framework in Frameworks */,
+				35AD05C0850D367118FF9429 /* MihomoControl in Frameworks */,
+				37656AF3A173CEE5D3FF52AE /* MihomoDNSCore in Frameworks */,
+				184CF5E890F3A9F063DD1C66 /* MihomoBoxUI in Frameworks */,
+				B25750680BBF5E5167613C53 /* Sparkle in Frameworks */,
+				417D8B3F2F89BE88AC0FFC01 /* AppKit.framework in Frameworks */,
+				F363F883EE1B00D86EB8E7CD /* Security.framework in Frameworks */,
+				A1CA59241450969B5039C0A5 /* UniformTypeIdentifiers.framework in Frameworks */,
+				26AA597C3221668B314E447A /* NetworkExtension.framework in Frameworks */,
+				AC04F8C2A98D3DA07422F550 /* SystemExtensions.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -329,11 +331,11 @@
 			isa = PBXGroup;
 			children = (
 				C370E6B795E9B7E33E67784E /* mihomo-daemon */,
-				479C4001A4E67E4F3E8C7A06 /* mihomo-agent */,
-				6756BF8F368CC59A15493FF9 /* mihomoboxctl */,
-				FEF3485FD40C4DA54679BD0C /* MihomoBox.app */,
-				861665DC4A71642FB7D34B4F /* dev.linsheng.mihomo-app.app-proxy.systemextension */,
-				7325A0539D0FF5073C68BB06 /* MihomoCodeAccess */,
+				8FBC96AA441C0E613579EBBF /* mihomo-agent */,
+				57CE5ADA91165E2BF1C3019C /* mihomoboxctl */,
+				AB54A6757D4D0F2BFAEF850F /* MihomoBox.app */,
+				040A80588D1F84CAC68827CF /* dev.linsheng.mihomo-app.app-proxy.systemextension */,
+				C2822979CF31C38B3CDCB052 /* MihomoCodeAccess */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -342,15 +344,15 @@
 			isa = PBXGroup;
 			children = (
 				13F4018AFC1722FD14C83B5D /* Cocoa.framework */,
-				44EFA567AAF5371A46D17DEE /* Security.framework */,
-				4F34F55FCC9D439FCFD6946A /* SystemConfiguration.framework */,
-				2B3C8CE3093799B4C41BA8DA /* IOKit.framework */,
-				9BC474A99EC4978E2FC195D4 /* AppKit.framework */,
-				417D8B3F2F89BE88AC0FFC01 /* UniformTypeIdentifiers.framework */,
-				AF4722B9F2CECC30044AD5E1 /* NetworkExtension.framework */,
-				9A01E7E617A853E9610D372F /* SystemExtensions.framework */,
-				D5E1B2DD5A4792F937D67765 /* Network.framework */,
-				77B5D3E480D8C23504CC55DB /* CryptoKit.framework */,
+				4F34F55FCC9D439FCFD6946A /* Security.framework */,
+				FA936C96AEEB7D35E5F287F7 /* SystemConfiguration.framework */,
+				D84ADFE14FAEEC88B4229773 /* IOKit.framework */,
+				3CAD424AD8F39CFAE99C05E1 /* AppKit.framework */,
+				AF4722B9F2CECC30044AD5E1 /* UniformTypeIdentifiers.framework */,
+				9A01E7E617A853E9610D372F /* NetworkExtension.framework */,
+				17BD2821BD25BDA85976E344 /* SystemExtensions.framework */,
+				3962B8276576D8E8AB05CCD2 /* Network.framework */,
+				F957AEFDC130AFA84BF5CE58 /* CryptoKit.framework */,
 			);
 			name = "OS X";
 			sourceTree = "<group>";
@@ -365,10 +367,10 @@
 			path = ../Config;
 			sourceTree = "<group>";
 		};
-		3AC1EB45446A96E2E627C369 /* Pinned Build Inputs */ = {
+		4A44326FDB59F2775FD62D06 /* Pinned Build Inputs */ = {
 			isa = PBXGroup;
 			children = (
-				3AAE1CF2DE0E90CCFE5689F7 /* mihomo */,
+				3095D5B3EF9D70FF06318446 /* mihomo */,
 			);
 			name = "Pinned Build Inputs";
 			path = ..;
@@ -384,67 +386,41 @@
 				12FE68725B51DA4DB03D050F /* LocalDoHManager.swift */,
 				4DD11BCE5CF49DD4C8501295 /* LocalDoHStatusProvider.swift */,
 				90FD7EBD87D2F80FEBEF952D /* ProfileBroker.swift */,
-				8709A3FBE110FD708D7E287D /* main.swift */,
+				8709A3FBE110FD708D7E287D /* SystemProxyController.swift */,
+				F3C444C4CB7E9AC5FD1652FB /* main.swift */,
 			);
 			name = "Daemon Sources";
 			path = ../Sources/MihomoDaemon;
 			sourceTree = "<group>";
 		};
-		569B3442920599208B9D1F62 /* Agent Sources */ = {
+		945F95C1D1DD906A9F40E8E6 /* App Sources */ = {
 			isa = PBXGroup;
 			children = (
-				523E14332D8F9F26BF5BB38D /* main.swift */,
-			);
-			name = "Agent Sources";
-			path = ../Sources/MihomoAgent;
-			sourceTree = "<group>";
-		};
-		634DD8FDA5F241368E49264B /* App Sources */ = {
-			isa = PBXGroup;
-			children = (
-				1A60E50578F9AA3C498098E8 /* AIAppTargets.swift */,
-				481CFD4AFFFEE7AA13347A6B /* AppDelegate.swift */,
-				F9B54E17E98F74D99366FA73 /* AppLog.swift */,
-				9FCA8554988DAE36431BF9F4 /* AppProxyCodeAccessClient.swift */,
-				048148D6F15A519C68068D05 /* AppProxyCommand.swift */,
-				586E4D5711F05FD9C34C5443 /* AppProxyCoordinator.swift */,
-				8FC1578C336FCE0739145892 /* AppProxyEnrollment.swift */,
-				41C2006547C1940BC0116658 /* AppProxyExtensionActivationCommand.swift */,
-				1E16015099E71717B86CED9A /* ComponentSynchronizer.swift */,
-				1357B94EF3ADB2E8A3357FBF /* InstallerCoordinator.swift */,
-				F1BE78C294AFD759604BECDD /* LocalDoHCertificateTrust.swift */,
-				496022A584D45D845C0528E7 /* LocalDoHCoordinator.swift */,
-				B6B72B6CF0012F8AA7B7F1D5 /* LoginAutostartController.swift */,
-				C9E4798F2D5DBE4C42DFD092 /* MihomoBoxMain.swift */,
-				6800BBB4BA267C89F221FA17 /* MihomoProfileLanguage.swift */,
-				4E200B8257A25EF8AFE99F6A /* ProfileCoordinator.swift */,
-				58954311EA3816E8D9C89BC1 /* ProfileEditorPrompt.swift */,
-				718411A53B8D16BC13ADA862 /* SparkleUpdateController.swift */,
-				B8FB655E9FEE8FB2ECC3488E /* StatusItemController.swift */,
-				1CF649478DB0B254DBBEC755 /* TrayControlClient.swift */,
-				9AE34E5D4FA89C9156694329 /* TrayModel.swift */,
-				099B4FF1A8340951979EB921 /* TrayStateCoordinator.swift */,
+				481CFD4AFFFEE7AA13347A6B /* AIAppTargets.swift */,
+				F9B54E17E98F74D99366FA73 /* AppDelegate.swift */,
+				9FCA8554988DAE36431BF9F4 /* AppLog.swift */,
+				048148D6F15A519C68068D05 /* AppProxyCodeAccessClient.swift */,
+				586E4D5711F05FD9C34C5443 /* AppProxyCommand.swift */,
+				8FC1578C336FCE0739145892 /* AppProxyCoordinator.swift */,
+				41C2006547C1940BC0116658 /* AppProxyEnrollment.swift */,
+				1E16015099E71717B86CED9A /* AppProxyExtensionActivationCommand.swift */,
+				1357B94EF3ADB2E8A3357FBF /* ComponentSynchronizer.swift */,
+				F1BE78C294AFD759604BECDD /* InstallerCoordinator.swift */,
+				496022A584D45D845C0528E7 /* LocalDoHCertificateTrust.swift */,
+				B6B72B6CF0012F8AA7B7F1D5 /* LocalDoHCoordinator.swift */,
+				C9E4798F2D5DBE4C42DFD092 /* LoginAutostartController.swift */,
+				6800BBB4BA267C89F221FA17 /* MihomoBoxMain.swift */,
+				4E200B8257A25EF8AFE99F6A /* MihomoProfileLanguage.swift */,
+				58954311EA3816E8D9C89BC1 /* ProfileCoordinator.swift */,
+				718411A53B8D16BC13ADA862 /* ProfileEditorPrompt.swift */,
+				B8FB655E9FEE8FB2ECC3488E /* SparkleUpdateController.swift */,
+				1CF649478DB0B254DBBEC755 /* StatusItemController.swift */,
+				9AE34E5D4FA89C9156694329 /* TrayControlClient.swift */,
+				099B4FF1A8340951979EB921 /* TrayModel.swift */,
+				28EE0092E9529CF0724154CA /* TrayStateCoordinator.swift */,
 			);
 			name = "App Sources";
 			path = ../Sources/MihomoBoxApp;
-			sourceTree = "<group>";
-		};
-		641E77E4A1DD0AF36D38A00A /* Code access sources */ = {
-			isa = PBXGroup;
-			children = (
-				DEA80889E8746F737E8D7962 /* main.swift */,
-			);
-			name = "Code access sources";
-			path = ../CodeAccessService;
-			sourceTree = "<group>";
-		};
-		9AF4CB1D9A04D47FAE90522C /* CLI Sources */ = {
-			isa = PBXGroup;
-			children = (
-				8D464BA15DA23325A30C049E /* main.swift */,
-			);
-			name = "CLI Sources";
-			path = ../Sources/MihomoBoxCLI;
 			sourceTree = "<group>";
 		};
 		B14C48970B8DD4D314E9E997 /* Frameworks */ = {
@@ -455,22 +431,31 @@
 			name = Frameworks;
 			sourceTree = "<group>";
 		};
-		C6F947C64E04532D68EAE892 /* App Proxy Sources */ = {
+		C46AD4293F9ECBC7E4D93BA6 /* Code access sources */ = {
 			isa = PBXGroup;
 			children = (
-				AEDF44553ED5CE10F7F62DE6 /* AIProxyConfiguration.swift */,
-				9B781EAF9836FBD93E7BDD2E /* AppProbeProvider.swift */,
-				8C7C7808BD18934F515B7DE0 /* AppProxyConnection.swift */,
-				50207AB554B6E902FBFAB442 /* AppProxyDNSRequest.swift */,
-				B64DA966852E68B34E83CF96 /* AppProxyUDPBridge.swift */,
-				B4372DC577717F9861FB1134 /* ProbeSessionConfiguration.swift */,
-				0D81D1510F8AE5C21F01857A /* Provider.swift */,
-				A1C70763232D825E9FEFDEF9 /* SOCKSConnect.swift */,
-				32BE85EFD3512DE7A45EC028 /* SOCKSDatagram.swift */,
-				3D5261532CAD419B8887AB72 /* main.swift */,
+				FB3EE88945A39C8C98C91D11 /* main.swift */,
 			);
-			name = "App Proxy Sources";
-			path = ../experiments/DNSIdentityProbe/Extension;
+			name = "Code access sources";
+			path = ../CodeAccessService;
+			sourceTree = "<group>";
+		};
+		D19379172AEB8EE9BD7E01D5 /* Agent Sources */ = {
+			isa = PBXGroup;
+			children = (
+				9496E62A642F63C607877114 /* main.swift */,
+			);
+			name = "Agent Sources";
+			path = ../Sources/MihomoAgent;
+			sourceTree = "<group>";
+		};
+		F05E6785C89698A525A214EF /* CLI Sources */ = {
+			isa = PBXGroup;
+			children = (
+				8ACFB4D95FF3735EB9BA8AD9 /* main.swift */,
+			);
+			name = "CLI Sources";
+			path = ../Sources/MihomoBoxCLI;
 			sourceTree = "<group>";
 		};
 		F27372B3DC9338CF10BAEAA5 = {
@@ -480,27 +465,79 @@
 				B14C48970B8DD4D314E9E997 /* Frameworks */,
 				30A3E806E1F0994ADD3FB219 /* Configuration */,
 				4C4660CE75EAF59D22C2805E /* Daemon Sources */,
-				569B3442920599208B9D1F62 /* Agent Sources */,
-				9AF4CB1D9A04D47FAE90522C /* CLI Sources */,
-				634DD8FDA5F241368E49264B /* App Sources */,
-				3AC1EB45446A96E2E627C369 /* Pinned Build Inputs */,
-				C6F947C64E04532D68EAE892 /* App Proxy Sources */,
-				64C6A1283F5D053B8A2F29B5 /* AppProxyBypassPolicy.swift */,
-				B6ECA2D84B3F0578BF4EC61D /* AppProxyIdentitySnapshot.swift */,
-				641E77E4A1DD0AF36D38A00A /* Code access sources */,
+				D19379172AEB8EE9BD7E01D5 /* Agent Sources */,
+				F05E6785C89698A525A214EF /* CLI Sources */,
+				945F95C1D1DD906A9F40E8E6 /* App Sources */,
+				4A44326FDB59F2775FD62D06 /* Pinned Build Inputs */,
+				FB91AA89344954D3042C08DF /* App Proxy Sources */,
+				B6ECA2D84B3F0578BF4EC61D /* AppProxyBypassPolicy.swift */,
+				7AF6AD642194428FD672AC97 /* AppProxyIdentitySnapshot.swift */,
+				C46AD4293F9ECBC7E4D93BA6 /* Code access sources */,
 			);
+			sourceTree = "<group>";
+		};
+		FB91AA89344954D3042C08DF /* App Proxy Sources */ = {
+			isa = PBXGroup;
+			children = (
+				9B781EAF9836FBD93E7BDD2E /* AIProxyConfiguration.swift */,
+				8C7C7808BD18934F515B7DE0 /* AppProbeProvider.swift */,
+				50207AB554B6E902FBFAB442 /* AppProxyConnection.swift */,
+				B64DA966852E68B34E83CF96 /* AppProxyDNSRequest.swift */,
+				B4372DC577717F9861FB1134 /* AppProxyUDPBridge.swift */,
+				0D81D1510F8AE5C21F01857A /* ProbeSessionConfiguration.swift */,
+				A1C70763232D825E9FEFDEF9 /* Provider.swift */,
+				32BE85EFD3512DE7A45EC028 /* SOCKSConnect.swift */,
+				3D5261532CAD419B8887AB72 /* SOCKSDatagram.swift */,
+				E16DDF393690A778A7845A5E /* main.swift */,
+			);
+			name = "App Proxy Sources";
+			path = ../experiments/DNSIdentityProbe/Extension;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		1C1A798CA3D1532E55A52313 /* MihomoAppProxy */ = {
+		15BCCAE847BABE1E8EC6C302 /* MihomoBox */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 31C69C6C885BB0880D9C7409 /* Build configuration list for PBXNativeTarget "MihomoAppProxy" */;
+			buildConfigurationList = 611CDD59E6FDBBB605B34146 /* Build configuration list for PBXNativeTarget "MihomoBox" */;
 			buildPhases = (
-				89DB946446DDB52CB0E33CE6 /* Sources */,
-				040A80588D1F84CAC68827CF /* Frameworks */,
-				69D09D229C579CB636B8E7F2 /* Resources */,
+				C92879810626F6889FCAB201 /* Sources */,
+				C08C7DF11C751BBED2935FA6 /* Frameworks */,
+				634DD8FDA5F241368E49264B /* Resources */,
+				2C965215CC7E64105694B1AC /* Prepare pinned Mihomo and icon inputs */,
+				2D21CBD61D7BB55198DC858A /* Embed signed helper executables */,
+				1C1A798CA3D1532E55A52313 /* Embed signed pinned Mihomo */,
+				B6E4359806CADCB25C3585B8 /* Embed App Proxy system extension */,
+				316ED8AE50ACAEE508391A1B /* Embed code access service */,
+				862A18DC0AF750EF893CEED3 /* Assemble audited application resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				161D0B3E548572DF670623AF /* PBXTargetDependency */,
+				0AC5979E5771923753CCDB07 /* PBXTargetDependency */,
+				700E8F93E3CBFC103A3125F2 /* PBXTargetDependency */,
+				7AA0CC485D3FE56CB9088FCE /* PBXTargetDependency */,
+				E3F4CC94B81E0423971D5B30 /* PBXTargetDependency */,
+			);
+			name = MihomoBox;
+			packageProductDependencies = (
+				F4DE031FD7FE136E5C5A39D1 /* MihomoControl */,
+				FDE748A3AAF6378F03B477C2 /* MihomoDNSCore */,
+				E54B34D6153CE9075BB8680E /* MihomoBoxUI */,
+				9BC474A99EC4978E2FC195D4 /* Sparkle */,
+			);
+			productName = MihomoBox;
+			productReference = AB54A6757D4D0F2BFAEF850F /* MihomoBox.app */;
+			productType = "com.apple.product-type.application";
+		};
+		394831A4517299F390E9D28F /* MihomoAppProxy */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7C525E0E7F8E129B08DF1BAF /* Build configuration list for PBXNativeTarget "MihomoAppProxy" */;
+			buildPhases = (
+				69D09D229C579CB636B8E7F2 /* Sources */,
+				91023ACD71C239B312BDE5EA /* Frameworks */,
+				C6F947C64E04532D68EAE892 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -508,15 +545,15 @@
 			);
 			name = MihomoAppProxy;
 			productName = MihomoAppProxy;
-			productReference = 861665DC4A71642FB7D34B4F /* dev.linsheng.mihomo-app.app-proxy.systemextension */;
+			productReference = 040A80588D1F84CAC68827CF /* dev.linsheng.mihomo-app.app-proxy.systemextension */;
 			productType = "com.apple.product-type.system-extension";
 		};
-		416EA616C2BC271B67B008F6 /* MihomoBoxCLI */ = {
+		5E1DF5F25D650B8724225A80 /* MihomoBoxCLI */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 382FB7484F2F658C0300DA46 /* Build configuration list for PBXNativeTarget "MihomoBoxCLI" */;
+			buildConfigurationList = EEBE1A45319060160BDC0DE6 /* Build configuration list for PBXNativeTarget "MihomoBoxCLI" */;
 			buildPhases = (
-				31B75769C96DAD23AA78421D /* Sources */,
-				57CE5ADA91165E2BF1C3019C /* Frameworks */,
+				0163B2450BA163D262B26FF4 /* Sources */,
+				9AF4CB1D9A04D47FAE90522C /* Frameworks */,
 			);
 			buildRules = (
 			);
@@ -524,11 +561,28 @@
 			);
 			name = MihomoBoxCLI;
 			packageProductDependencies = (
-				8ACFB4D95FF3735EB9BA8AD9 /* MihomoControl */,
+				ABE4500FB13878E577E13E45 /* MihomoControl */,
 			);
 			productName = mihomoboxctl;
-			productReference = 6756BF8F368CC59A15493FF9 /* mihomoboxctl */;
+			productReference = 57CE5ADA91165E2BF1C3019C /* mihomoboxctl */;
 			productType = "com.apple.product-type.tool";
+		};
+		5ECC858C3B024FACF6E6728B /* MihomoCodeAccess */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D688E97402D1CEF7F91D0612 /* Build configuration list for PBXNativeTarget "MihomoCodeAccess" */;
+			buildPhases = (
+				FE868F8843A74559DBD75220 /* Sources */,
+				748A0DED5697A9F4C54A3FAA /* Frameworks */,
+				641E77E4A1DD0AF36D38A00A /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MihomoCodeAccess;
+			productName = MihomoCodeAccess;
+			productReference = C2822979CF31C38B3CDCB052 /* MihomoCodeAccess */;
+			productType = "com.apple.product-type.xpc-service";
 		};
 		A293E4A61E02D254370C10B4 /* MihomoDaemon */ = {
 			isa = PBXNativeTarget;
@@ -543,70 +597,19 @@
 			);
 			name = MihomoDaemon;
 			packageProductDependencies = (
-				F3C444C4CB7E9AC5FD1652FB /* MihomoControl */,
-				D84D9E2E7EF6A6AE6CABDF01 /* MihomoDNSCore */,
+				D84D9E2E7EF6A6AE6CABDF01 /* MihomoControl */,
+				44EFA567AAF5371A46D17DEE /* MihomoDNSCore */,
 			);
 			productName = "mihomo-daemon";
 			productReference = C370E6B795E9B7E33E67784E /* mihomo-daemon */;
 			productType = "com.apple.product-type.tool";
 		};
-		F7D14065FC73E464AB203B7B /* MihomoBox */ = {
+		A40E0E7DEAB3A827F549CFBE /* MihomoAgent */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = F80D0F3B23C706FA9C3CF8DE /* Build configuration list for PBXNativeTarget "MihomoBox" */;
+			buildConfigurationList = E4AD95E99580E2A8FB18F067 /* Build configuration list for PBXNativeTarget "MihomoAgent" */;
 			buildPhases = (
-				81643E92C89AA7B8C336A2B5 /* Sources */,
-				AB54A6757D4D0F2BFAEF850F /* Frameworks */,
-				C92879810626F6889FCAB201 /* Resources */,
-				25532C483AC517A0398E2A67 /* Prepare pinned Mihomo and icon inputs */,
-				700E8F93E3CBFC103A3125F2 /* Embed signed helper executables */,
-				4A44326FDB59F2775FD62D06 /* Embed signed pinned Mihomo */,
-				2CBBA142F1FE33949F63798F /* Embed App Proxy system extension */,
-				F4F3D32402A88E497D03F511 /* Embed code access service */,
-				B6E4359806CADCB25C3585B8 /* Assemble audited application resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-				AC04F8C2A98D3DA07422F550 /* PBXTargetDependency */,
-				161D0B3E548572DF670623AF /* PBXTargetDependency */,
-				0AC5979E5771923753CCDB07 /* PBXTargetDependency */,
-				3E8F31CAF79902F46600E497 /* PBXTargetDependency */,
-				131B3C96E5214F044290CE54 /* PBXTargetDependency */,
-			);
-			name = MihomoBox;
-			packageProductDependencies = (
-				28EE0092E9529CF0724154CA /* MihomoControl */,
-				F4DE031FD7FE136E5C5A39D1 /* MihomoDNSCore */,
-				FDE748A3AAF6378F03B477C2 /* MihomoBoxUI */,
-				E54B34D6153CE9075BB8680E /* Sparkle */,
-			);
-			productName = MihomoBox;
-			productReference = FEF3485FD40C4DA54679BD0C /* MihomoBox.app */;
-			productType = "com.apple.product-type.application";
-		};
-		F957AEFDC130AFA84BF5CE58 /* MihomoCodeAccess */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = A58AC3B0B78ECB5BD5FAF0D2 /* Build configuration list for PBXNativeTarget "MihomoCodeAccess" */;
-			buildPhases = (
-				B9620E24406F0705E3C14C5A /* Sources */,
-				C2822979CF31C38B3CDCB052 /* Frameworks */,
-				FE868F8843A74559DBD75220 /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-			);
-			name = MihomoCodeAccess;
-			productName = MihomoCodeAccess;
-			productReference = 7325A0539D0FF5073C68BB06 /* MihomoCodeAccess */;
-			productType = "com.apple.product-type.xpc-service";
-		};
-		FA936C96AEEB7D35E5F287F7 /* MihomoAgent */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = 89199B25F8809A5131B433D3 /* Build configuration list for PBXNativeTarget "MihomoAgent" */;
-			buildPhases = (
-				EA67E1F3196B506E22A945C2 /* Sources */,
-				8FBC96AA441C0E613579EBBF /* Frameworks */,
+				D5235DCD4ECF63B2BDF626AE /* Sources */,
+				569B3442920599208B9D1F62 /* Frameworks */,
 			);
 			buildRules = (
 			);
@@ -614,10 +617,10 @@
 			);
 			name = MihomoAgent;
 			packageProductDependencies = (
-				9496E62A642F63C607877114 /* MihomoDNSCore */,
+				2B3C8CE3093799B4C41BA8DA /* MihomoDNSCore */,
 			);
 			productName = "mihomo-agent";
-			productReference = 479C4001A4E67E4F3E8C7A06 /* mihomo-agent */;
+			productReference = 8FBC96AA441C0E613579EBBF /* mihomo-agent */;
 			productType = "com.apple.product-type.tool";
 		};
 /* End PBXNativeTarget section */
@@ -639,40 +642,42 @@
 				Base,
 			);
 			mainGroup = F27372B3DC9338CF10BAEAA5;
+			minimizedProjectReferenceProxies = 0;
 			packageReferences = (
 				07F839A461403A768C7C5D8D /* XCLocalSwiftPackageReference ".." */,
 				4CE915786C7DAAAC784785E9 /* XCRemoteSwiftPackageReference "Sparkle" */,
 			);
+			preferredProjectObjectVersion = 77;
 			productRefGroup = 0FC5120EB3A02551B54392AF /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
 				A293E4A61E02D254370C10B4 /* MihomoDaemon */,
-				FA936C96AEEB7D35E5F287F7 /* MihomoAgent */,
-				416EA616C2BC271B67B008F6 /* MihomoBoxCLI */,
-				F7D14065FC73E464AB203B7B /* MihomoBox */,
-				1C1A798CA3D1532E55A52313 /* MihomoAppProxy */,
-				F957AEFDC130AFA84BF5CE58 /* MihomoCodeAccess */,
+				A40E0E7DEAB3A827F549CFBE /* MihomoAgent */,
+				5E1DF5F25D650B8724225A80 /* MihomoBoxCLI */,
+				15BCCAE847BABE1E8EC6C302 /* MihomoBox */,
+				394831A4517299F390E9D28F /* MihomoAppProxy */,
+				5ECC858C3B024FACF6E6728B /* MihomoCodeAccess */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		69D09D229C579CB636B8E7F2 /* Resources */ = {
+		634DD8FDA5F241368E49264B /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		C92879810626F6889FCAB201 /* Resources */ = {
+		641E77E4A1DD0AF36D38A00A /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		FE868F8843A74559DBD75220 /* Resources */ = {
+		C6F947C64E04532D68EAE892 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -682,7 +687,7 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
-		25532C483AC517A0398E2A67 /* Prepare pinned Mihomo and icon inputs */ = {
+		2C965215CC7E64105694B1AC /* Prepare pinned Mihomo and icon inputs */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
@@ -705,7 +710,7 @@
 			shellPath = /bin/bash;
 			shellScript = "set -euo pipefail\nTARGET_TRIPLE=aarch64-apple-darwin \"$SRCROOT/../scripts/fetch-mihomo.sh\"\n/usr/bin/install -m 0755 \\\n  \"$SRCROOT/../.build/staging/mihomo-aarch64-apple-darwin\" \\\n  \"$SRCROOT/../.build/staging/mihomo\"\n\"$SRCROOT/../scripts/prepare-icons.sh\"\n";
 		};
-		B6E4359806CADCB25C3585B8 /* Assemble audited application resources */ = {
+		862A18DC0AF750EF893CEED3 /* Assemble audited application resources */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
@@ -727,11 +732,11 @@
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		31B75769C96DAD23AA78421D /* Sources */ = {
+		0163B2450BA163D262B26FF4 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				F05E6785C89698A525A214EF /* main.swift in Sources */,
+				3CCD552459D1F923F335F37F /* main.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -746,72 +751,73 @@
 				D4A209842538AAE3F3D21C1B /* LocalDoHManager.swift in Sources */,
 				B80B59C1113C3B556EBFAAD5 /* LocalDoHStatusProvider.swift in Sources */,
 				1897B4EC2D5A04CC00875187 /* ProfileBroker.swift in Sources */,
-				22FBB9350BD72FCEE65CF8BC /* main.swift in Sources */,
+				22FBB9350BD72FCEE65CF8BC /* SystemProxyController.swift in Sources */,
+				437C533FFDF7363816FFB347 /* main.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		81643E92C89AA7B8C336A2B5 /* Sources */ = {
+		69D09D229C579CB636B8E7F2 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				945F95C1D1DD906A9F40E8E6 /* AIAppTargets.swift in Sources */,
-				FBBC371C0377215ABAD6F051 /* AppDelegate.swift in Sources */,
-				48C78DC7424A17349DA448BD /* AppLog.swift in Sources */,
-				0F1DECFEFA5B2F6067FFE694 /* AppProxyCodeAccessClient.swift in Sources */,
-				72C1F82965891EBD8250208D /* AppProxyCommand.swift in Sources */,
-				E05088CE7CA6FCA29029B983 /* AppProxyCoordinator.swift in Sources */,
-				9783D5E519CF1697FDF50530 /* AppProxyEnrollment.swift in Sources */,
-				CD7DAF4D00C8F28A4E244E1C /* AppProxyExtensionActivationCommand.swift in Sources */,
-				1EB9785F6FE578FD669936BF /* ComponentSynchronizer.swift in Sources */,
-				7DBED8F5B30C7901ADE7E3BD /* InstallerCoordinator.swift in Sources */,
-				ABDB0BE47EA6B2E45C11D443 /* LocalDoHCertificateTrust.swift in Sources */,
-				B18875440114C193A53B3E61 /* LocalDoHCoordinator.swift in Sources */,
-				01024EFC78B3BEDE281E5039 /* LoginAutostartController.swift in Sources */,
-				5B84C01AB0593830F8B9F25A /* MihomoBoxMain.swift in Sources */,
-				DE60B3F770F449286528CEAA /* MihomoProfileLanguage.swift in Sources */,
-				C5C4128013F12C28E076155C /* ProfileCoordinator.swift in Sources */,
-				872737AC0EB8911B6BEE2AED /* ProfileEditorPrompt.swift in Sources */,
-				AA971BB7DF956F80CC08B9E1 /* SparkleUpdateController.swift in Sources */,
-				00C850377E5BF2897D0297BA /* StatusItemController.swift in Sources */,
-				C86FC512C80191FECE75DEB9 /* TrayControlClient.swift in Sources */,
-				F2142EC81028E4D27A9AF979 /* TrayModel.swift in Sources */,
-				CB9E60A0EC83C1AFFDBB52D6 /* TrayStateCoordinator.swift in Sources */,
+				37344E932E14F2BF6D783D71 /* AIProxyConfiguration.swift in Sources */,
+				DB5A4383660AB9376FE07BB1 /* AppProbeProvider.swift in Sources */,
+				43DCECAF0B39F63999ADBB40 /* AppProxyConnection.swift in Sources */,
+				FE796BCAE5DDC17C54F8E90D /* AppProxyDNSRequest.swift in Sources */,
+				F5D2A2F9FB88807569A2F7F8 /* AppProxyUDPBridge.swift in Sources */,
+				8F17EE0AE9F87DAEE1951702 /* ProbeSessionConfiguration.swift in Sources */,
+				5C4AC1C7F9CD02693873B89A /* Provider.swift in Sources */,
+				1BEFD3EADCC576BD6F46A888 /* SOCKSConnect.swift in Sources */,
+				250D4A387A0B6E13EC0CDD3B /* SOCKSDatagram.swift in Sources */,
+				D5E1B2DD5A4792F937D67765 /* main.swift in Sources */,
+				CE17864963E43F6282D01748 /* AppProxyBypassPolicy.swift in Sources */,
+				77B5D3E480D8C23504CC55DB /* AppProxyIdentitySnapshot.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		89DB946446DDB52CB0E33CE6 /* Sources */ = {
+		C92879810626F6889FCAB201 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				FB91AA89344954D3042C08DF /* AIProxyConfiguration.swift in Sources */,
-				37344E932E14F2BF6D783D71 /* AppProbeProvider.swift in Sources */,
-				DB5A4383660AB9376FE07BB1 /* AppProxyConnection.swift in Sources */,
-				43DCECAF0B39F63999ADBB40 /* AppProxyDNSRequest.swift in Sources */,
-				FE796BCAE5DDC17C54F8E90D /* AppProxyUDPBridge.swift in Sources */,
-				F5D2A2F9FB88807569A2F7F8 /* ProbeSessionConfiguration.swift in Sources */,
-				8F17EE0AE9F87DAEE1951702 /* Provider.swift in Sources */,
-				5C4AC1C7F9CD02693873B89A /* SOCKSConnect.swift in Sources */,
-				1BEFD3EADCC576BD6F46A888 /* SOCKSDatagram.swift in Sources */,
-				250D4A387A0B6E13EC0CDD3B /* main.swift in Sources */,
-				862A18DC0AF750EF893CEED3 /* AppProxyBypassPolicy.swift in Sources */,
-				CE17864963E43F6282D01748 /* AppProxyIdentitySnapshot.swift in Sources */,
+				FBBC371C0377215ABAD6F051 /* AIAppTargets.swift in Sources */,
+				48C78DC7424A17349DA448BD /* AppDelegate.swift in Sources */,
+				0F1DECFEFA5B2F6067FFE694 /* AppLog.swift in Sources */,
+				72C1F82965891EBD8250208D /* AppProxyCodeAccessClient.swift in Sources */,
+				E05088CE7CA6FCA29029B983 /* AppProxyCommand.swift in Sources */,
+				9783D5E519CF1697FDF50530 /* AppProxyCoordinator.swift in Sources */,
+				CD7DAF4D00C8F28A4E244E1C /* AppProxyEnrollment.swift in Sources */,
+				1EB9785F6FE578FD669936BF /* AppProxyExtensionActivationCommand.swift in Sources */,
+				7DBED8F5B30C7901ADE7E3BD /* ComponentSynchronizer.swift in Sources */,
+				ABDB0BE47EA6B2E45C11D443 /* InstallerCoordinator.swift in Sources */,
+				B18875440114C193A53B3E61 /* LocalDoHCertificateTrust.swift in Sources */,
+				01024EFC78B3BEDE281E5039 /* LocalDoHCoordinator.swift in Sources */,
+				5B84C01AB0593830F8B9F25A /* LoginAutostartController.swift in Sources */,
+				DE60B3F770F449286528CEAA /* MihomoBoxMain.swift in Sources */,
+				C5C4128013F12C28E076155C /* MihomoProfileLanguage.swift in Sources */,
+				872737AC0EB8911B6BEE2AED /* ProfileCoordinator.swift in Sources */,
+				AA971BB7DF956F80CC08B9E1 /* ProfileEditorPrompt.swift in Sources */,
+				00C850377E5BF2897D0297BA /* SparkleUpdateController.swift in Sources */,
+				C86FC512C80191FECE75DEB9 /* StatusItemController.swift in Sources */,
+				F2142EC81028E4D27A9AF979 /* TrayControlClient.swift in Sources */,
+				CB9E60A0EC83C1AFFDBB52D6 /* TrayModel.swift in Sources */,
+				513AC5782C6ACD6C4A6F9FD2 /* TrayStateCoordinator.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		B9620E24406F0705E3C14C5A /* Sources */ = {
+		D5235DCD4ECF63B2BDF626AE /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				C46AD4293F9ECBC7E4D93BA6 /* main.swift in Sources */,
-				FB3EE88945A39C8C98C91D11 /* AppProxyIdentitySnapshot.swift in Sources */,
+				79E26AF9B4C54ADE83FD0B7B /* main.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		EA67E1F3196B506E22A945C2 /* Sources */ = {
+		FE868F8843A74559DBD75220 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				D19379172AEB8EE9BD7E01D5 /* main.swift in Sources */,
+				A98374C69C5C1C826210A55B /* main.swift in Sources */,
+				BE0BE43E9C3372C5EC1C4A36 /* AppProxyIdentitySnapshot.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -820,33 +826,33 @@
 /* Begin PBXTargetDependency section */
 		0AC5979E5771923753CCDB07 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			name = MihomoBoxCLI;
-			target = 416EA616C2BC271B67B008F6 /* MihomoBoxCLI */;
+			name = MihomoAgent;
+			target = A40E0E7DEAB3A827F549CFBE /* MihomoAgent */;
 			targetProxy = 76AB3429625F939E42989EBC /* PBXContainerItemProxy */;
-		};
-		131B3C96E5214F044290CE54 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			name = MihomoCodeAccess;
-			target = F957AEFDC130AFA84BF5CE58 /* MihomoCodeAccess */;
-			targetProxy = 8A9A40B5663ACC53E81A3568 /* PBXContainerItemProxy */;
 		};
 		161D0B3E548572DF670623AF /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			name = MihomoAgent;
-			target = FA936C96AEEB7D35E5F287F7 /* MihomoAgent */;
-			targetProxy = 35C9B9947595C98E1AD7CD6A /* PBXContainerItemProxy */;
-		};
-		3E8F31CAF79902F46600E497 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			name = MihomoAppProxy;
-			target = 1C1A798CA3D1532E55A52313 /* MihomoAppProxy */;
-			targetProxy = 11F6B65A47DA8F118A562161 /* PBXContainerItemProxy */;
-		};
-		AC04F8C2A98D3DA07422F550 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
 			name = MihomoDaemon;
 			target = A293E4A61E02D254370C10B4 /* MihomoDaemon */;
-			targetProxy = 17BD2821BD25BDA85976E344 /* PBXContainerItemProxy */;
+			targetProxy = 35C9B9947595C98E1AD7CD6A /* PBXContainerItemProxy */;
+		};
+		700E8F93E3CBFC103A3125F2 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = MihomoBoxCLI;
+			target = 5E1DF5F25D650B8724225A80 /* MihomoBoxCLI */;
+			targetProxy = 25532C483AC517A0398E2A67 /* PBXContainerItemProxy */;
+		};
+		7AA0CC485D3FE56CB9088FCE /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = MihomoAppProxy;
+			target = 394831A4517299F390E9D28F /* MihomoAppProxy */;
+			targetProxy = 2CBBA142F1FE33949F63798F /* PBXContainerItemProxy */;
+		};
+		E3F4CC94B81E0423971D5B30 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = MihomoCodeAccess;
+			target = 5ECC858C3B024FACF6E6728B /* MihomoCodeAccess */;
+			targetProxy = F4F3D32402A88E497D03F511 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -907,53 +913,19 @@
 			};
 			name = Release;
 		};
-		15BCCAE847BABE1E8EC6C302 /* Release */ = {
+		31B75769C96DAD23AA78421D /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = ../Config/AppProxyHost.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = 89LGY6BD53;
 				ENABLE_HARDENED_RUNTIME = YES;
-				EXECUTABLE_NAME = "mihomo-app";
-				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = "../Config/XcodeCloud-Info.plist";
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "dev.linsheng.mihomo-app";
-				PRODUCT_NAME = MihomoBox;
-				SDKROOT = macosx;
-				SKIP_INSTALL = NO;
-				SWIFT_VERSION = 5.0;
-			};
-			name = Release;
-		};
-		394831A4517299F390E9D28F /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = ../Config/AppProxyExtension.entitlements;
-				CODE_SIGN_STYLE = Automatic;
-				COMBINE_HIDPI_IMAGES = YES;
-				DEVELOPMENT_TEAM = 89LGY6BD53;
-				ENABLE_HARDENED_RUNTIME = YES;
-				EXECUTABLE_NAME = MihomoAppProxy;
-				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = "../Config/AppProxyExtension-Info.plist";
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "dev.linsheng.mihomo-app.app-proxy";
-				PRODUCT_MODULE_NAME = MihomoAppProxy;
-				PRODUCT_NAME = "dev.linsheng.mihomo-app.app-proxy";
+				PRODUCT_NAME = mihomoboxctl;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
-				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) MAIN_APP_PROXY";
 				SWIFT_VERSION = 5.0;
 			};
-			name = Release;
+			name = Debug;
 		};
 		432196F0214D992FE831D6E7 /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -983,7 +955,21 @@
 			};
 			name = Release;
 		};
-		5E1DF5F25D650B8724225A80 /* Release */ = {
+		479C4001A4E67E4F3E8C7A06 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 89LGY6BD53;
+				ENABLE_HARDENED_RUNTIME = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_NAME = "mihomo-agent";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		6756BF8F368CC59A15493FF9 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
@@ -997,7 +983,7 @@
 			};
 			name = Release;
 		};
-		5ECC858C3B024FACF6E6728B /* Release */ = {
+		7325A0539D0FF5073C68BB06 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ../Config/CodeAccessService.entitlements;
@@ -1014,7 +1000,7 @@
 			};
 			name = Release;
 		};
-		611CDD59E6FDBBB605B34146 /* Debug */ = {
+		81643E92C89AA7B8C336A2B5 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -1037,7 +1023,32 @@
 			};
 			name = Debug;
 		};
-		7C525E0E7F8E129B08DF1BAF /* Debug */ = {
+		861665DC4A71642FB7D34B4F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = ../Config/AppProxyExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = 89LGY6BD53;
+				ENABLE_HARDENED_RUNTIME = YES;
+				EXECUTABLE_NAME = MihomoAppProxy;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "../Config/AppProxyExtension-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "dev.linsheng.mihomo-app.app-proxy";
+				PRODUCT_MODULE_NAME = MihomoAppProxy;
+				PRODUCT_NAME = "dev.linsheng.mihomo-app.app-proxy";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) MAIN_APP_PROXY";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		89DB946446DDB52CB0E33CE6 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -1062,21 +1073,7 @@
 			};
 			name = Debug;
 		};
-		A40E0E7DEAB3A827F549CFBE /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = 89LGY6BD53;
-				ENABLE_HARDENED_RUNTIME = YES;
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				PRODUCT_NAME = "mihomo-agent";
-				SDKROOT = macosx;
-				SKIP_INSTALL = YES;
-				SWIFT_VERSION = 5.0;
-			};
-			name = Release;
-		};
-		D688E97402D1CEF7F91D0612 /* Debug */ = {
+		B9620E24406F0705E3C14C5A /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ../Config/CodeAccessService.entitlements;
@@ -1156,7 +1153,7 @@
 			};
 			name = Debug;
 		};
-		E4AD95E99580E2A8FB18F067 /* Debug */ = {
+		EA67E1F3196B506E22A945C2 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
@@ -1170,19 +1167,28 @@
 			};
 			name = Debug;
 		};
-		EEBE1A45319060160BDC0DE6 /* Debug */ = {
+		FEF3485FD40C4DA54679BD0C /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = ../Config/AppProxyHost.entitlements;
 				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = 89LGY6BD53;
 				ENABLE_HARDENED_RUNTIME = YES;
+				EXECUTABLE_NAME = "mihomo-app";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "../Config/XcodeCloud-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				PRODUCT_NAME = mihomoboxctl;
+				PRODUCT_BUNDLE_IDENTIFIER = "dev.linsheng.mihomo-app";
+				PRODUCT_NAME = MihomoBox;
 				SDKROOT = macosx;
-				SKIP_INSTALL = YES;
+				SKIP_INSTALL = NO;
 				SWIFT_VERSION = 5.0;
 			};
-			name = Debug;
+			name = Release;
 		};
 /* End XCBuildConfiguration section */
 
@@ -1196,20 +1202,11 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		31C69C6C885BB0880D9C7409 /* Build configuration list for PBXNativeTarget "MihomoAppProxy" */ = {
+		611CDD59E6FDBBB605B34146 /* Build configuration list for PBXNativeTarget "MihomoBox" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				394831A4517299F390E9D28F /* Release */,
-				7C525E0E7F8E129B08DF1BAF /* Debug */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		382FB7484F2F658C0300DA46 /* Build configuration list for PBXNativeTarget "MihomoBoxCLI" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				5E1DF5F25D650B8724225A80 /* Release */,
-				EEBE1A45319060160BDC0DE6 /* Debug */,
+				FEF3485FD40C4DA54679BD0C /* Release */,
+				81643E92C89AA7B8C336A2B5 /* Debug */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -1223,29 +1220,38 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		89199B25F8809A5131B433D3 /* Build configuration list for PBXNativeTarget "MihomoAgent" */ = {
+		7C525E0E7F8E129B08DF1BAF /* Build configuration list for PBXNativeTarget "MihomoAppProxy" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				A40E0E7DEAB3A827F549CFBE /* Release */,
-				E4AD95E99580E2A8FB18F067 /* Debug */,
+				861665DC4A71642FB7D34B4F /* Release */,
+				89DB946446DDB52CB0E33CE6 /* Debug */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		A58AC3B0B78ECB5BD5FAF0D2 /* Build configuration list for PBXNativeTarget "MihomoCodeAccess" */ = {
+		D688E97402D1CEF7F91D0612 /* Build configuration list for PBXNativeTarget "MihomoCodeAccess" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				5ECC858C3B024FACF6E6728B /* Release */,
-				D688E97402D1CEF7F91D0612 /* Debug */,
+				7325A0539D0FF5073C68BB06 /* Release */,
+				B9620E24406F0705E3C14C5A /* Debug */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		F80D0F3B23C706FA9C3CF8DE /* Build configuration list for PBXNativeTarget "MihomoBox" */ = {
+		E4AD95E99580E2A8FB18F067 /* Build configuration list for PBXNativeTarget "MihomoAgent" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				15BCCAE847BABE1E8EC6C302 /* Release */,
-				611CDD59E6FDBBB605B34146 /* Debug */,
+				479C4001A4E67E4F3E8C7A06 /* Release */,
+				EA67E1F3196B506E22A945C2 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		EEBE1A45319060160BDC0DE6 /* Build configuration list for PBXNativeTarget "MihomoBoxCLI" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				6756BF8F368CC59A15493FF9 /* Release */,
+				31B75769C96DAD23AA78421D /* Debug */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -1271,45 +1277,45 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		28EE0092E9529CF0724154CA /* MihomoControl */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 07F839A461403A768C7C5D8D /* XCLocalSwiftPackageReference ".." */;
-			productName = MihomoControl;
-		};
-		8ACFB4D95FF3735EB9BA8AD9 /* MihomoControl */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 07F839A461403A768C7C5D8D /* XCLocalSwiftPackageReference ".." */;
-			productName = MihomoControl;
-		};
-		9496E62A642F63C607877114 /* MihomoDNSCore */ = {
+		2B3C8CE3093799B4C41BA8DA /* MihomoDNSCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 07F839A461403A768C7C5D8D /* XCLocalSwiftPackageReference ".." */;
 			productName = MihomoDNSCore;
 		};
-		D84D9E2E7EF6A6AE6CABDF01 /* MihomoDNSCore */ = {
+		44EFA567AAF5371A46D17DEE /* MihomoDNSCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 07F839A461403A768C7C5D8D /* XCLocalSwiftPackageReference ".." */;
 			productName = MihomoDNSCore;
 		};
-		E54B34D6153CE9075BB8680E /* Sparkle */ = {
+		9BC474A99EC4978E2FC195D4 /* Sparkle */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 4CE915786C7DAAAC784785E9 /* XCRemoteSwiftPackageReference "Sparkle" */;
 			productName = Sparkle;
 		};
-		F3C444C4CB7E9AC5FD1652FB /* MihomoControl */ = {
+		ABE4500FB13878E577E13E45 /* MihomoControl */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 07F839A461403A768C7C5D8D /* XCLocalSwiftPackageReference ".." */;
 			productName = MihomoControl;
 		};
-		F4DE031FD7FE136E5C5A39D1 /* MihomoDNSCore */ = {
+		D84D9E2E7EF6A6AE6CABDF01 /* MihomoControl */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 07F839A461403A768C7C5D8D /* XCLocalSwiftPackageReference ".." */;
-			productName = MihomoDNSCore;
+			productName = MihomoControl;
 		};
-		FDE748A3AAF6378F03B477C2 /* MihomoBoxUI */ = {
+		E54B34D6153CE9075BB8680E /* MihomoBoxUI */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 07F839A461403A768C7C5D8D /* XCLocalSwiftPackageReference ".." */;
 			productName = MihomoBoxUI;
+		};
+		F4DE031FD7FE136E5C5A39D1 /* MihomoControl */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 07F839A461403A768C7C5D8D /* XCLocalSwiftPackageReference ".." */;
+			productName = MihomoControl;
+		};
+		FDE748A3AAF6378F03B477C2 /* MihomoDNSCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 07F839A461403A768C7C5D8D /* XCLocalSwiftPackageReference ".." */;
+			productName = MihomoDNSCore;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

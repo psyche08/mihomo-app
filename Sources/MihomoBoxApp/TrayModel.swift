@@ -102,6 +102,8 @@ struct TraySnapshot: Equatable, Sendable {
   var daemonReachable: Bool
   var agentRunning: Bool
   var enhancedTUN: Bool
+  var systemProxyEnabled: Bool? = nil
+  var appProxyEnabled: Bool? = nil
   var tunOperationInFlight: Bool
   var mutationOperationInFlight: Bool
   var networkHealthy: Bool?
@@ -138,7 +140,9 @@ struct TraySnapshot: Equatable, Sendable {
     installationActionsAvailable: Bool = false,
     managedInstallationPresent: Bool = false,
     enhancedTUNActionAvailable: Bool = true,
-    actionError: String? = nil
+    actionError: String? = nil,
+    systemProxyEnabled: Bool? = nil,
+    appProxyEnabled: Bool? = nil
   ) {
     self.daemonCompatibility = daemonCompatibility
     self.controllerReachable = controllerReachable
@@ -159,6 +163,8 @@ struct TraySnapshot: Equatable, Sendable {
     self.installationActionsAvailable = installationActionsAvailable
     self.managedInstallationPresent = managedInstallationPresent
     self.enhancedTUNActionAvailable = enhancedTUNActionAvailable
+    self.systemProxyEnabled = systemProxyEnabled
+    self.appProxyEnabled = appProxyEnabled
     self.actionError = actionError
   }
 
@@ -242,6 +248,8 @@ struct TraySnapshot: Equatable, Sendable {
       daemonReachable: daemonReachable,
       agentRunning: agentRunning,
       enhancedTUN: enhancedTUN,
+      systemProxyEnabled: systemProxyEnabled,
+      appProxyEnabled: appProxyEnabled,
       tunOperationInFlight: tunOperationInFlight,
       mutationOperationInFlight: mutationOperationInFlight,
       networkHealthy: networkHealthy,
@@ -274,6 +282,8 @@ struct TrayMenuSignature: Equatable, Sendable {
   var daemonReachable: Bool
   var agentRunning: Bool
   var enhancedTUN: Bool
+  var systemProxyEnabled: Bool? = nil
+  var appProxyEnabled: Bool? = nil
   var tunOperationInFlight: Bool
   var mutationOperationInFlight: Bool
   var networkHealthy: Bool?
@@ -420,6 +430,8 @@ protocol TrayService: AnyObject {
   func refresh(authoritative: Bool)
 
   func setEnhancedTUNEnabled(_ enabled: Bool) async throws
+  func setSystemProxyEnabled(_ enabled: Bool) async throws
+  func setAppProxyEnabled(_ enabled: Bool) async throws
   func setOutboundMode(_ mode: TrayOutboundMode) async throws
   func selectProxy(group: String, name: String) async throws
   func testProxyDelays() async throws
@@ -443,4 +455,10 @@ protocol AppShellCoordinating: AnyObject {
 
   func startBackgroundServices()
   func stopBackgroundServices()
+}
+
+// Preview/test shells can omit optional platform controls.
+extension TrayService {
+  func setSystemProxyEnabled(_ enabled: Bool) async throws { throw TrayControlError.invalidResponse }
+  func setAppProxyEnabled(_ enabled: Bool) async throws { throw TrayControlError.invalidResponse }
 }

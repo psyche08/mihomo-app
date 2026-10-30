@@ -38,6 +38,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     false
   }
 
+  func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+    _ = mainWindow.show()
+    return false
+  }
+
+  func applicationDidHide(_ notification: Notification) { mainWindow.hide() }
+
   func applicationWillTerminate(_ notification: Notification) {
     tearDown()
   }

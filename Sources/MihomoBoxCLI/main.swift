@@ -951,6 +951,23 @@ private func appProxyPolicy(_ arguments: [String]) throws -> Int32 {
         guard !entries.isEmpty else { throw CLIError(message: "Unknown App Proxy application: \(id ?? "")") }
         try printJSON(entries.map(policy))
         return 0
+    case "migrate-defaults" where arguments.count == 1:
+        guard let settings = state.settings.teamPresetMigration else {
+            throw CLIError(message: "Migration requires four untouched legacy presets with matching desktop/CLI nodes. Custom scopes and conflicting nodes are preserved; edit them explicitly first.")
+        }
+        // The signed host owns NE preferences. Stop interception before changing topology;
+        // new Team scopes require the ordinary review/approval when re-enabled.
+        let host = try appProxyHostExecutable()
+        guard try runInteractive(host.path, ["--app-proxy", "off"]) == 0 else {
+            throw CLIError(message: "Could not verify App Proxy was disabled")
+        }
+        let update = AppProxyRoutingUpdate(settings: settings, expectedRevision: state.revision)
+        guard let reply = try sendControl(.setAppProxyRouting, payload: JSONEncoder().encode(update)),
+              try JSONDecoder().decode(AppProxyRoutingState.self, from: reply).settings == settings else {
+            throw CLIError(message: "Could not verify Team ID preset migration")
+        }
+        try printJSON(settings.applications.map(policy))
+        return 0
     case "set" where arguments.count >= 2:
         guard let index = state.settings.applications.firstIndex(where: { $0.id == arguments[1] }) else {
             throw CLIError(message: "Unknown App Proxy application: \(arguments[1])")
@@ -1023,6 +1040,7 @@ private func usage() {
                                       finish profile approval in System Settings
       app-proxy status               Show saved applications and routes
       app-proxy set-all PROXY         Route all saved apps through one node/group
+      app-proxy policy migrate-defaults Merge unchanged legacy presets; leaves interception off
       app-proxy policy show [APP]     Show Team ID, directory and executable scopes
       app-proxy policy set APP [--team ID]... [--directory PATH]... [--executable PATH]...
                                [--launched-clis on|off]
@@ -1090,6 +1108,9 @@ private func performRPC(_ arguments: [String]) throws -> Int32 {
     case "snapshot":
         try requireNoExtraArguments(values)
         payload = try sendControl(.snapshot)
+    case "set-system-proxy":
+        guard values == ["true"] || values == ["false"] else { throw CLIError(message: "usage: mihomoboxctl rpc set-system-proxy true|false") }
+        payload = try sendControl(.setSystemProxy, arguments: ["enabled": values[0]])
     case "set-tun":
         guard values == ["true"] || values == ["false"] else {
             throw CLIError(message: "usage: mihomoboxctl rpc set-tun true|false; use stop to stop the runtime and restore DNS")

@@ -10,6 +10,7 @@ final class ControlDispatcher: @unchecked Sendable {
 
     private let agent: AgentSupervisor
     private let controller: ControllerBroker
+    private let systemProxy: SystemProxyController
     private let profiles: ProfileBroker
     private let localDoH: LocalDoHManager
     private let localDoHServer: IndependentLocalDoHServer
@@ -25,6 +26,7 @@ final class ControlDispatcher: @unchecked Sendable {
         startupClock: MonotonicStartupClock = MonotonicStartupClock()
     ) throws {
         self.agent = agent
+        systemProxy = SystemProxyController(configPath: configPath)
         self.startupClock = startupClock
         let controllerBroker = ControllerBroker(configPath: configPath)
         let validateStartedRuntime = {
@@ -80,6 +82,7 @@ final class ControlDispatcher: @unchecked Sendable {
         // recovery/startup subsequently fails or remains intentionally stopped.
         localDoHServer.startSupervising()
         if components.recoveryRequired {
+            try? systemProxy.setEnabled(false)
             let restored = agent.stopAndRestoreVerified()
             ServiceLog.error(
                 "event=initial_runtime result=" +
@@ -290,6 +293,7 @@ final class ControlDispatcher: @unchecked Sendable {
                     .flatMap { try? JSONSerialization.jsonObject(with: $0) }
                 payload = try JSONSerialization.data(withJSONObject: [
                     "agent_running": agentRunning,
+                    "system_proxy_enabled": (try? systemProxy.enabled()) as Any? ?? NSNull(),
                     "snapshot": snapshot ?? NSNull(),
                     "profiles": profileState,
                     "health": health ?? NSNull(),
@@ -303,7 +307,22 @@ final class ControlDispatcher: @unchecked Sendable {
                 try ensureStartedRuntimeLocked()
                 if agent.resumesEnhancedTUN { try resumeEnhancedRuntimeLocked() }
                 payload = nil
+            case .setSystemProxy:
+                guard request.arguments.count == 1, request.payload == nil,
+                      let raw = request.arguments["enabled"], let enabled = ["true":true,"false":false][raw] else { throw serverError("System proxy enabled state is required") }
+                var port = 7897
+                if enabled {
+                    guard agent.isRunning else { throw serverError("Start the managed proxy before enabling system proxy") }
+                    let data = try controller.perform(ControlRequest(operation:.snapshot))
+                    guard let object = try JSONSerialization.jsonObject(with:data) as? [String:Any],
+                          let config = object["configs"] as? [String:Any], let mixed = config["mixed-port"] as? Int else { throw serverError("Start the managed proxy before enabling system proxy") }
+                    port = mixed
+                }
+                try systemProxy.setEnabled(enabled, port:port)
+                guard try systemProxy.enabled() == enabled else { throw serverError("System proxy readback did not match") }
+                payload = nil
             case .stopAgent:
+                try systemProxy.setEnabled(false)
                 guard agent.stopAndRestoreVerified() else {
                     throw serverError("the network restore could not be confirmed")
                 }
@@ -515,6 +534,9 @@ final class ControlDispatcher: @unchecked Sendable {
                 }
                 payload = try controller.perform(request, owner: owner)
             }
+            if [.importProfile, .switchProfile, .reloadProfile, .controllerRequest, .restartAgent].contains(request.operation) {
+                try refreshSystemProxy()
+            }
             if auditRoutineLifecycle {
                 ServiceLog.info("event=control_request operation=\(operation) result=success")
             }
@@ -554,12 +576,13 @@ final class ControlDispatcher: @unchecked Sendable {
     }
 
     func stopIndependentServices() {
+        do { try systemProxy.setEnabled(false) } catch { ServiceLog.error("event=system_proxy_restore result=failed") }
         localDoHServer.shutdown()
     }
 
     private static func isMutating(_ operation: ControlOperation) -> Bool {
         switch operation {
-        case .startAgent, .stopAgent, .restartAgent, .upgradeComponents,
+        case .startAgent, .stopAgent, .restartAgent, .upgradeComponents, .setSystemProxy,
              .importProfile, .switchProfile, .reloadProfile, .setTUN,
              .setOutboundMode, .selectProxy, .refreshProxyProvider,
              .closeAllConnections, .installLocalDoH, .trustLocalDoHCertificate,
@@ -629,9 +652,20 @@ final class ControlDispatcher: @unchecked Sendable {
         }
     }
 
+    private func refreshSystemProxy() throws {
+        guard systemProxy.hasSavedState else { return }
+        guard agent.isRunning else { try systemProxy.setEnabled(false); return }
+        let data = try controller.perform(ControlRequest(operation:.snapshot))
+        if let object = try JSONSerialization.jsonObject(with:data) as? [String:Any],
+           let config = object["configs"] as? [String:Any], let port = config["mixed-port"] as? Int {
+            try systemProxy.updatePortIfNeeded(port)
+        }
+    }
+
     private func checkLocalDoHReadiness() {
         mutationLock.lock()
         defer { mutationLock.unlock() }
+        do { try refreshSystemProxy() } catch { ServiceLog.error("event=system_proxy_reconcile result=failed") }
         guard agent.isRunning, agent.resumesEnhancedTUN, agent.localHttpDNSBaseConfigured,
               !agent.globalDNSFallbackConfigured, !profiles.activationRequired,
               !components.recoveryRequired, !components.requiresDaemonRestart,

@@ -27,6 +27,7 @@ public enum ControlOperation: String, Codable, Sendable {
     case setDNSMode = "runtime.set-dns-mode"
     case upgradeComponents = "component.upgrade"
     case setTUN = "runtime.set-tun"
+    case setSystemProxy = "runtime.set-system-proxy"
     case setOutboundMode = "runtime.set-outbound-mode"
     case selectProxy = "runtime.select-proxy"
     case refreshProxyProvider = "runtime.refresh-proxy-provider"

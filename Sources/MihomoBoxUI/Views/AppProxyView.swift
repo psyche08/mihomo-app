@@ -37,6 +37,14 @@ struct AppProxyView: View {
             header
             Divider()
             ScrollView {
+                if model.draft.teamPresetMigration != nil {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("These four legacy presets can be merged into OpenAI and Anthropic Team ID policies. Your proxy nodes and network bypasses are kept.")
+                        Button("Use Team ID Defaults") { model.restoreDefaults() }
+                            .disabled(busy || model.refreshing || model.extensionStatus.enabled)
+                        Text("Turn App Proxy off, apply the change, then review code access when enabling it.").font(.caption).foregroundStyle(.secondary)
+                    }.padding(16)
+                }
                 bypassSummary.padding(.horizontal, 16).padding(.top, 16)
                 LazyVStack(spacing: 1) {
                     if model.draft.applications.isEmpty {
@@ -157,7 +165,7 @@ struct AppProxyView: View {
                     .help(model.extensionStatus.enabled ? "Turn off App Proxy to change the application list" : "Add a signed app or CLI executable, or drag one onto the list")
                     .popover(isPresented: $addingPath, arrowEdge: .bottom) { addPathPopover }
                 Menu {
-                    Button("Restore Default Apps") { model.restoreDefaults() }
+                    Button("Restore Team ID Defaults") { model.restoreDefaults() }
                         .disabled(model.extensionStatus.enabled || model.routing == nil || model.refreshing)
                     Button("Rescan Signed Executables") { Task { await model.refreshExecutables(force: true) } }
                         .disabled(model.scanning)

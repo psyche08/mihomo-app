@@ -76,6 +76,23 @@ public struct AppProxySettings: Codable, Equatable, Sendable {
         self.routes = routes; self.applications = applications
         self.bypass = bypass
     }
+    /// Merge only untouched historical presets with compatible routes. Never discard custom scopes
+    /// or choose between different desktop/CLI nodes. Applying still requires an explicit action.
+    public var teamPresetMigration: Self? {
+        let old = AppProxyEntry.legacyDefaults
+        guard old.allSatisfy({ applications.contains($0) }) else { return nil }
+        for pair in [("chatgpt", "codex_cli"), ("claude", "claude_cli")] {
+            guard routes[pair.0] == routes[pair.1] else { return nil }
+        }
+        var result = self
+        let oldIDs = Set(old.map(\.id))
+        result.applications = AppProxyEntry.defaults + applications.filter { !oldIDs.contains($0.id) }
+        result.routes.removeValue(forKey: "codex_cli")
+        result.routes.removeValue(forKey: "claude_cli")
+        guard (try? result.validate()) != nil else { return nil }
+        return result
+    }
+
     /// The settings without code scopes or OS-rule options: exactly what AppProxyProfile writes into Mihomo's
     /// configuration. Equal values let a scope-only change skip a runtime restart.
     public var runtimeRouting: AppProxySettings {

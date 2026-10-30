@@ -376,7 +376,10 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
                     } catch { box.finish(.failure(error)) }
                 }
             } catch { box.finish(.failure(error)) }
-            DispatchQueue.global().asyncAfter(deadline: .now() + 10) { box.finish(.failure(AppProxyIdentityFailure.unavailable)) }
+            // Full signed-package validation is substantially slower than a status read.
+            // Keep mutation deadlines bounded, but allow both selected publishers to be checked.
+            let timeout: Double = [.prepare, .commit, .renew].contains(request.action) ? 60 : 10
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { box.finish(.failure(AppProxyIdentityFailure.providerTimeout)) }
         }
     }
     private func maintainIdentities() async {

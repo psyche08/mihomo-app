@@ -57,6 +57,7 @@ final class TrayStateCoordinator: TrayService {
   var canCheckForUpdates: Bool { updates.canCheckForUpdates }
 
   private let control: TrayControlClient
+  private let appProxyControl = AppProxyCoordinator(maintenance: false)
   private let profiles: ProfileCoordinator
   private let installer: InstallerCoordinator
   private let localDoH: LocalDoHCoordinator
@@ -162,6 +163,12 @@ final class TrayStateCoordinator: TrayService {
         let poll = try await self.control.poll()
         self.consecutivePollFailures = 0
         self.apply(poll, retainDelays: !authoritative)
+        if let routing = try? await ControlGateway().fetchAppProxyRouting(),
+           let state = try? await self.appProxyControl.status(settings: routing.settings) {
+          var value = self.currentSnapshot
+          value.appProxyEnabled = state.available ? state.enabled : nil
+          self.publish(value)
+        }
         if !self.didRecordFirstSuccessfulPoll {
           self.didRecordFirstSuccessfulPoll = true
           AppStartupTimeline.mark(.firstControlSnapshot)
@@ -221,6 +228,22 @@ final class TrayStateCoordinator: TrayService {
 
   func menuWillOpen() {
     scheduleAutomaticLatencyTestIfNeeded()
+  }
+
+  func setSystemProxyEnabled(_ enabled: Bool) async throws {
+    try await withShellMutation {
+      self.apply(try await self.control.setSystemProxyEnabled(enabled), retainDelays: true)
+    }
+  }
+
+  func setAppProxyEnabled(_ enabled: Bool) async throws {
+    try await withShellMutation {
+      let routing = try await ControlGateway().fetchAppProxyRouting()
+      try await self.appProxyControl.setEnabled(enabled, settings: routing.settings)
+      let status = try await self.appProxyControl.status(settings: routing.settings)
+      guard status.enabled == enabled else { throw TrayControlError.readbackMismatch("App Proxy") }
+      var value = self.currentSnapshot; value.appProxyEnabled = status.enabled; self.publish(value)
+    }
   }
 
   func setEnhancedTUNEnabled(_ enabled: Bool) async throws {
@@ -541,7 +564,9 @@ final class TrayStateCoordinator: TrayService {
           enhancedTUN: poll.enhancedTUN,
           activeProfile: poll.activeProfile
         ),
-        actionError: currentSnapshot.actionError
+        actionError: currentSnapshot.actionError,
+        systemProxyEnabled: poll.systemProxyEnabled,
+        appProxyEnabled: currentSnapshot.appProxyEnabled
       ))
   }
 

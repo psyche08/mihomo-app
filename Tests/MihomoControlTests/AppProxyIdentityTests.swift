@@ -4,6 +4,24 @@ import Darwin
 @testable import MihomoControl
 
 final class AppProxyIdentityTests: XCTestCase {
+    func testLegacyTeamMigrationPreservesRoutesAndRejectsCustomization() throws {
+        var old = AppProxySettings(routes: ["chatgpt":"A", "codex_cli":"A", "claude":"B", "claude_cli":"B"], applications: AppProxyEntry.legacyDefaults)
+        let migrated = try XCTUnwrap(old.teamPresetMigration)
+        XCTAssertEqual(migrated.applications, AppProxyEntry.defaults)
+        XCTAssertEqual(migrated.routes, ["chatgpt":"A", "claude":"B"])
+        XCTAssertEqual(migrated.bypass, old.bypass)
+        XCTAssertNil(migrated.teamPresetMigration)
+        old.routes["codex_cli"] = "Other"
+        XCTAssertNil(old.teamPresetMigration)
+        old.routes["codex_cli"] = "A"
+        old.applications[1].executablePaths = ["/usr/bin/curl"]
+        XCTAssertNil(old.teamPresetMigration)
+        old.applications = AppProxyEntry.legacyDefaults
+        let custom = AppProxyEntry(id: "app_00000000-0000-4000-8000-000000000001", title: "Custom", path: "/Applications/Custom.app", port: 17975)
+        old.applications.append(custom); old.routes[custom.id] = "C"
+        XCTAssertEqual(old.teamPresetMigration?.applications.last, custom)
+        XCTAssertEqual(old.teamPresetMigration?.routes[custom.id], "C")
+    }
     func testTeamDefaultsAndLegacyRouteMigration() throws {
         let defaults = AppProxySettings()
         XCTAssertEqual(defaults.applications.map(\.id), ["chatgpt", "claude"])
