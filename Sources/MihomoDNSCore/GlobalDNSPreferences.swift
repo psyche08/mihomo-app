@@ -78,7 +78,7 @@ enum ManagedDNSDictionaryCleanup {
     /// and restore, but it must never count as the newly applied resolver.
     static func restorationServerSets(for servers: [String], includeLegacyTUNDNS: Bool = false) -> [[String]] {
         if includeLegacyTUNDNS {
-            return Array(Set([servers, [ManagedTUNDNS.server], [ManagedTUNDNS.legacyServer]]))
+            return [servers] + [[ManagedTUNDNS.server], [ManagedTUNDNS.legacyServer]].filter { $0 != servers }
         }
         return servers == [ManagedTUNDNS.server]
             ? [servers, [ManagedTUNDNS.legacyServer]] : [servers]

@@ -714,22 +714,24 @@ final class CoreTests: XCTestCase {
         guard SCPreferencesCommitChanges(preferences) else {
             throw XCTSkip("SCPreferences custom-file commit requires privileged SystemConfiguration access")
         }
-        let old = GlobalDNSPreferences(servers: ["198.18.0.1"], backupPath: backupPath, preferencesID: preferencesPath)
-        try old.apply()
-        let upgraded = GlobalDNSPreferences(servers: ["127.0.0.53"], backupPath: backupPath, includeLegacyTUNDNS: true, preferencesID: preferencesPath)
-        XCTAssertFalse(try upgraded.isApplied(), "Old local address must not satisfy the new DNS health check")
-        XCTAssertTrue(try upgraded.containsManagedServerPersistently(), "Legacy DNS must block stopped-state success")
-        try upgraded.restore()
-        SCPreferencesSynchronize(preferences)
-        let restored = try XCTUnwrap(SCPreferencesPathGetValue(preferences, dnsPath) as? [String: Any])
-        XCTAssertEqual(restored[key] as? [String], ["192.0.2.53"])
-        XCTAssertEqual(restored["SearchDomains"] as? [String], ["corp.example"])
-        XCTAssertFalse(try upgraded.containsManagedServerPersistently())
-        try upgraded.apply()
-        XCTAssertTrue(try upgraded.isApplied())
-        try upgraded.restore()
-        SCPreferencesSynchronize(preferences)
-        XCTAssertEqual((SCPreferencesPathGetValue(preferences, dnsPath) as? [String: Any])?[key] as? [String], ["192.0.2.53"])
+        for legacyAddress in ["198.18.0.1", "198.18.0.2"] {
+            let old = GlobalDNSPreferences(servers: [legacyAddress], backupPath: backupPath, preferencesID: preferencesPath)
+            try old.apply()
+            let upgraded = GlobalDNSPreferences(servers: ["127.0.0.53"], backupPath: backupPath, includeLegacyTUNDNS: true, preferencesID: preferencesPath)
+            XCTAssertFalse(try upgraded.isApplied(), "Old local address must not satisfy the new DNS health check")
+            XCTAssertTrue(try upgraded.containsManagedServerPersistently(), "Legacy DNS must block stopped-state success")
+            try upgraded.restore()
+            SCPreferencesSynchronize(preferences)
+            let restored = try XCTUnwrap(SCPreferencesPathGetValue(preferences, dnsPath) as? [String: Any])
+            XCTAssertEqual(restored[key] as? [String], ["192.0.2.53"])
+            XCTAssertEqual(restored["SearchDomains"] as? [String], ["corp.example"])
+            XCTAssertFalse(try upgraded.containsManagedServerPersistently())
+            try upgraded.apply()
+            XCTAssertTrue(try upgraded.isApplied())
+            try upgraded.restore()
+            SCPreferencesSynchronize(preferences)
+            XCTAssertEqual((SCPreferencesPathGetValue(preferences, dnsPath) as? [String: Any])?[key] as? [String], ["192.0.2.53"])
+        }
     }
 
     func testDNSPreferencesTargetsPrimaryServiceAndRestoresExactly() throws {

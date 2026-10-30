@@ -35,6 +35,25 @@ if p.exists():
 PYCONFIG
 }
 NOTARY_KEYCHAIN_PROFILE="${NOTARY_KEYCHAIN_PROFILE:-$(config_value notary_profile)}"
+NOTARY_KEYCHAIN_PATH="${NOTARY_KEYCHAIN_PATH:-$(config_value notary_keychain)}"
+typeset -a notary_keychain_args=()
+if [[ -n "$NOTARY_KEYCHAIN_PATH" ]]; then
+  [[ -f "$NOTARY_KEYCHAIN_PATH" && ! -L "$NOTARY_KEYCHAIN_PATH" ]] || fail 'notary_keychain must be a regular keychain file'
+  # Read status only. Explicit keychains must be operator-unlocked before any
+  # notarytool call, which otherwise may try to prompt from a headless session.
+  /usr/bin/python3 - "$NOTARY_KEYCHAIN_PATH" <<'PYKEYCHAIN'
+import ctypes,sys
+security=ctypes.CDLL('/System/Library/Frameworks/Security.framework/Security')
+security.SecKeychainOpen.argtypes=[ctypes.c_char_p,ctypes.POINTER(ctypes.c_void_p)]
+security.SecKeychainGetStatus.argtypes=[ctypes.c_void_p,ctypes.POINTER(ctypes.c_uint32)]
+keychain=ctypes.c_void_p(); status=ctypes.c_uint32()
+opened=security.SecKeychainOpen(sys.argv[1].encode(),ctypes.byref(keychain))
+checked=security.SecKeychainGetStatus(keychain,ctypes.byref(status)) if opened==0 else opened
+if checked!=0 or status.value & 3 != 3:
+    raise SystemExit('release keychain is locked or unavailable; unlock it manually in Keychain Access')
+PYKEYCHAIN
+  notary_keychain_args=(--keychain "$NOTARY_KEYCHAIN_PATH")
+fi
 RELEASE_PROFILE_DIR="${RELEASE_PROFILE_DIR:-$(config_value profiles_directory)}"
 if [[ "$MODE" == publish ]]; then
   # Publication remains an explicit operator action, bound to the existing exact assets.
@@ -55,7 +74,7 @@ fi
 typeset ruby_gems="$(config_value ruby_gem_home)"
 if [[ -n "$ruby_gems" ]]; then export GEM_HOME="$ruby_gems" GEM_PATH="$ruby_gems"; fi
 # Validate access before building; credentials remain in the already available keychain.
-xcrun notarytool history --keychain-profile "$NOTARY_KEYCHAIN_PROFILE" --output-format json >/dev/null
+xcrun notarytool history --keychain-profile "$NOTARY_KEYCHAIN_PROFILE" "${notary_keychain_args[@]}" --output-format json >/dev/null
 mkdir -p "$ROOT/dist/.release-state"
 readonly LOCK="$ROOT/dist/.release-state/release.lock"
 mkdir "$LOCK" 2>/dev/null || fail 'release lock exists; inspect its owner before recovery'
@@ -163,13 +182,13 @@ fi
 if [[ ! -f "$STATE/submission.json" ]]; then
   [[ ! -e "$STATE/submit-attempted" ]] || fail 'ambiguous submission; recover its JSON by ID before resuming'
   touch "$STATE/submit-attempted"
-  xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARY_KEYCHAIN_PROFILE" --output-format json > "$STATE/submission.json.tmp"
+  xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARY_KEYCHAIN_PROFILE" "${notary_keychain_args[@]}" --output-format json > "$STATE/submission.json.tmp"
   plutil -extract id raw -o - "$STATE/submission.json.tmp" >/dev/null || fail 'submission returned no ID'
   mv "$STATE/submission.json.tmp" "$STATE/submission.json"
 fi
 readonly ID="$(plutil -extract id raw -o - "$STATE/submission.json")"
 [[ "$ID" =~ '^[0-9a-fA-F-]{36}$' ]] || fail 'invalid submission ID'
-xcrun notarytool wait "$ID" --keychain-profile "$NOTARY_KEYCHAIN_PROFILE" --output-format json > "$STATE/status.json"
+xcrun notarytool wait "$ID" --keychain-profile "$NOTARY_KEYCHAIN_PROFILE" "${notary_keychain_args[@]}" --output-format json > "$STATE/status.json"
 [[ "$(plutil -extract status raw -o - "$STATE/status.json")" == Accepted ]] || fail 'notarization was not accepted'
 # Reconstruct from sealed bytes so resume cannot staple/package a modified export.
 if [[ ! -f "$STATE/notarized.zip" ]]; then

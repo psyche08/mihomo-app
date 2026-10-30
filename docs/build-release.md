@@ -25,11 +25,18 @@ Save **non-secret** defaults in `~/.config/mihomobox/release.json`:
 ```json
 {
   "notary_profile": "mihomobox-release",
+  "notary_keychain": "/Users/your-name/Library/Keychains/login.keychain-db",
   "profiles_directory": "/absolute/path/to/release-profiles",
   "build_floor": 1100,
   "ruby_gem_home": "/absolute/path/to/installed/ruby/gems"
 }
 ```
+
+`notary_keychain` is optional when the default keychain works. For headless
+release sessions, store the profile with `notarytool store-credentials --keychain`
+and set this same explicit path. `NOTARY_KEYCHAIN_PATH` overrides it. The script
+reads its lock status and fails closed if unavailable; it never unlocks it. The
+path is used consistently for credential preflight, submission and status waits.
 
 `profiles_directory` and `ruby_gem_home` are optional if Xcode's installed
 profiles and normal Ruby environment already suffice. `MIHOMOBOX_RELEASE_CONFIG`
