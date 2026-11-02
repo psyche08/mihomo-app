@@ -200,8 +200,11 @@ final class UnixDoHForwarderTests: XCTestCase {
             }.bind(host: "127.0.0.1", port: 0).wait()
             defer { try? echo.close().wait() }
             let echoPort = try XCTUnwrap(echo.localAddress?.port)
-            let mixed = try ResidentProxyStream(proxyPort: mixedPort, targetPort: echoPort)
-            let app = try ResidentProxyStream(proxyPort: appPort, targetPort: echoPort)
+            // DNS and proxy listeners become reachable before the core has
+            // completed all startup stages. Establish data-plane readiness for
+            // the initial streams; reload/retained-stream checks never retry.
+            let mixed = try ResidentProxyStream.ready(proxyPort: mixedPort, targetPort: echoPort)
+            let app = try ResidentProxyStream.ready(proxyPort: appPort, targetPort: echoPort)
             let pid = process.processIdentifier
             let configuration = ProxyConfiguration(
                 manageSystemDNS: false, enhancedTUNEnabled: false,
@@ -320,6 +323,19 @@ private final class ResidentEchoHandler: ChannelInboundHandler {
 /// Bounded TCP checks through the real pinned core, with no external network.
 private final class ResidentProxyStream {
     private let descriptor: Int32
+    static func ready(proxyPort: Int, targetPort: Int) throws -> ResidentProxyStream {
+        let deadline = Date().addingTimeInterval(5)
+        while true {
+            do {
+                let stream = try ResidentProxyStream(proxyPort: proxyPort, targetPort: targetPort)
+                try stream.checkEcho(label: "startup readiness")
+                return stream
+            } catch {
+                guard Date() < deadline else { throw error }
+                usleep(10_000)
+            }
+        }
+    }
     init(proxyPort: Int, targetPort: Int) throws {
         descriptor = socket(AF_INET, SOCK_STREAM, 0)
         guard descriptor >= 0 else { throw NSError(domain: "ResidentTestSocket", code: 1) }
