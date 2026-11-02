@@ -57,6 +57,20 @@ final class DaemonOwnedTUNTests: XCTestCase {
         XCTAssertThrowsError(try DaemonOwnedTUN(create: false, inheritedDescriptor: fd))
     }
 
+    func testVerifiedStopLeavesProfilePortableForComponentRollback() throws {
+        let source = "tun:\n  enable: true\n  auto-route: true\ndns:\n  enhanced-mode: fake-ip\n"
+        XCTAssertEqual(try MihomoConfigurator.detachingDaemonTUN(source, enabled: false), source)
+        let attached = try MihomoConfigurator.attachingDaemonTUN(source, interfaceName: "utun123")
+        for enabled in [false, true] {
+            let portable = try MihomoConfigurator.detachingDaemonTUN(attached, enabled: enabled)
+            XCTAssertFalse(portable.contains("file-descriptor:"))
+            XCTAssertFalse(portable.contains("device:"))
+            XCTAssertTrue(portable.contains("  enable: \(enabled)\n"))
+            XCTAssertTrue(portable.contains("  auto-route: true\n"))
+            XCTAssertEqual(try MihomoConfigurator.detachingDaemonTUN(portable, enabled: enabled), portable)
+        }
+    }
+
     func testGeneralIPv6PreferenceCannotChangeInheritedListenerIdentity() throws {
         let snapshot = Data(#"{"mode":"rule","ipv6":false,"tun":{"file-descriptor":3}}"#.utf8)
         let next = try MihomoConfigurator.preservingResidentSettings(snapshot, in: "mode: direct\nipv6: true\n")

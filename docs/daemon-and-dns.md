@@ -237,6 +237,9 @@ listener, addresses, fd and interface identity alive; only interception routes
 and real/Fake-IP DNS policy change. Full stop removes addresses and routes while
 the daemon keeps the inactive interface. Child death triggers the same cleanup;
 a stale controller response cannot re-enable routes for a replaced/dead child.
+Verified service stop removes the internal descriptor/device fields from the
+managed YAML and restores the requested TUN enable value. This keeps signed
+component rollback compatible with older daemons that create their own TUN.
 
 Route writes use acknowledged Darwin routing sockets and preserve configured
 prefix exclusions. An existing conflicting route causes rollback; it is never

@@ -210,6 +210,23 @@ final class AgentSupervisor: @unchecked Sendable {
                 health: observed
             )
             if lastBlockers.isEmpty {
+                do {
+                    if let process = configuration.mihomoProcess,
+                       FileManager.default.fileExists(atPath: process.configPath) {
+                        let file = URL(fileURLWithPath: process.configPath)
+                        let current = try String(contentsOf: file, encoding: .utf8)
+                        let portable = try MihomoConfigurator.detachingDaemonTUN(
+                            current, enabled: configuration.expectsEnhancedTUN
+                        )
+                        if portable != current {
+                            try Data(portable.utf8).write(to: file, options: .atomic)
+                            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+                        }
+                    }
+                } catch {
+                    ServiceLog.error("event=network_restore_verification result=failed blockers=profile_detach")
+                    return false
+                }
                 queue.sync { verifiedStoppedHealth = observed }
                 ServiceLog.info(
                     "event=network_restore_verification result=success attempts=\(attempts)"

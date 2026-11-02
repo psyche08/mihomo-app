@@ -232,6 +232,25 @@ public enum MihomoConfigurator {
         return lines.joined()
     }
 
+    /// Internal inherited descriptors are valid only in the managed child.
+    /// After verified stop, leave a portable profile for signed component
+    /// rollback to an older daemon that does not perform descriptor handoff.
+    public static func detachingDaemonTUN(_ profile: String, enabled: Bool) throws -> String {
+        let lines = profile.keepingLines()
+        let (start, end) = try block(lines, named: "tun")
+        var tun = Array(lines[(start+1)..<end])
+        guard let range = keyRange(tun, key: "file-descriptor"),
+              let first = tun[range].first,
+              parseScalar(String(first.dropFirst("  file-descriptor:".count))) == String(DaemonOwnedTUN.childDescriptor) else {
+            return profile
+        }
+        for key in ["file-descriptor", "device"] {
+            if let range = keyRange(tun, key: key) { tun.removeSubrange(range) }
+        }
+        tun = replaceScalar(tun, key: "enable", value: enabled ? "true" : "false")
+        return (Array(lines[...start]) + tun + Array(lines[end...])).joined()
+    }
+
     private static func restoringKey(_ key: String, in block: [String], from source: [String]) -> [String] {
         let replacement = keyRange(source, key: key).map { Array(source[$0]) } ?? []
         guard let range = keyRange(block, key: key) else { return terminated(block) + terminated(replacement) }
