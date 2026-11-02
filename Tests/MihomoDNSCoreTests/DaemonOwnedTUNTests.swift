@@ -75,9 +75,19 @@ final class DaemonOwnedTUNTests: XCTestCase {
             XCTAssertEqual(mihomo_owned_tun_address(interface.handle.fileDescriptor, address, 30, 1), 0)
         }
         XCTAssertEqual(mihomo_owned_tun_route(first.handle.fileDescriptor, "203.0.113.254", 32, "198.19.255.1", 1), 0)
+        var route = [CChar](repeating: 0, count: Int(IF_NAMESIZE))
+        XCTAssertEqual(mihomo_dns_route_interface("203.0.113.254", &route, route.count), 0)
+        // The cached query socket receives every broadcast. Fill its small
+        // receive buffer before the next query: its fresh reply must not be
+        // dropped behind stale route events and turn readiness into a timeout.
+        for _ in 0..<64 {
+            XCTAssertEqual(mihomo_owned_tun_route(first.handle.fileDescriptor, "203.0.113.254", 32, "198.19.255.1", 0), 0)
+            XCTAssertEqual(mihomo_owned_tun_route(first.handle.fileDescriptor, "203.0.113.254", 32, "198.19.255.1", 1), 0)
+        }
+        XCTAssertEqual(mihomo_dns_route_interface("203.0.113.254", &route, route.count), 0)
+        XCTAssertEqual(String(cString: route), first.interfaceName)
         XCTAssertEqual(mihomo_owned_tun_route(second.handle.fileDescriptor, "203.0.113.254", 32, "198.19.255.5", 1), -EEXIST)
         try second.deactivate()
-        var route = [CChar](repeating: 0, count: Int(IF_NAMESIZE))
         XCTAssertEqual(mihomo_dns_route_interface("203.0.113.254", &route, route.count), 0)
         XCTAssertEqual(String(cString: route), first.interfaceName)
         try first.deactivate(); try first.deactivate()

@@ -21,8 +21,9 @@
 // The socket is opened once and kept. That has one consequence worth stating:
 // PF_ROUTE broadcasts every routing change to every open socket, so unrelated
 // messages pile up in the receive buffer between our queries. Each lookup
-// therefore drains what it finds, matching replies by (pid, seq) and discarding
-// the rest, and gives up on a deadline rather than blocking.
+// therefore drains old broadcasts BEFORE sending a query, so a full buffer
+// cannot drop the fresh reply. It then matches replies by (pid, seq) and gives
+// up on a deadline rather than blocking.
 
 static pthread_mutex_t route_lock = PTHREAD_MUTEX_INITIALIZER;
 static int route_descriptor = -1;
@@ -169,6 +170,27 @@ int mihomo_dns_route_interface(const char *address, char *out_name, size_t out_l
     if (descriptor < 0) {
         pthread_mutex_unlock(&route_lock);
         return descriptor;
+    }
+
+    // Route switches can fill this idle socket with broadcasts. Writing first
+    // would let the kernel drop our reply as well, producing a false 200 ms
+    // timeout and deferring readiness to the observer's next timer tick.
+    // Bound draining under continuous churn by replacing only our query socket.
+    int drained = 0;
+    for (; drained < 256; drained++) {
+        ssize_t length = read(descriptor, reply, sizeof(reply));
+        if (length >= 0 || errno == EINTR) continue;
+        if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+        drained = 256;
+        break;
+    }
+    if (drained == 256) {
+        route_close_locked();
+        descriptor = route_socket_locked();
+        if (descriptor < 0) {
+            pthread_mutex_unlock(&route_lock);
+            return descriptor;
+        }
     }
 
     if (++route_sequence <= 0) {

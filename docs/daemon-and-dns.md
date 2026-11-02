@@ -246,6 +246,10 @@ require the probe route on this exact interface, rather than mere interface
 existence or the permanently enabled internal listener. Descriptor details stay
 inside the privileged boundary. General IPv6 preferences are restored after
 reload without changing the attached listener’s startup address identity.
+The cached route-query socket drains stale broadcasts before sending each
+request. Otherwise a full receive buffer can discard the new reply, introduce
+a false 200 ms timeout, and delay confirmation until the next observer tick.
+The privileged regression test saturates that buffer with real route events.
 
 DNS policy changes with TUN: standby returns real addresses, Enhanced mode
 restores the source Fake-IP policy, and DNS caches are flushed after application.
