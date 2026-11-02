@@ -63,6 +63,8 @@ bash Tests/test_system_proxy.sh
 /usr/bin/plutil -lint deploy/dev.linsheng.mihomo.daemon.plist
 test "$(/usr/libexec/PlistBuddy -c 'Print :RunAtLoad' \
   deploy/dev.linsheng.mihomo.daemon.plist)" = "true"
+test "$(/usr/libexec/PlistBuddy -c 'Print :ProcessType' \
+  deploy/dev.linsheng.mihomo.daemon.plist)" = "Standard"
 
 # This is an awk program, not shell interpolation.
 # shellcheck disable=SC2016

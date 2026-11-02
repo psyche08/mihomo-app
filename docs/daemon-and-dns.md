@@ -213,9 +213,11 @@ applies the profile through the root-only controller using `PUT /configs?force=f
 The original-DNS escape stays bound; the mixed proxy listener and unchanged
 App Proxy listeners remain in the core. The Global DNS bridge is rebound only
 as required by the selected DNS ownership. A new observer verifies the requested
-TUN/DNS state before the daemon commits. The daemon polls that passive,
-generation-bound snapshot every 10 ms initially, backing off to 50 and 250 ms
-for slower starts; it never substitutes an optimistic UI state for readiness.
+TUN/DNS state before the daemon commits. Directory change notifications wake the
+daemon when the agent atomically publishes its snapshot. Notifications are only
+hints: the daemon still validates the generation and complete health. Bounded
+polling (10 ms initially, backing off to 50 and 250 ms) handles missed/coalesced
+notifications; it never substitutes an optimistic UI state for readiness.
 Fixed phase names and monotonic millisecond timings identify preparation,
 observer quiescence, route withdrawal, application, both cache flushes and
 confirmation costs without recording configuration contents. Final GLOBAL and
@@ -226,6 +228,12 @@ between DNS queries when the runtime changes. Their external DNS latency never
 blocks health publication or shutdown, and old-generation findings are discarded.
 System DNS cache-flush commands still finish before readiness, using process-exit
 notifications instead of Foundation's run-loop polling delay.
+The Local DoH profile inspector also waits on process-exit notifications, retaining
+its timeout and complete certificate/profile checks. The LaunchDaemon uses the
+`Standard` process class: `Background` is inappropriate for the user-requested
+network data path and delays interactive work under load. Agent lifecycle
+signals and synchronous inspection/cache-flush children use user-initiated QoS;
+periodic external diagnostics retain their utility workers.
 Route ownership still excludes any
 preexisting VPN interface. Failed live transitions use the existing verified
 stop/restore and protected-file rollback path.

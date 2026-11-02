@@ -1,4 +1,34 @@
+import Darwin
 import Foundation
+
+/// Wakes a waiting transaction when an atomically replaced snapshot may have
+/// changed. Notifications are hints only: the caller must re-read and validate
+/// the generation and health. Watch the directory, not the replaced inode.
+public final class HealthSnapshotChanges {
+    private let changed = DispatchSemaphore(value: 0)
+    private let source: DispatchSourceFileSystemObject
+
+    public init?(path: String) {
+        let directory = URL(fileURLWithPath: path).deletingLastPathComponent().path
+        let descriptor = open(directory, O_EVTONLY | O_CLOEXEC)
+        guard descriptor >= 0 else { return nil }
+        source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: descriptor, eventMask: .write,
+            queue: .global(qos: .userInitiated)
+        )
+        let changed = self.changed
+        source.setEventHandler { changed.signal() }
+        source.setCancelHandler { close(descriptor) }
+        source.resume()
+    }
+
+    deinit { source.cancel() }
+
+    @discardableResult
+    public func wait(timeout: TimeInterval) -> Bool {
+        changed.wait(timeout: .now() + max(0, timeout)) == .success
+    }
+}
 
 /// A health reading the agent has already taken, shared with the daemon.
 ///

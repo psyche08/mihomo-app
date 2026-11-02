@@ -310,6 +310,10 @@ final class AgentSupervisor: @unchecked Sendable {
     /// Reads only the agent-published snapshot for the current launch/reload.
     /// Unlike `diagnosticHealth()`, this never falls back to active DNS probes,
     /// because it is called repeatedly by startup transaction validation.
+    func healthSnapshotChanges() throws -> HealthSnapshotChanges? {
+        HealthSnapshotChanges(path: try ProxyConfiguration.load(path: configPath).healthSnapshotPath)
+    }
+
     func expectedHealthSnapshot() throws -> HealthSnapshot? {
         let expected = queue.sync { expectedHealthGeneration }
         guard let expected else { return nil }

@@ -22,6 +22,9 @@ struct LocalDoHStatusProvider {
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
         process.standardInput = FileHandle.nullDevice
+        process.qualityOfService = .userInitiated
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
         var environment = ProcessInfo.processInfo.environment
         environment["LC_ALL"] = "C"
         environment["LANG"] = "C"
@@ -38,7 +41,7 @@ struct LocalDoHStatusProvider {
             DispatchQueue.global().asyncAfter(deadline: .now() + 5, execute: timeout)
             defer { timeout.cancel() }
             let data = output.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
+            exited.wait()
             guard process.terminationStatus == 0 else {
                 return (false, .init(installed: false), nil)
             }

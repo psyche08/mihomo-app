@@ -213,7 +213,9 @@ do {
         runtimeGeneration: runtimeGeneration,
         ownedTUN: ownedTUN
     )
-    let signalQueue = DispatchQueue(label: "dev.linsheng.mihomo-app.agent.signal")
+    // Lifecycle signals are synchronous user actions, including resident TUN
+    // transitions. Keep these separate from the utility diagnostics workers.
+    let signalQueue = DispatchQueue(label: "dev.linsheng.mihomo-app.agent.signal", qos: .userInitiated)
     let semaphore = DispatchSemaphore(value: 0)
     var parentWatchdog: DispatchSourceTimer?
     if let expectedParentPID {

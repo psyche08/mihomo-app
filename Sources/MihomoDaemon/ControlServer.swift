@@ -778,6 +778,7 @@ final class ControlDispatcher: @unchecked Sendable {
     ) throws {
         let deadline = Date().addingTimeInterval(timeout)
         let clock = MonotonicStartupClock()
+        let changes = try agent.healthSnapshotChanges()
         var lastError: Error?
         repeat {
             guard agent.isRunning else {
@@ -827,11 +828,14 @@ final class ControlDispatcher: @unchecked Sendable {
             } catch {
                 lastError = error
                 if Date() < deadline {
-                    // A resident switch commonly completes in tens of ms.
-                    // Poll only its passive generation-bound snapshot quickly
-                    // at first; back off for cold starts and failing runtimes.
+                    // An atomic snapshot replacement wakes us immediately.
+                    // Keep bounded polling as a fallback for lost/coalesced
+                    // hints, and always validate the generation after waking.
                     let elapsed = clock.elapsedMilliseconds()
-                    Thread.sleep(forTimeInterval: elapsed < 250 ? 0.01 : (elapsed < 1_000 ? 0.05 : 0.25))
+                    let delay = min(deadline.timeIntervalSinceNow,
+                                    elapsed < 250 ? 0.01 : (elapsed < 1_000 ? 0.05 : 0.25))
+                    if let changes { changes.wait(timeout: delay) }
+                    else if delay > 0 { Thread.sleep(forTimeInterval: delay) }
                 }
             }
         } while Date() < deadline
