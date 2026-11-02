@@ -7,13 +7,21 @@ public enum DNSMessageError: Error, Equatable {
 
 public enum DNSMessage {
     public static let maximumWireLength = 65_535
-    static let runtimeHealthQuery = Data([
-        0x4d, 0x48, 0x01, 0x00, 0x00, 0x01,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x07, 0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65,
-        0x03, 0x63, 0x6f, 0x6d,
-        0x00, 0x00, 0x01, 0x00, 0x01,
-    ])
+    // DNS STATUS (opcode 2): the pinned core's DNS server returns NOTIMP
+    // locally, before resolution. This checks the real UDP/bridge transport
+    // without making switch completion depend on an external nameserver after
+    // cache flushing. Controller, route and DNS ownership are checked separately.
+    static let runtimeHealthQuery: Data = {
+        var query = addressQuery(for: "mihomobox-health.invalid")!
+        query[2] = 0x10 // STATUS, no recursion requested
+        return query
+    }()
+
+    static func isRuntimeHealthResponse(_ data: Data) -> Bool {
+        data.count >= 12 && data.prefix(2) == runtimeHealthQuery.prefix(2)
+            && data[2] & 0x80 != 0 && (data[2] >> 3) & 0x0f == 2
+            && data[3] & 0x0f == 4 && data[2] & 0x02 == 0
+    }
 
     /// Builds an A query for `name`.
     public static func addressQuery(for name: String, identifier: UInt16 = 0x4d48) -> Data? {

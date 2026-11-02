@@ -55,6 +55,9 @@ struct FakeIPDNSPolicy: Sendable {
     }
 
     func allowsOriginalDNSFallback(for query: Data) -> Bool {
+        // A physical resolver's NOTIMP cannot prove the managed DNS bridge
+        // reached Mihomo. Never let health escape through the fallback path.
+        guard query != DNSMessage.runtimeHealthQuery else { return false }
         guard let domain = try? DNSMessage.questionName(query) else { return false }
         return allowsOriginalDNSFallback(forDomain: domain)
     }

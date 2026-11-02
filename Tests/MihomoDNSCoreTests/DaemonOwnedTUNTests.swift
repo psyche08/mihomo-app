@@ -194,7 +194,9 @@ final class DaemonOwnedTUNTests: XCTestCase {
                 try MihomoRuntimeInspector.reloadResidentMihomo(configuration: policy)
                 if enabled {
                     try duplicate.activate(plan)
-                    let answer = try SocketDNSClient.query(DNSMessage.runtimeHealthQuery,
+                    // A real DNS question exercises the TUN data plane; the
+                    // UDP listener liveness opcode is a separate health check.
+                    let answer = try SocketDNSClient.query(XCTUnwrap(DNSMessage.addressQuery(for: "example.com")),
                         endpoint: .init(host: "198.19.128.2", port: 53), timeoutMilliseconds: 1000, interfaceName: nil)
                     XCTAssertFalse(answer.isEmpty, "packet must traverse the inherited utun into Mihomo")
                 } else {

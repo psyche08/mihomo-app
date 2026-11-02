@@ -809,10 +809,6 @@ final class ControlDispatcher: @unchecked Sendable {
                           health.fakeIPRouteReady else {
                         throw serverErrorStatic("the Enhanced TUN network is not ready")
                     }
-                    // Controller verification is deliberately after the
-                    // matching agent snapshot. Polling while the generation is
-                    // pending must not create another active probe loop.
-                    try controller.ensureSafeGlobalRoute()
                 } else {
                     guard !health.tunEnabled,
                           health.tunInterface == nil,
@@ -820,7 +816,11 @@ final class ControlDispatcher: @unchecked Sendable {
                         throw serverErrorStatic("the standby runtime still owns a TUN route")
                     }
                 }
-                try controller.ensureConfiguredAppProxyRoutes()
+                // Controller verification follows the matching agent snapshot;
+                // polling pending generations must not create an active probe loop.
+                ServiceLog.info("event=runtime_validation phase=health_ready elapsed_ms=\(clock.elapsedMilliseconds())")
+                try controller.ensureRuntimeRoutes(requireSafeGlobal: agent.expectsEnhancedTUN)
+                ServiceLog.info("event=runtime_validation phase=routes_verified elapsed_ms=\(clock.elapsedMilliseconds())")
                 return
             } catch ControllerBrokerCriticalError.unsafeGlobalRuntime {
                 throw ControllerBrokerCriticalError.unsafeGlobalRuntime

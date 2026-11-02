@@ -463,12 +463,13 @@ public enum MihomoRuntimeInspector {
     }
 
     private static func dnsEndpointResponds(endpoint: Endpoint) -> Bool {
-        return (try? SocketDNSClient.query(
+        guard let response = try? SocketDNSClient.query(
             DNSMessage.runtimeHealthQuery,
             endpoint: endpoint,
             timeoutMilliseconds: 2_000,
             interfaceName: nil
-        )) != nil
+        ) else { return false }
+        return DNSMessage.isRuntimeHealthResponse(response)
     }
 
     static func tcpEndpointResponds(endpoint: Endpoint) -> Bool {

@@ -93,8 +93,9 @@ final class UnixDoHForwarderTests: XCTestCase {
         let config = directory.appendingPathComponent("config.yaml")
         let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
         defer { try? group.syncShutdownGracefully() }
+        let upstreamHandler = StaticDNSUpstream()
         let upstream = try DatagramBootstrap(group: group).channelInitializer { channel in
-            channel.pipeline.addHandler(StaticDNSUpstream())
+            channel.pipeline.addHandler(upstreamHandler)
         }.bind(host: "127.0.0.1", port: 0).wait()
         defer { try? upstream.close().wait() }
         let port = try XCTUnwrap(upstream.localAddress?.port)
@@ -110,7 +111,7 @@ final class UnixDoHForwarderTests: XCTestCase {
         XCTAssertEqual(DNSMessage.firstIPv4Answer(try routed.forward(fakeQuery, on: group.next()).wait()), "203.0.113.9")
         // All sockets are isolated loopback test endpoints. TUN stays disabled;
         // the test never changes system DNS/routes or uses production settings.
-        let reservations = try (0..<3).map { _ in
+        let reservations = try (0..<4).map { _ in
             try ServerBootstrap(group: group).bind(host: "127.0.0.1", port: 0).wait()
         }
         let ports = try reservations.map { try XCTUnwrap($0.localAddress?.port) }
@@ -140,6 +141,7 @@ final class UnixDoHForwarderTests: XCTestCase {
           enable: false
         dns:
           enable: true
+          listen: 127.0.0.1:\(ports[3])
           enhanced-mode: fake-ip
           fake-ip-range: 198.18.0.1/16
           fake-ip-filter-mode: \(standby ? "rule" : "blacklist")
@@ -169,6 +171,20 @@ final class UnixDoHForwarderTests: XCTestCase {
         while !FileManager.default.fileExists(atPath: path), process.isRunning, Date() < deadline {
             usleep(10_000)
         }
+        // A cold, real-IP resolver with a deliberately unresponsive upstream
+        // must still prove local DNS liveness without issuing upstream traffic.
+        let upstreamCalls = upstreamHandler.calls
+        upstreamHandler.responds = false
+        var localReady = false
+        while process.isRunning, Date() < deadline {
+            if let response = try? SocketDNSClient.query(DNSMessage.runtimeHealthQuery,
+                endpoint: .init(host: "127.0.0.1", port: ports[3]), timeoutMilliseconds: 100, interfaceName: nil),
+               DNSMessage.isRuntimeHealthResponse(response) { localReady = true; break }
+            usleep(10_000)
+        }
+        upstreamHandler.responds = true
+        XCTAssertTrue(localReady, "local DNS liveness must not wait for an upstream")
+        XCTAssertEqual(upstreamHandler.calls, upstreamCalls)
         // The Unix listener can exist before the pinned core's DNS handler is
         // ready. Probe readiness instead of treating socket creation as readiness.
         // Only startup is retried; the assertions and shutdown probes below are not.
@@ -270,10 +286,20 @@ private final class RecordingOriginalDNS: AsyncDNSForwarding, @unchecked Sendabl
     }
 }
 
-private final class StaticDNSUpstream: ChannelInboundHandler {
+private final class StaticDNSUpstream: ChannelInboundHandler, @unchecked Sendable {
+    private let lock = NSLock()
+    private var callCount = 0
+    private var shouldRespond = true
+    var calls: Int { lock.lock(); defer { lock.unlock() }; return callCount }
+    var responds: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return shouldRespond }
+        set { lock.lock(); shouldRespond = newValue; lock.unlock() }
+    }
     typealias InboundIn = AddressedEnvelope<ByteBuffer>
     typealias OutboundOut = AddressedEnvelope<ByteBuffer>
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+        lock.lock(); callCount += 1; let respond = shouldRespond; lock.unlock()
+        guard respond else { return }
         var packet = unwrapInboundIn(data)
         guard var bytes = packet.data.readBytes(length: packet.data.readableBytes), bytes.count >= 12 else { return }
         bytes[2] = 0x81; bytes[3] = 0x80

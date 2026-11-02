@@ -186,7 +186,9 @@ public final class ProxyService {
         powerObserver = nil
         consistencyController?.stopAndRestore()
         consistencyController = nil
+        ServiceLog.info("event=resident_runtime_transition phase=quiesced elapsed_ms=\(clock.elapsedMilliseconds())")
         try ownedTUN?.suspend()
+        ServiceLog.info("event=resident_runtime_transition phase=routes_withdrawn elapsed_ms=\(clock.elapsedMilliseconds())")
         guard try Self.isSystemDNSRestored(configuration: configuration) else {
             throw NSError(domain: "MihomoResidentRuntime", code: 4)
         }
@@ -213,7 +215,9 @@ public final class ProxyService {
         try MihomoRuntimeInspector.reloadResidentMihomo(configuration: next)
         ServiceLog.info("event=resident_runtime_transition phase=applied elapsed_ms=\(clock.elapsedMilliseconds())")
         MihomoRuntimeInspector.flushMihomoDNSCaches(configuration: next)
+        ServiceLog.info("event=resident_runtime_transition phase=core_cache_flushed elapsed_ms=\(clock.elapsedMilliseconds())")
         DNSCacheMaintenance.flushSystemCaches()
+        ServiceLog.info("event=resident_runtime_transition phase=system_cache_flushed elapsed_ms=\(clock.elapsedMilliseconds())")
         startConsistencyObservation()
         ServiceLog.info("event=resident_runtime_transition phase=observed elapsed_ms=\(clock.elapsedMilliseconds())")
     }

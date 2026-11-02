@@ -85,6 +85,20 @@ final class ControllerBroker: @unchecked Sendable {
         try validateAppProxyRoutes(settings)
     }
 
+    /// One authenticated snapshot proves both routing invariants after reload.
+    /// Fetching the complete proxy graph twice made large profiles pay twice
+    /// while the daemon's mutation lock already prevents interleaved changes.
+    func ensureRuntimeRoutes(requireSafeGlobal: Bool) throws {
+        let file = URL(fileURLWithPath: configPath).deletingLastPathComponent().appendingPathComponent("app-proxy.json")
+        let settings = FileManager.default.fileExists(atPath: file.path)
+            ? try JSONDecoder().decode(AppProxySettings.self, from: Data(contentsOf: file)) : nil
+        guard requireSafeGlobal || settings?.routes.isEmpty == false else { return }
+        let configuration = try ProxyConfiguration.load(path: configPath)
+        var snapshot = try routeSnapshot(configuration)
+        if requireSafeGlobal { snapshot = try repairUnsafeGlobalIfNeeded(configuration, snapshot: snapshot) }
+        if let settings, !settings.routes.isEmpty { try settings.validateRoutes(in: snapshot) }
+    }
+
     func waitForSafeGlobalRoute(attempts: Int = 30) throws {
         let attempts = max(1, attempts)
         var lastError: Error?

@@ -109,9 +109,14 @@ standby, the managed configuration uses `fake-ip-filter-mode: rule` with
 returns real addresses. Enabling TUN restores the protected source profile’s
 Fake-IP policy through the resident core.
 
-The internal health probe is an exact wire message sent directly to Mihomo DNS;
-it never uses original DNS. This lets startup distinguish controller/DNS
-standby from Enhanced readiness without depending on the macOS DNS profile.
+The internal health probe is an exact DNS STATUS wire message. The pinned
+Mihomo UDP server rejects this opcode locally with NOTIMP; readiness verifies
+the response identifier, opcode and error without querying an external resolver.
+The same probe traverses the managed Global DNS bridge when it is active, and
+never falls back to original DNS. This proves local transport liveness, not
+external resolution: controller, route and DNS ownership checks remain required,
+while external reachability diagnostics run independently. Native core tests
+verify this behavior with an unresponsive upstream in both Fake-IP and real-IP modes.
 
 Managed fake-IP responses use a one-second TTL. This limits stale mappings
 after a profile, TUN, or resolver transition; rollback and shutdown also flush
@@ -212,7 +217,10 @@ TUN/DNS state before the daemon commits. The daemon polls that passive,
 generation-bound snapshot every 10 ms initially, backing off to 50 and 250 ms
 for slower starts; it never substitutes an optimistic UI state for readiness.
 Fixed phase names and monotonic millisecond timings identify preparation,
-application and confirmation costs without recording configuration contents.
+observer quiescence, route withdrawal, application, both cache flushes and
+confirmation costs without recording configuration contents. Final GLOBAL and
+App Proxy route validation shares one authenticated controller snapshot under
+the daemon mutation lock.
 Proxy-server loop diagnostics run on a separate serial worker and are cancelled
 between DNS queries when the runtime changes. Their external DNS latency never
 blocks health publication or shutdown, and old-generation findings are discarded.
