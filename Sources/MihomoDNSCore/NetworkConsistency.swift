@@ -33,9 +33,14 @@ public enum DNSCacheMaintenance {
         process.arguments = arguments
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
         do {
             try process.run()
-            process.waitUntilExit()
+            // Foundation's run-loop polling adds a tick even to an immediate
+            // exit. Wait for the child-exit notification instead; cache flush
+            // still completes before readiness is published.
+            exited.wait()
         } catch {}
     }
 }
@@ -843,6 +848,7 @@ public final class NetworkConsistencyController: @unchecked Sendable {
     /// The proxy-server resolution check runs once per runtime, the first time
     /// the kernel is ready enough to answer.
     private var checkedProxyServerResolution = false
+    private let proxyServerResolutionProbe = ProxyServerResolutionProbe()
     private let healthSnapshotPath: String?
     private let healthGeneration: RuntimeHealthGeneration
     private var runtimeReloadInProgress = false
@@ -901,6 +907,8 @@ public final class NetworkConsistencyController: @unchecked Sendable {
     public func beginRuntimeReload(generation: String) {
         queue.sync {
             runtimeReloadInProgress = true
+            proxyServerResolutionProbe.invalidate()
+            checkedProxyServerResolution = false
             safetyState.setRuntimeReady(false)
             invalidateEgressMeasurement()
             healthGeneration.replace(with: generation)
@@ -992,6 +1000,7 @@ public final class NetworkConsistencyController: @unchecked Sendable {
 
     public func stopAndRestore() {
         queue.sync {
+            proxyServerResolutionProbe.invalidate()
             timer?.cancel()
             timer = nil
             safetyState.setRuntimeReady(false)
@@ -1271,20 +1280,28 @@ public final class NetworkConsistencyController: @unchecked Sendable {
     /// to measure.
     private func reportLoopingProxyServers(tunnelInterface: String?) {
         guard let process = configuration.mihomoProcess else { return }
-        let findings = ProxyServerResolution.loopingServers(
-            configPath: process.configPath,
-            // The escape resolver, which answers with real addresses — the same
-            // path the kernel uses for its own proxy servers.
-            resolver: configuration.upstreamListen,
-            tunnelInterface: tunnelInterface
-        )
-        for finding in findings {
-            ServiceLog.error(
-                "event=proxy_server_routed_into_tunnel host=\(finding.host) " +
-                "address=\(finding.address) interface=\(finding.interface) " +
-                "detail=exclude_the_address_from_tun_auto_route"
+        let generation = healthGeneration.current()
+        let resolver = configuration.upstreamListen
+        proxyServerResolutionProbe.schedule(operation: { cancelled in
+            ProxyServerResolution.loopingServers(
+                configPath: process.configPath,
+                resolver: resolver,
+                tunnelInterface: tunnelInterface,
+                isCancelled: cancelled
             )
-        }
+        }, completion: { [weak self] findings in
+            self?.queue.async { [weak self] in
+                guard let self, self.timer != nil, !self.runtimeReloadInProgress,
+                      self.healthGeneration.current() == generation else { return }
+                for finding in findings {
+                    ServiceLog.error(
+                        "event=proxy_server_routed_into_tunnel host=\(finding.host) " +
+                        "address=\(finding.address) interface=\(finding.interface) " +
+                        "detail=exclude_the_address_from_tun_auto_route"
+                    )
+                }
+            }
+        })
     }
 
     /// Schedules egress probes and folds completed results into a recovery

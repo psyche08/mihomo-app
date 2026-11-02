@@ -63,16 +63,19 @@ public enum ProxyServerResolution {
         configPath: String,
         resolver: Endpoint,
         tunnelInterface: String?,
-        timeoutMilliseconds: Int = 2_000
+        timeoutMilliseconds: Int = 2_000,
+        isCancelled: @Sendable () -> Bool = { false }
     ) -> [Finding] {
         guard let tunnelInterface, !tunnelInterface.isEmpty else { return [] }
         var findings: [Finding] = []
         for host in serverHosts(configPath: configPath) {
+            guard !isCancelled() else { return [] }
             guard let address = dialAddress(
                 host: host,
                 resolver: resolver,
                 timeoutMilliseconds: timeoutMilliseconds
             ) else { continue }
+            guard !isCancelled() else { return [] }
             guard let interface = routeInterface(for: address), interface == tunnelInterface else {
                 continue
             }
@@ -112,5 +115,29 @@ public enum ProxyServerResolution {
         let octets = value.split(separator: ".")
         guard octets.count == 4 else { return false }
         return octets.allSatisfy { Int($0).map { (0 ... 255).contains($0) } ?? false }
+    }
+}
+
+/// Diagnostics never hold up health publication or a TUN switch. A single
+/// worker bounds outstanding DNS work across rapidly replaced observers;
+/// invalidation skips queued work and discards results from an old runtime.
+final class ProxyServerResolutionProbe: @unchecked Sendable {
+    private static let worker = DispatchQueue(label: "dev.linsheng.mihomo-app.proxy-resolution", qos: .utility)
+    private let generation = RuntimeHealthGeneration()
+
+    func invalidate() { generation.replace(with: UUID().uuidString) }
+
+    func schedule(
+        operation: @escaping @Sendable (@Sendable () -> Bool) -> [ProxyServerResolution.Finding],
+        completion: @escaping @Sendable ([ProxyServerResolution.Finding]) -> Void
+    ) {
+        let expected = generation.current()
+        Self.worker.async { [generation] in
+            let cancelled: @Sendable () -> Bool = { generation.current() != expected }
+            guard !cancelled() else { return }
+            let findings = operation(cancelled)
+            guard !cancelled() else { return }
+            completion(findings)
+        }
     }
 }

@@ -213,6 +213,11 @@ generation-bound snapshot every 10 ms initially, backing off to 50 and 250 ms
 for slower starts; it never substitutes an optimistic UI state for readiness.
 Fixed phase names and monotonic millisecond timings identify preparation,
 application and confirmation costs without recording configuration contents.
+Proxy-server loop diagnostics run on a separate serial worker and are cancelled
+between DNS queries when the runtime changes. Their external DNS latency never
+blocks health publication or shutdown, and old-generation findings are discarded.
+System DNS cache-flush commands still finish before readiness, using process-exit
+notifications instead of Foundation's run-loop polling delay.
 Route ownership still excludes any
 preexisting VPN interface. Failed live transitions use the existing verified
 stop/restore and protected-file rollback path.

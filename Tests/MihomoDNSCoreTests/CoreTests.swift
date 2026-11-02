@@ -2089,4 +2089,28 @@ extension CoreTests {
         XCTAssertFalse(rendered.contains("192.0.2.53"))
         XCTAssertThrowsError(try MihomoConfigurator.preservingResidentSettings(Data("{}".utf8), in: profile))
     }
+
+    func testProxyResolutionDiagnosticsDoNotBlockOrPublishAnInvalidatedRuntime() {
+        let probe = ProxyServerResolutionProbe()
+        let started = expectation(description: "slow DNS started")
+        let release = DispatchSemaphore(value: 0)
+        let stale = expectation(description: "stale result must be discarded")
+        stale.isInverted = true
+        probe.schedule(operation: { cancelled in
+            started.fulfill()
+            _ = release.wait(timeout: .now() + 2)
+            XCTAssertTrue(cancelled())
+            return []
+        }, completion: { _ in stale.fulfill() })
+        wait(for: [started], timeout: 1)
+        // Cancellation must return while the diagnostic is still blocked.
+        probe.invalidate()
+        release.signal()
+        let fresh = expectation(description: "new runtime can diagnose")
+        probe.schedule(operation: { cancelled in
+            XCTAssertFalse(cancelled())
+            return []
+        }, completion: { _ in fresh.fulfill() })
+        wait(for: [fresh, stale], timeout: 0.2)
+    }
 }
