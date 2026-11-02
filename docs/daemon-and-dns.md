@@ -106,8 +106,8 @@ errors and overload still fail closed. If neither backend answers, HTTP 502 is
 returned; keeping the listener alive cannot guarantee an offline upstream. In TUN-off
 standby, the managed configuration uses `fake-ip-filter-mode: rule` with
 `MATCH,real-ip` (not the single-label `*` wildcard) so Mihomo
-returns real addresses. Enabling TUN rebuilds the runtime from the protected
-source profile, restoring its Fake-IP policy.
+returns real addresses. Enabling TUN restores the protected source profile’s
+Fake-IP policy through the resident core.
 
 The internal health probe is an exact wire message sent directly to Mihomo DNS;
 it never uses original DNS. This lets startup distinguish controller/DNS
@@ -187,7 +187,7 @@ readiness is checked before reporting success. A missing agent health snapshot
 does not invalidate a healthy independent DoH listener using network DNS.
 
 `runtime.set-tun` is a persistent transition between two valid agent states.
-Standby retains the controller and Mihomo DNS with TUN and the Fake-IP route
+Standby retains the controller and Mihomo DNS with TUN interception and the Fake-IP route
 absent; Enhanced mode uses Local DoH only after the installed profile, identity,
 native SSL trust and 443 listener are verified. Otherwise it runs the verified
 Global DNS fallback transaction and confirms removal of any overriding DoH
@@ -203,7 +203,7 @@ activation and cold start. The resident core parses the candidate before
 applying it; rejection still takes the verified rollback path.
 The daemon then sends a one-shot resident
 transition request with a fresh health generation. The agent quiesces the old
-observer, restores and verifies any owned Global DNS before removing TUN, and
+observer, restores and verifies any owned Global DNS before withdrawing TUN routes, and
 applies the profile through the root-only controller using `PUT /configs?force=false`.
 The original-DNS escape stays bound; the mixed proxy listener and unchanged
 App Proxy listeners remain in the core. The Global DNS bridge is rebound only
@@ -222,6 +222,31 @@ Route ownership still excludes any
 preexisting VPN interface. Failed live transitions use the existing verified
 stop/restore and protected-file rollback path.
 
+The daemon precreates a fresh kernel-assigned utun and retains its primary
+file descriptor across agent and Mihomo restarts. The signed agent passes an
+explicit duplicate through stdin to its fixed exec-only launcher, which moves
+it to descriptor 3 and execs the fixed managed Mihomo binary. No shell, arbitrary
+path or GUI descriptor transport is involved. The mode-0600 owner record is
+accepted only while its root daemon PID still resolves to the managed executable.
+
+On cold start Mihomo parses the configuration with its listener disabled. The
+agent reads those parsed addresses, configures the precreated interface without
+traffic routes, then attaches Mihomo through `tun.file-descriptor`. Mixed/system
+stacks require the local addresses before binding. Routine off/on keeps this
+listener, addresses, fd and interface identity alive; only interception routes
+and real/Fake-IP DNS policy change. Full stop removes addresses and routes while
+the daemon keeps the inactive interface. Child death triggers the same cleanup;
+a stale controller response cannot re-enable routes for a replaced/dead child.
+
+Route writes use acknowledged Darwin routing sockets and preserve configured
+prefix exclusions. An existing conflicting route causes rollback; it is never
+replaced. Cleanup derives the interface from the actual owned descriptor and
+filters its route index. Effective TUN health and public controller snapshots
+require the probe route on this exact interface, rather than mere interface
+existence or the permanently enabled internal listener. Descriptor details stay
+inside the privileged boundary. General IPv6 preferences are restored after
+reload without changing the attached listener’s startup address identity.
+
 DNS policy changes with TUN: standby returns real addresses, Enhanced mode
 restores the source Fake-IP policy, and DNS caches are flushed after application.
 The live routing mode and supported general scalar settings are retained across
@@ -237,6 +262,12 @@ transitions, routing-mode retention and rejection of malformed configuration
 using isolated loopback sockets. It leaves TUN disabled; real route teardown,
 Global DNS restoration and NetworkExtension coexistence still require signed
 machine acceptance before release.
+The opt-in `DaemonOwnedTUNTests` root acceptance additionally exercises real
+IPv4/IPv6 interface configuration, inherited-descriptor packet delivery, two
+core lifetimes, repeated route switches, foreign-route conflicts and cleanup.
+It uses only benchmark/documentation prefixes and never changes default routes
+or system DNS. Run the built core XCTest bundle with
+`MIHOMO_PRIVILEGED_TUN_TESTS=1` explicitly under root.
 
 `enhancedTUNResumeEnabled` remembers the last explicit TUN choice. Turning TUN
 off persists standby across daemon restarts, component updates and App launches.
@@ -382,14 +413,15 @@ route and Mihomo-DNS drift. In Enhanced mode it immediately disables Fake-IP
 answers and requests recovery only after three consecutive failed observations,
 filtering short startup and interface-transition gaps. The sole owned Mihomo
 supervisor then allows eight seconds for Mihomo to rebuild the complete
-auto-route state. In standby mode, the absence of TUN/route is intentional and
+auto-route state. In standby mode, the absence of interception routes is intentional and
 does not vote for recovery. LocalHttpDns remains bound on the daemon; Mihomo IPC
 temporarily falls back to current network DNS while the child restarts.
 
 The Fake-IP route is machine-wide evidence, not ownership proof. The agent
 records any tunnel already routing the probe range before it starts Mihomo and
 accepts a route only when the controller reports TUN enabled and the visible
-interface is not that pre-existing tunnel. Stopped-state inspection likewise
+interface is the daemon-owned utun. Legacy non-inherited fixtures instead
+exclude that pre-existing tunnel. Stopped-state inspection likewise
 ignores unrelated utun routes. This prevents another VPN or network extension
 from making Mihomo look healthy or from blocking verified shutdown.
 
@@ -402,8 +434,8 @@ The root daemon owns the LocalHttpDns data plane. It authenticates
 XPC clients, serializes lifecycle/profile transactions, prepares the fixed
 global DNS profile, keeps the TLS endpoint alive with Mihomo IPC plus a
 daemon-owned original-network DNS fallback,
-and supervises the agent. TUN and the 1054
-original-DNS escape remain agent-owned. Only explicit fallback owns the system
+and supervises the agent. The daemon owns the primary utun descriptor; the
+agent owns its inherited duplicate, route switching and the 1054 original-DNS escape. Only explicit fallback owns the system
 DNS list.
 
 Each agent launch receives a daemon-generated runtime generation. The

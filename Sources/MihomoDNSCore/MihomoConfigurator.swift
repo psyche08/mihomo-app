@@ -169,7 +169,8 @@ public enum MihomoConfigurator {
     /// parses this candidate before applying it; generation-bound health and
     /// the daemon's protected-file rollback remain the commit gate.
     public static func residentProfile(
-        _ profile: String, sourceProfile: String, configuration: ProxyConfiguration
+        _ profile: String, sourceProfile: String, configuration: ProxyConfiguration,
+        preserveTUNListener: Bool = false
     ) throws -> String {
         try configuration.validate()
         let source = sourceProfile.keepingLines()
@@ -190,23 +191,45 @@ public enum MihomoConfigurator {
             tun = replaceList(tun, key: "dns-hijack",
                               values: ["\(ManagedTUNDNS.server):53", "tcp://\(ManagedTUNDNS.server):53"])
         }
-        lines = Array(lines[...tunStart]) + tun + Array(lines[tunEnd...])
+        if !preserveTUNListener {
+            lines = Array(lines[...tunStart]) + tun + Array(lines[tunEnd...])
+        }
 
         let (sourceDNSStart, sourceDNSEnd) = try block(source, named: "dns")
         let sourceDNS = Array(source[(sourceDNSStart + 1)..<sourceDNSEnd])
         let (dnsStart, dnsEnd) = try block(lines, named: "dns")
         var dns = Array(lines[(dnsStart + 1)..<dnsEnd])
-        for key in ["fake-ip-filter-mode", "fake-ip-filter", "fake-ip-range"] {
+        for key in ["fake-ip-filter-mode", "fake-ip-filter"] + (preserveTUNListener ? [] : ["fake-ip-range"]) {
             dns = restoringKey(key, in: dns, from: sourceDNS)
         }
         if !configuration.expectsEnhancedTUN {
             dns = replaceScalar(dns, key: "fake-ip-filter-mode", value: "rule")
             dns = replaceList(dns, key: "fake-ip-filter", values: ["MATCH,real-ip"])
         }
-        if configuration.usesGlobalDNSFallback {
+        if configuration.usesGlobalDNSFallback && !preserveTUNListener {
             dns = replaceScalar(dns, key: "fake-ip-range", value: ManagedTUNDNS.fakeIPRange)
         }
         return (Array(lines[...dnsStart]) + dns + Array(lines[dnsEnd...])).joined()
+    }
+
+    /// The core keeps this listener alive even when traffic interception is
+    /// off. Only the daemon-owned interface's interception routes are switched.
+    public static func attachingDaemonTUN(_ profile: String, interfaceName: String, enable: Bool = true) throws -> String {
+        guard interfaceName.hasPrefix("utun"), !interfaceName.dropFirst(4).isEmpty,
+              interfaceName.dropFirst(4).allSatisfy({ $0.isASCII && $0.isNumber }) else {
+            throw OwnedTUNError.invalidInheritance
+        }
+        var lines = profile.keepingLines()
+        let (start, end) = try block(lines, named: "tun")
+        var tun = Array(lines[(start+1)..<end])
+        tun = replaceScalar(tun, key: "enable", value: enable ? "true" : "false")
+        tun = replaceScalar(tun, key: "device", value: interfaceName)
+        tun = replaceScalar(tun, key: "file-descriptor", value: String(DaemonOwnedTUN.childDescriptor))
+        // A stable DNS interception policy works in both Local DoH and Global
+        // DNS modes, without recreating the listener and closing its fd.
+        tun = replaceList(tun, key: "dns-hijack", values: ["any:53", "tcp://any:53"])
+        lines = Array(lines[...start]) + tun + Array(lines[end...])
+        return lines.joined()
     }
 
     private static func restoringKey(_ key: String, in block: [String], from source: [String]) -> [String] {
@@ -225,7 +248,12 @@ public enum MihomoConfigurator {
         }
         var lines = profile.keepingLines()
         lines = replaceTopLevelScalar(lines, key: "mode", value: mode.lowercased())
+        let inheritedTUN = (values["tun"] as? [String: Any])?["file-descriptor"] as? Int32 == DaemonOwnedTUN.childDescriptor
         for key in ["allow-lan", "ipv6", "unified-delay", "tcp-concurrent"] {
+            // Parsing a changed IPv6 scalar also changes TUN address identity.
+            // Retain its startup value; restore the general runtime preference
+            // with PATCH after reload, which does not recreate the listener.
+            if inheritedTUN && key == "ipv6" { continue }
             if let value = values[key] as? Bool {
                 lines = replaceTopLevelScalar(lines, key: key, value: value ? "true" : "false")
             }

@@ -16,6 +16,15 @@
   injects the root-owned controller secret inside the daemon.
 - `mihomo-agent` has no public XPC/Mach service. Only the root daemon may launch
   it from its root-owned stable path.
+- The daemon allocates a fresh kernel-selected utun and holds its primary fd.
+  Only its root agent inherits a duplicate. The fixed signed exec-only agent
+  entry validates the parent executable and live daemon ownership before moving
+  stdin to fd 3 and execing the fixed managed core/config paths. It accepts no
+  arbitrary command/path. Interface mutation verifies the actual utun control
+  socket; a caller-supplied interface name grants no capability. Public XPC
+  snapshots expose effective interception and omit the internal descriptor.
+  Standby retains an attached interface but no interception routes; full stop
+  clears addresses/routes and retains only the daemon's inactive capability.
 - The in-process SwiftUI module has no shell, installer, root filesystem, raw
   controller endpoint, or direct privileged capability. Its public gateway is
   typed, and every control mutation crosses the authenticated XPC boundary.
@@ -48,7 +57,7 @@
   real system DNS and cannot silently direct or block traffic. Provisioning is
   accepted as safely stopped only after both persistent SystemConfiguration
   Global/service DNS entries and every effective dynamic Global/service resolver no longer
-  contain the managed address, and no managed agent, Mihomo process, TUN,
+  contain the managed address, and no managed agent, Mihomo process, TUN interception,
   route, or DNS listener remains.
   Subsequent lifecycle, profile reload, TUN,
   outbound-mode, and proxy operations do not elevate interactively.

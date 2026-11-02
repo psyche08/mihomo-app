@@ -16,6 +16,7 @@ public enum MihomoSupervisorError: Error, CustomStringConvertible {
 
 public final class MihomoSupervisor: @unchecked Sendable {
     private let configuration: MihomoProcessConfiguration
+    private let ownedTUN: DaemonOwnedTUN?
     private let logWriter: RotatingFileWriter
     private let lock = NSLock()
     private let restartQueue = DispatchQueue(label: "dev.linsheng.mihomo-app.restart")
@@ -26,12 +27,19 @@ public final class MihomoSupervisor: @unchecked Sendable {
     private var circuitOpen = false
     private var restartBackoff: RestartBackoffPolicy
 
-    public init(configuration: MihomoProcessConfiguration) {
+    public init(configuration: MihomoProcessConfiguration, ownedTUN: DaemonOwnedTUN? = nil) {
         self.configuration = configuration
+        self.ownedTUN = ownedTUN
         logWriter = RotatingFileWriter(path: configuration.logPath)
         restartBackoff = RestartBackoffPolicy(
             baseDelayMilliseconds: configuration.restartDelayMilliseconds
         )
+        ownedTUN?.bindKernel { [weak self] in
+            guard let self else { return nil }
+            self.lock.lock(); defer { self.lock.unlock() }
+            guard !self.stopping, let child = self.process, child.isRunning else { return nil }
+            return child.processIdentifier
+        }
     }
 
     public func start() throws {
@@ -116,12 +124,30 @@ public final class MihomoSupervisor: @unchecked Sendable {
     }
 
     private func launch() throws {
+        if let ownedTUN {
+            try ownedTUN.deactivate()
+            let file = URL(fileURLWithPath: configuration.configPath)
+            let text = try MihomoConfigurator.attachingDaemonTUN(
+                String(contentsOf: file, encoding: .utf8), interfaceName: ownedTUN.interfaceName, enable: false
+            )
+            try Data(text.utf8).write(to: file, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        }
         let pipe = Pipe()
         let logWriter = self.logWriter
 
         let child = Process()
         child.executableURL = URL(fileURLWithPath: configuration.binaryPath)
         child.arguments = ["-d", configuration.configDirectory, "-f", configuration.configPath]
+        if let ownedTUN {
+            guard configuration.binaryPath == "/Library/Application Support/Mihomo App/mihomo",
+                  configuration.configPath == "/Library/Application Support/Mihomo App/mihomo-data/config.yaml" else {
+                throw OwnedTUNError.invalidInheritance
+            }
+            child.executableURL = URL(fileURLWithPath: "/Library/Application Support/Mihomo App/mihomo-agent")
+            child.arguments = ["--exec-mihomo-with-tun"]
+            child.standardInput = ownedTUN.handle
+        }
         child.environment = Self.processEnvironment(base: ProcessInfo.processInfo.environment)
         child.standardOutput = pipe.fileHandleForWriting
         child.standardError = pipe.fileHandleForWriting
@@ -201,6 +227,8 @@ public final class MihomoSupervisor: @unchecked Sendable {
         }
         lock.unlock()
         try? FileManager.default.removeItem(atPath: configuration.pidPath)
+        do { try ownedTUN?.deactivate() }
+        catch { ServiceLog.error("event=owned_tun_cleanup result=failed") }
         let reasonName = reason == .uncaughtSignal ? "signal" : "exit"
         let runtime = runtimeMilliseconds.map(String.init) ?? "unknown"
         ServiceLog.error(

@@ -15,9 +15,10 @@ MihomoBox.app (current user)
               │ authenticated XPC (same signing certificate)
               ▼
 /Library/LaunchDaemons/dev.linsheng.mihomo.daemon.plist (root)
-└── mihomo-daemon                   privileged XPC broker only
+└── mihomo-daemon                   privileged XPC broker and utun owner
     ├── validates every peer's code-signing requirement
     ├── owns privileged lifecycle/profile transactions
+    ├── precreates and retains the managed utun descriptor
     ├── keeps 127.0.0.1:443 Local DoH alive independently of TUN
     └── launches and monitors exactly one mihomo-agent
               │
@@ -55,15 +56,18 @@ This avoids both a DIRECT window and user-controlled paths inside root bootstrap
 | App update verification and replacement | embedded pinned Sparkle framework | mature EdDSA and atomic install boundary |
 | Desktop/CLI control requests | signed XPC client | no direct privileged or controller access |
 | XPC authentication and command authorization | root daemon | one narrow privilege boundary |
+| Precreated utun interface and primary descriptor | root daemon | interface survives agent/kernel restart; no GUI-owned TUN |
 | Agent lifecycle and profile transactions | root daemon | serialized, rollback-capable mutations |
 | Mihomo process, original-DNS escape, network observation | root agent | one runtime owner keeps proxy network state coherent |
 | LocalHttpDns TLS endpoint and physical-DNS fallback | root daemon | encrypted split DNS survives agent, Mihomo and TUN failure |
 | Controller credentials | root runtime boundary | clients receive typed results, never the secret |
 | MetaCubeXD reference | pinned source and screenshots, not executable App content | reproducible visual provenance |
 
-The daemon binds only the fixed LocalHttpDns TLS socket and observes physical
-DNS for its fallback path. It does not own TUN, port 53, port 1054, or launch
-Mihomo directly. No MihomoBox component replaces the macOS system DNS list.
+The daemon owns the utun capability and fixed LocalHttpDns TLS socket, and
+observes physical DNS for its fallback path. Its agent inherits a duplicate,
+configures addresses/routes, and passes another duplicate to the sole Mihomo
+child. The daemon does not bind port 53 or 1054 or launch Mihomo directly.
+Only explicit Global DNS fallback changes the macOS system DNS list.
 The agent does not accept connections from Desktop or CLI. It is launched only
 from the stable root-owned daemon and terminates through the daemon-controlled
 safe shutdown path.
@@ -108,7 +112,7 @@ perform before-state capture, controller mutation, readback and rollback inside
 that lock and return the verified post-snapshot in the same XPC response. Raw
 controller forwarding cannot express mode, TUN, proxy-selector, proxy-provider,
 DNS, or controller-identity mutations. A fail-closed stop is successful only
-after an uncached inspection proves the agent/controller/TUN are gone, system
+after an uncached inspection proves the agent/controller and owned TUN interception are gone, system
 DNS is unmanaged, and the remaining network state is consistent.
 
 Protocol negotiation also fails closed. A native App that receives an

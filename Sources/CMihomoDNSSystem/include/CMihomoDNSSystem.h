@@ -33,4 +33,14 @@ int mihomo_dns_route_monitor_drain(int descriptor, uint32_t *out_mask);
 /// Classifies a Darwin RTM_* message type. Exposed for parser unit tests.
 uint32_t mihomo_dns_route_event_mask_for_type(uint8_t message_type);
 
+// Root-owned utun capabilities. Mutations derive interface identity from the
+// actual kernel-control descriptor; they never accept an arbitrary interface.
+int mihomo_owned_tun_create(void);
+int mihomo_owned_tun_name(int fd, char *name, size_t capacity);
+int mihomo_owned_tun_set_up(int fd, int up, int mtu);
+int mihomo_owned_tun_address(int fd, const char *address, int bits, int add);
+int mihomo_owned_tun_route(int fd, const char *destination, int bits, const char *gateway, int add);
+int mihomo_owned_tun_clear(int fd);
+int mihomo_owned_tun_clear_routes(int fd);
+
 #endif

@@ -15,6 +15,7 @@ final class AgentSupervisor: @unchecked Sendable {
     private let configPath: String
     private let agentPIDPath: String
     private var process: Process?
+    private var ownedTUN: DaemonOwnedTUN?
     private var startedAt: Date?
     private var expectedHealthGeneration: String?
     private var verifiedStoppedHealth: NetworkConsistencyHealth?
@@ -135,6 +136,7 @@ final class AgentSupervisor: @unchecked Sendable {
                 self.process = nil
                 startedAt = nil
                 expectedHealthGeneration = nil
+                do { try ownedTUN?.deactivate() } catch { return false }
                 ServiceLog.info("event=agent_stop_completed running=false")
                 return orphanStopped
             }
@@ -159,6 +161,7 @@ final class AgentSupervisor: @unchecked Sendable {
             startedAt = nil
             expectedHealthGeneration = nil
             removeAgentPIDIfMatching(process.processIdentifier)
+            do { try ownedTUN?.deactivate() } catch { return false }
             ServiceLog.info("event=agent_stop_completed running=false")
             return true
         }
@@ -341,6 +344,10 @@ final class AgentSupervisor: @unchecked Sendable {
         }
         let configuration = try ProxyConfiguration.load(path: configPath)
         let generation = UUID().uuidString
+        if let kernel = configuration.mihomoProcess { MihomoSupervisor.stopOwnedProcess(configuration: kernel) }
+        if ownedTUN == nil { ownedTUN = try DaemonOwnedTUN() }
+        try ownedTUN?.deactivate()
+        try ownedTUN?.publishOwner()
         verifiedStoppedHealth = nil
         HealthSnapshotStore.remove(at: configuration.healthSnapshotPath)
         RuntimeReloadRequestStore.remove(at: configuration.runtimeReloadRequestPath)
@@ -350,8 +357,9 @@ final class AgentSupervisor: @unchecked Sendable {
             "--config", configPath,
             "--parent-pid", String(getpid()),
             "--runtime-generation", generation,
+            "--daemon-owned-tun",
         ]
-        child.standardInput = FileHandle.nullDevice
+        child.standardInput = ownedTUN?.handle
         child.standardOutput = FileHandle.nullDevice
         child.standardError = FileHandle.nullDevice
         child.terminationHandler = { [weak self] terminated in
@@ -362,6 +370,11 @@ final class AgentSupervisor: @unchecked Sendable {
                     max(0, Int(Date().timeIntervalSince($0) * 1_000))
                 } ?? 0
                 self.process = nil
+                do { try self.ownedTUN?.deactivate() }
+                catch {
+                    self.desiredRunning = false
+                    ServiceLog.error("event=owned_tun_cleanup result=failed")
+                }
                 self.startedAt = nil
                 self.expectedHealthGeneration = nil
                 self.removeAgentPIDIfMatching(terminated.processIdentifier)

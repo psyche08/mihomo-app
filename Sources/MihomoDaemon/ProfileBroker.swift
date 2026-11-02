@@ -363,7 +363,8 @@ final class ProfileBroker: @unchecked Sendable {
                     }
                     let next = try ProxyConfiguration.load(path: root.appendingPathComponent("daemon.json").path)
                     let rendered = try MihomoConfigurator.residentProfile(
-                        current, sourceProfile: sourceProfile, configuration: next
+                        current, sourceProfile: sourceProfile, configuration: next,
+                        preserveTUNListener: DaemonOwnedTUN.liveInterface() != nil
                     )
                     try writePrivate(Data(rendered.utf8), to: runtimeProfile, permissions: 0o600)
                 } else {

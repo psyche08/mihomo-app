@@ -12,6 +12,7 @@ public final class ProxyService {
     private let safetyState = NetworkSafetyState()
     private let healthGeneration: RuntimeHealthGeneration
     private let mihomoSupervisor: MihomoSupervisor?
+    private let ownedTUN: DaemonOwnedTUN?
     private let stopLock = NSLock()
     private var stopped = false
     private var consistencyController: NetworkConsistencyController?
@@ -24,9 +25,11 @@ public final class ProxyService {
 
     public init(
         configuration: ProxyConfiguration,
-        runtimeGeneration: String = UUID().uuidString
+        runtimeGeneration: String = UUID().uuidString,
+        ownedTUN: DaemonOwnedTUN? = nil
     ) {
         self.configuration = configuration
+        self.ownedTUN = ownedTUN
         self.healthGeneration = RuntimeHealthGeneration(runtimeGeneration)
         self.group = MultiThreadedEventLoopGroup(numberOfThreads: max(2, System.coreCount / 2))
         self.networkState = NetworkDNSState(
@@ -48,7 +51,7 @@ public final class ProxyService {
             backupPath: configuration.systemDNSBackupPath,
             includeLegacyTUNDNS: configuration.usesGlobalDNSFallback
         )
-        self.mihomoSupervisor = configuration.mihomoProcess.map(MihomoSupervisor.init)
+        self.mihomoSupervisor = configuration.mihomoProcess.map { MihomoSupervisor(configuration: $0, ownedTUN: ownedTUN) }
     }
 
     public func start() throws {
@@ -138,7 +141,8 @@ public final class ProxyService {
                     mihomoSupervisor?.stop()
                 },
                 preexistingFakeIPRouteInterface: preexistingFakeIPRouteInterface,
-                healthGeneration: healthGeneration
+                healthGeneration: healthGeneration,
+                ownedTUN: ownedTUN
             )
             consistencyController = controller
             controller.start()
@@ -182,6 +186,7 @@ public final class ProxyService {
         powerObserver = nil
         consistencyController?.stopAndRestore()
         consistencyController = nil
+        try ownedTUN?.suspend()
         guard try Self.isSystemDNSRestored(configuration: configuration) else {
             throw NSError(domain: "MihomoResidentRuntime", code: 4)
         }
@@ -326,6 +331,8 @@ public final class ProxyService {
         }
         networkState.stop()
         mihomoSupervisor?.stop()
+        do { try ownedTUN?.deactivate() }
+        catch { ServiceLog.error("event=owned_tun_cleanup result=failed") }
         try? group.syncShutdownGracefully()
         ServiceLog.info("event=service_stopped")
     }

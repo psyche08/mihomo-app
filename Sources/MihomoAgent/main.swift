@@ -14,6 +14,11 @@ var standardError = StandardError()
 
 private let defaultConfigPath = "/Library/Application Support/Mihomo App/daemon.json"
 private let arguments = CommandLine.arguments
+// Exec before logging, signal handlers or networking can allocate descriptor 3.
+if arguments == [arguments[0], "--exec-mihomo-with-tun"] {
+    do { try DaemonOwnedTUN.execManagedMihomo() }
+    catch { exit(1) }
+}
 private let startupClock = MonotonicStartupClock()
 private let commandMode = arguments.contains("--check")
     || arguments.contains("--restore-system-dns")
@@ -192,9 +197,21 @@ do {
     }
 
     signal(SIGPIPE, SIG_IGN)
+    let ownedTUN: DaemonOwnedTUN?
+    if arguments.contains("--daemon-owned-tun") {
+        guard geteuid() == 0, expectedParentPID == getppid(), configPath == defaultConfigPath else {
+            throw OwnedTUNError.invalidInheritance
+        }
+        ownedTUN = try DaemonOwnedTUN(create: false)
+        guard ownedTUN?.interfaceName == DaemonOwnedTUN.liveInterface(ownerPID: getppid()) else { throw OwnedTUNError.invalidInheritance }
+        let null = open("/dev/null", O_RDONLY)
+        guard null >= 0, dup2(null, STDIN_FILENO) == STDIN_FILENO else { throw OwnedTUNError.invalidInheritance }
+        if null != STDIN_FILENO { close(null) }
+    } else { ownedTUN = nil }
     let service = ProxyService(
         configuration: configuration,
-        runtimeGeneration: runtimeGeneration
+        runtimeGeneration: runtimeGeneration,
+        ownedTUN: ownedTUN
     )
     let signalQueue = DispatchQueue(label: "dev.linsheng.mihomo-app.agent.signal")
     let semaphore = DispatchSemaphore(value: 0)

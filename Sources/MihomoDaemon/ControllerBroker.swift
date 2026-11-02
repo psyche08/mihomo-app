@@ -198,6 +198,11 @@ final class ControllerBroker: @unchecked Sendable {
             ]
             return try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
         case .setTUN:
+            // ControlServer owns the transactional route/DNS switch. Closing
+            // the inherited listener would discard the core's descriptor.
+            guard DaemonOwnedTUN.liveInterface() == nil else {
+                throw brokerError("daemon-owned TUN requires the managed runtime switch")
+            }
             guard let value = request.arguments["enabled"],
                   let enabled = ["true": true, "false": false][value] else {
                 throw brokerError("Enhanced TUN enabled state is required")
@@ -671,7 +676,11 @@ final class ControllerBroker: @unchecked Sendable {
             discardPooledSession()
             throw brokerError("controller request timed out")
         }
-        return try result?.get() ?? { throw brokerError("controller request failed") }()
+        let data = try result?.get() ?? { throw brokerError("controller request failed") }()
+        if method == "GET", path == "/configs" {
+            return try DaemonOwnedTUN.publicControllerConfiguration(data)
+        }
+        return data
     }
 
     /// A retained URLSession per controller endpoint.

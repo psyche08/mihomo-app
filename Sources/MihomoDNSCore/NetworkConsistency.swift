@@ -189,7 +189,7 @@ struct RuntimeRecoveryPolicy {
 
 public enum MihomoRuntimeInspector {
     private static let defaultController = Endpoint(host: "127.0.0.1", port: 9090)
-    private static let fakeIPProbe = "198.18.0.1"
+    private static let fakeIPProbe = "198.18.0.2"
     /// Percent-encoded 204 endpoint used for the end-to-end egress probe. Kept
     /// identical to the tray's latency test so both measure the same path.
     private static let egressProbeURL = "https%3A%2F%2Fcp.cloudflare.com%2Fgenerate_204"
@@ -220,13 +220,15 @@ public enum MihomoRuntimeInspector {
             )
         }
         let systemDNSManaged = ((try? preferences.isApplied()) == true) && preferences.isEffective()
-        let tunEnabled = controller.tunEnabled
+        let externalInterface = controller.externalInterface
+        let tunEnabled = externalInterface.map { controller.tunEnabled && visibleRouteInterface == $0 }
+            ?? controller.tunEnabled
         // A route to the Fake-IP range is a machine-wide fact, not proof that
         // this runtime owns it. Correlate it with Mihomo's live controller and
         // reject a tunnel that already owned the route before our child was
         // started. This prevents an unrelated VPN/TUN from making a stopped or
         // route-conflicted Mihomo runtime look healthy.
-        let routeInterface = RuntimeRouteOwnership.ownedInterface(
+        let routeInterface = externalInterface.map { visibleRouteInterface == $0 ? $0 : nil } ?? RuntimeRouteOwnership.ownedInterface(
             controllerReachable: controller.reachable,
             tunEnabled: tunEnabled,
             visibleInterface: visibleRouteInterface,
@@ -234,6 +236,7 @@ public enum MihomoRuntimeInspector {
         )
         let routeReady = routeInterface != nil
         let baseRuntimeReady = controller.reachable && fakeIPMode && mihomoDNSReady
+            && (externalInterface == nil || controller.tunEnabled)
         let runtimeReady = RuntimeReadiness.isReady(
             baseRuntimeReady: baseRuntimeReady,
             expectsEnhancedTUN: configuration.expectsEnhancedTUN,
@@ -497,14 +500,29 @@ public enum MihomoRuntimeInspector {
 
     private static func controllerConfiguration(
         configuration: ProxyConfiguration
-    ) -> (reachable: Bool, tunEnabled: Bool, mode: String) {
+    ) -> (reachable: Bool, tunEnabled: Bool, mode: String, externalInterface: String?) {
         guard let data = httpRequest(method: "GET", path: "/configs", configuration: configuration),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let tun = object["tun"] as? [String: Any],
               let enabled = tun["enable"] as? Bool else {
-            return (false, false, "")
+            return (false, false, "", nil)
         }
-        return (true, enabled, object["mode"] as? String ?? "")
+        let name = DaemonOwnedTUN.liveInterface()
+        let external = tun["file-descriptor"] as? Int32 == DaemonOwnedTUN.childDescriptor
+            && tun["device"] as? String == name ? name : nil
+        return (true, enabled, object["mode"] as? String ?? "", external)
+    }
+
+    static func rawControllerConfiguration(configuration: ProxyConfiguration) -> Data? {
+        httpRequest(method: "GET", path: "/configs", configuration: configuration)
+    }
+
+    static func attachPrebuiltTUN(configuration: ProxyConfiguration) throws {
+        let body = try JSONSerialization.data(withJSONObject: ["tun": ["enable": true]])
+        guard let response = httpResponse(method: "PATCH", path: "/configs", configuration: configuration,
+                                          timeoutSeconds: 5, body: body), (200...299).contains(response.status) else {
+            throw OwnedTUNError.invalidInheritance
+        }
     }
 
     /// Root-agent-only reload of its fixed managed profile. force=false keeps
@@ -531,6 +549,15 @@ public enum MihomoRuntimeInspector {
         ), (200...299).contains(response.status) else {
             throw NSError(domain: "MihomoResidentRuntime", code: 2,
                           userInfo: [NSLocalizedDescriptionKey: "Mihomo live configuration failed"])
+        }
+        if let object = try JSONSerialization.jsonObject(with: current) as? [String: Any],
+           (object["tun"] as? [String: Any])?["file-descriptor"] as? Int32 == DaemonOwnedTUN.childDescriptor,
+           let ipv6 = object["ipv6"] as? Bool {
+            let body = try JSONSerialization.data(withJSONObject: ["ipv6": ipv6])
+            guard let response = httpResponse(method: "PATCH", path: "/configs", configuration: configuration,
+                                              timeoutSeconds: 5, body: body), (200...299).contains(response.status) else {
+                throw OwnedTUNError.invalidInheritance
+            }
         }
     }
 
@@ -819,6 +846,7 @@ struct DNSAcquisitionPolicy {
 
 public final class NetworkConsistencyController: @unchecked Sendable {
     private let configuration: ProxyConfiguration
+    private let ownedTUN: DaemonOwnedTUN?
     private let globalDNS: GlobalDNSPreferences
     private let aliasManager: LoopbackAliasManager
     private let safetyState: NetworkSafetyState
@@ -861,7 +889,8 @@ public final class NetworkConsistencyController: @unchecked Sendable {
         runtimeRecoveryHandler: @escaping @Sendable () -> Void,
         unsafeRuntimeHandler: @escaping @Sendable () -> Void,
         preexistingFakeIPRouteInterface: String? = nil,
-        healthGeneration: RuntimeHealthGeneration = RuntimeHealthGeneration()
+        healthGeneration: RuntimeHealthGeneration = RuntimeHealthGeneration(),
+        ownedTUN: DaemonOwnedTUN? = nil
     ) {
         self.init(
             configuration: configuration,
@@ -872,7 +901,8 @@ public final class NetworkConsistencyController: @unchecked Sendable {
             unsafeRuntimeHandler: unsafeRuntimeHandler,
             egressProbe: EgressProbeCoordinator(configuration: configuration),
             preexistingFakeIPRouteInterface: preexistingFakeIPRouteInterface,
-            healthGeneration: healthGeneration
+            healthGeneration: healthGeneration,
+            ownedTUN: ownedTUN
         )
     }
 
@@ -885,9 +915,11 @@ public final class NetworkConsistencyController: @unchecked Sendable {
         unsafeRuntimeHandler: @escaping @Sendable () -> Void,
         egressProbe: EgressProbeCoordinator,
         preexistingFakeIPRouteInterface: String? = nil,
-        healthGeneration: RuntimeHealthGeneration = RuntimeHealthGeneration()
+        healthGeneration: RuntimeHealthGeneration = RuntimeHealthGeneration(),
+        ownedTUN: DaemonOwnedTUN? = nil
     ) {
         self.configuration = configuration
+        self.ownedTUN = ownedTUN
         self.globalDNS = globalDNS
         self.aliasManager = aliasManager
         self.safetyState = safetyState
@@ -1032,6 +1064,8 @@ public final class NetworkConsistencyController: @unchecked Sendable {
     ///   (re)acquire DNS; they just do not vote towards recovery.
     private func evaluate(chargeFailures: Bool = true) {
         guard !runtimeReloadInProgress else { return }
+        do { try ownedTUN?.ensureRoutes(configuration: configuration) }
+        catch { ServiceLog.error("event=owned_tun_routes result=failed") }
         if resolverTopologyObservationPending {
             resolverTopologyObservationPending = false
             observeResolverTopology()
