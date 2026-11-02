@@ -162,6 +162,59 @@ public enum MihomoConfigurator {
         try persistController(controller, secret: secret, paths: paths)
     }
 
+    /// Changes only TUN/DNS policy in an already installed managed profile.
+    /// Import/activation still renders and validates the complete source. A
+    /// switch must not resolve every proxy hostname or launch a second kernel
+    /// just to validate the same providers and rules again. The resident core
+    /// parses this candidate before applying it; generation-bound health and
+    /// the daemon's protected-file rollback remain the commit gate.
+    public static func residentProfile(
+        _ profile: String, sourceProfile: String, configuration: ProxyConfiguration
+    ) throws -> String {
+        try configuration.validate()
+        let source = sourceProfile.keepingLines()
+        guard directScalar(source, section: "tun", key: "enable")?.lowercased() == "true" else {
+            throw ConfiguratorError.tunDisabled
+        }
+        var lines = profile.keepingLines()
+        let (sourceTunStart, sourceTunEnd) = try block(source, named: "tun")
+        let sourceTun = Array(source[(sourceTunStart + 1)..<sourceTunEnd])
+        let (tunStart, tunEnd) = try block(lines, named: "tun")
+        var tun = Array(lines[(tunStart + 1)..<tunEnd])
+        tun = replaceScalar(tun, key: "enable", value: configuration.expectsEnhancedTUN ? "true" : "false")
+        for key in ["auto-route", "dns-hijack"] {
+            tun = restoringKey(key, in: tun, from: sourceTun)
+        }
+        if configuration.usesGlobalDNSFallback {
+            tun = replaceScalar(tun, key: "auto-route", value: "true")
+            tun = replaceList(tun, key: "dns-hijack",
+                              values: ["\(ManagedTUNDNS.server):53", "tcp://\(ManagedTUNDNS.server):53"])
+        }
+        lines = Array(lines[...tunStart]) + tun + Array(lines[tunEnd...])
+
+        let (sourceDNSStart, sourceDNSEnd) = try block(source, named: "dns")
+        let sourceDNS = Array(source[(sourceDNSStart + 1)..<sourceDNSEnd])
+        let (dnsStart, dnsEnd) = try block(lines, named: "dns")
+        var dns = Array(lines[(dnsStart + 1)..<dnsEnd])
+        for key in ["fake-ip-filter-mode", "fake-ip-filter", "fake-ip-range"] {
+            dns = restoringKey(key, in: dns, from: sourceDNS)
+        }
+        if !configuration.expectsEnhancedTUN {
+            dns = replaceScalar(dns, key: "fake-ip-filter-mode", value: "rule")
+            dns = replaceList(dns, key: "fake-ip-filter", values: ["MATCH,real-ip"])
+        }
+        if configuration.usesGlobalDNSFallback {
+            dns = replaceScalar(dns, key: "fake-ip-range", value: ManagedTUNDNS.fakeIPRange)
+        }
+        return (Array(lines[...dnsStart]) + dns + Array(lines[dnsEnd...])).joined()
+    }
+
+    private static func restoringKey(_ key: String, in block: [String], from source: [String]) -> [String] {
+        let replacement = keyRange(source, key: key).map { Array(source[$0]) } ?? []
+        guard let range = keyRange(block, key: key) else { return terminated(block) + terminated(replacement) }
+        return Array(block[..<range.lowerBound]) + terminated(replacement) + Array(block[range.upperBound...])
+    }
+
     /// A TUN transition must not reset the independent routing mode or the
     /// dashboard's general settings when the protected source is rendered again.
     /// Only known scalar settings from the authenticated local core are copied.

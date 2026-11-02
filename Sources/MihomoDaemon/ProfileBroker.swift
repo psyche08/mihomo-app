@@ -298,6 +298,7 @@ final class ProfileBroker: @unchecked Sendable {
     /// place; only an unprovable failure uses stop/restore recovery.
     func setEnhancedTUN(_ enabled: Bool, globalDNS: Bool = false) throws {
         try queue.sync {
+            let clock = MonotonicStartupClock()
             if agent.isRunning, agent.expectsEnhancedTUN == enabled,
                agent.globalDNSFallbackConfigured == globalDNS,
                let health = try agent.expectedHealthSnapshot()?.health,
@@ -354,17 +355,25 @@ final class ProfileBroker: @unchecked Sendable {
                         configurationPath: root.appendingPathComponent("daemon.json").path
                     )
                 }
-                let configured = try preparedProfile(data: data, publishController: true)
-                defer {
-                    try? FileManager.default.removeItem(
-                        at: configured.deletingLastPathComponent()
+                let runtimeProfile = root.appendingPathComponent("mihomo-data/config.yaml")
+                if agent.isRunning {
+                    guard let sourceProfile = String(data: data, encoding: .utf8),
+                          let current = String(data: try readStoredProfile(runtimeProfile), encoding: .utf8) else {
+                        throw profileError("profile must be UTF-8")
+                    }
+                    let next = try ProxyConfiguration.load(path: root.appendingPathComponent("daemon.json").path)
+                    let rendered = try MihomoConfigurator.residentProfile(
+                        current, sourceProfile: sourceProfile, configuration: next
                     )
+                    try writePrivate(Data(rendered.utf8), to: runtimeProfile, permissions: 0o600)
+                } else {
+                    let configured = try preparedProfile(data: data, publishController: true)
+                    defer { try? FileManager.default.removeItem(at: configured.deletingLastPathComponent()) }
+                    try validateMihomo(path: configured)
+                    try replace(configured, runtimeProfile, permissions: 0o600)
                 }
-                try validateMihomo(path: configured)
-                try replace(
-                    configured,
-                    root.appendingPathComponent("mihomo-data/config.yaml"),
-                    permissions: 0o600
+                ServiceLog.info(
+                    "event=tun_transition phase=prepared elapsed_ms=\(clock.elapsedMilliseconds())"
                 )
                 runtimeTransitionRequested = true
                 if agent.isRunning {
@@ -373,6 +382,7 @@ final class ProfileBroker: @unchecked Sendable {
                     try agent.start()
                 }
                 try validateStartedRuntime()
+                ServiceLog.info("event=tun_transition phase=ready elapsed_ms=\(clock.elapsedMilliseconds())")
             } catch {
                 let transitionError = error
                 if runtimeTransitionRequested, !agent.stopAndRestoreVerified() {

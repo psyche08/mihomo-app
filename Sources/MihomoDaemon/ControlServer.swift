@@ -777,6 +777,7 @@ final class ControlDispatcher: @unchecked Sendable {
         timeout: TimeInterval = 20
     ) throws {
         let deadline = Date().addingTimeInterval(timeout)
+        let clock = MonotonicStartupClock()
         var lastError: Error?
         repeat {
             guard agent.isRunning else {
@@ -826,7 +827,11 @@ final class ControlDispatcher: @unchecked Sendable {
             } catch {
                 lastError = error
                 if Date() < deadline {
-                    Thread.sleep(forTimeInterval: 0.25)
+                    // A resident switch commonly completes in tens of ms.
+                    // Poll only its passive generation-bound snapshot quickly
+                    // at first; back off for cold starts and failing runtimes.
+                    let elapsed = clock.elapsedMilliseconds()
+                    Thread.sleep(forTimeInterval: elapsed < 250 ? 0.01 : (elapsed < 1_000 ? 0.05 : 0.25))
                 }
             }
         } while Date() < deadline

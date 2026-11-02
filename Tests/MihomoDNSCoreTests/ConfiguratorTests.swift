@@ -38,6 +38,46 @@ final class ConfiguratorTests: XCTestCase {
         func addresses(for host: String) -> [String] { answers[host] ?? [] }
     }
 
+    func testResidentPolicyMatchesFullRenderingAcrossDNSModes() throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let config = directory.appendingPathComponent("config.yaml")
+        let runtime = directory.appendingPathComponent("runtime.json")
+        let paths = MihomoConfigurator.Paths(
+            config: config.path, backup: directory.appendingPathComponent("backup.yaml").path,
+            secretFile: directory.appendingPathComponent("secret").path, runtimeConfig: runtime.path
+        )
+        let policies = [
+            ProxyConfiguration(manageSystemDNS: false, enhancedTUNEnabled: true, localDoH: .init()),
+            ProxyConfiguration(manageSystemDNS: false, enhancedTUNEnabled: false, localDoH: .init()),
+            ProxyConfiguration(manageSystemDNS: true, globalDNSFallbackEnabled: true, enhancedTUNEnabled: true),
+            ProxyConfiguration(manageSystemDNS: false, enhancedTUNEnabled: false, localDoH: .init()),
+            ProxyConfiguration(manageSystemDNS: false, enhancedTUNEnabled: true, localDoH: .init()),
+        ]
+        for filter in ["", "  fake-ip-filter-mode: whitelist\n  fake-ip-filter: ['+.example.invalid']\n",
+                       "  fake-ip-filter-mode: rule\n  fake-ip-filter:\n    - DOMAIN-SUFFIX,example.invalid,real-ip\n    - MATCH,fake-ip\n"] {
+            let source = profile.replacingOccurrences(of: "  nameserver:", with: filter + "  nameserver:")
+            var current: String?
+            for policy in policies {
+                try JSONEncoder().encode(policy).write(to: runtime)
+                try source.write(to: config, atomically: true, encoding: .utf8)
+                try MihomoConfigurator.apply(paths, resolver: StubResolver(answers: ["jp.example.com": ["198.51.100.7"]]))
+                let full = try String(contentsOf: config, encoding: .utf8)
+                if let previous = current {
+                    let fast = try MihomoConfigurator.residentProfile(previous, sourceProfile: source, configuration: policy)
+                    // Ignore key ordering while comparing every rendered value,
+                    // including resolver escape, exclusions, rules and identity.
+                    XCTAssertEqual(fast.split(separator: "\n").sorted(), full.split(separator: "\n").sorted())
+                    current = fast
+                } else { current = full }
+            }
+        }
+        XCTAssertThrowsError(try MihomoConfigurator.residentProfile(
+            profile, sourceProfile: profile.replacingOccurrences(of: "enable: true", with: "enable: false"),
+            configuration: policies[0]
+        ))
+    }
+
     func testApplyIsIdempotentAndRestoreIsExact() throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

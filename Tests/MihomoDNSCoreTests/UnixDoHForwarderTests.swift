@@ -211,14 +211,21 @@ final class UnixDoHForwarderTests: XCTestCase {
                 controllerSecret: "resident-test-only", localDoH: .init()
             )
             try mixed.checkEcho(label: "initial mixed"); try app.checkEcho(label: "initial app")
+            let sourceProfile = (extra + initialProfile)
+                .replacingOccurrences(of: "enable: false", with: "enable: true")
+                .replacingOccurrences(of: "fake-ip-filter-mode: rule", with: "fake-ip-filter-mode: blacklist")
+                .replacingOccurrences(of: "MATCH,real-ip", with: "real.example.invalid")
             for nextStandby in [false, true, false, true] {
-                var profile = extra + initialProfile
+                var policy = configuration
+                policy.enhancedTUNEnabled = !nextStandby
+                var profile = try MihomoConfigurator.residentProfile(
+                    String(contentsOf: config, encoding: .utf8), sourceProfile: sourceProfile, configuration: policy
+                )
+                // Exercise the production DNS rewrite without creating a
+                // privileged interface in this isolated loopback-only test.
+                profile = profile.replacingOccurrences(of: "tun:\n  enable: true", with: "tun:\n  enable: false")
                 // The live Direct choice must survive a source profile in Rule mode.
                 profile = profile.replacingOccurrences(of: "mode: direct", with: "mode: rule")
-                if !nextStandby {
-                    profile = profile.replacingOccurrences(of: "fake-ip-filter-mode: rule", with: "fake-ip-filter-mode: blacklist")
-                        .replacingOccurrences(of: "MATCH,real-ip", with: "real.example.invalid")
-                }
                 try profile.write(to: config, atomically: true, encoding: .utf8)
                 try MihomoRuntimeInspector.reloadResidentMihomo(configuration: configuration)
                 MihomoRuntimeInspector.flushMihomoDNSCaches(configuration: configuration)

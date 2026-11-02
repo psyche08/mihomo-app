@@ -168,6 +168,7 @@ public final class ProxyService {
     public func reconfigureResidentMihomo(configuration next: ProxyConfiguration, generation: String) throws {
         stopLock.lock()
         defer { stopLock.unlock() }
+        let clock = MonotonicStartupClock()
         guard !stopped, UUID(uuidString: generation) != nil,
               configuration.permitsResidentTransition(to: next),
               let systemDNSForwarder else {
@@ -205,10 +206,11 @@ public final class ProxyService {
             bridgeChannels.append(try startTCP(endpoint: next.systemDNSListen, forwarder: systemDNSForwarder))
         }
         try MihomoRuntimeInspector.reloadResidentMihomo(configuration: next)
+        ServiceLog.info("event=resident_runtime_transition phase=applied elapsed_ms=\(clock.elapsedMilliseconds())")
         MihomoRuntimeInspector.flushMihomoDNSCaches(configuration: next)
         DNSCacheMaintenance.flushSystemCaches()
         startConsistencyObservation()
-        ServiceLog.info("event=resident_runtime_transition result=applied generation=changed")
+        ServiceLog.info("event=resident_runtime_transition phase=observed elapsed_ms=\(clock.elapsedMilliseconds())")
     }
 
     public static func restoreSystemDNS(configuration: ProxyConfiguration) throws {

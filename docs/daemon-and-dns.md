@@ -194,15 +194,26 @@ Global DNS fallback transaction and confirms removal of any overriding DoH
 profile. Disabling Enhanced TUN returns the core to standby in either DNS mode;
 Global DNS is restored to the original settings before that transition.
 
-TUN switches now retain the same agent and Mihomo process. The daemon stages
-and validates the protected runtime profile, then sends a one-shot resident
+TUN switches now retain the same agent and Mihomo process. The daemon changes
+only TUN/DNS policy in the installed managed profile, restoring the protected
+source's Fake-IP filters and DNS-mode-specific fields as needed. It does not
+resolve proxy hostnames, rebuild App Proxy providers, or launch `mihomo -t` on
+each switch. Full rendering and standalone validation remain on import,
+activation and cold start. The resident core parses the candidate before
+applying it; rejection still takes the verified rollback path.
+The daemon then sends a one-shot resident
 transition request with a fresh health generation. The agent quiesces the old
 observer, restores and verifies any owned Global DNS before removing TUN, and
 applies the profile through the root-only controller using `PUT /configs?force=false`.
 The original-DNS escape stays bound; the mixed proxy listener and unchanged
 App Proxy listeners remain in the core. The Global DNS bridge is rebound only
 as required by the selected DNS ownership. A new observer verifies the requested
-TUN/DNS state before the daemon commits. Route ownership still excludes any
+TUN/DNS state before the daemon commits. The daemon polls that passive,
+generation-bound snapshot every 10 ms initially, backing off to 50 and 250 ms
+for slower starts; it never substitutes an optimistic UI state for readiness.
+Fixed phase names and monotonic millisecond timings identify preparation,
+application and confirmation costs without recording configuration contents.
+Route ownership still excludes any
 preexisting VPN interface. Failed live transitions use the existing verified
 stop/restore and protected-file rollback path.
 
