@@ -2022,3 +2022,71 @@ extension CoreTests {
         }
     }
 }
+
+extension CoreTests {
+    func testResidentTransitionRetainsAllProcessAndDNSBoundaries() throws {
+        let standby = ProxyConfiguration(
+            manageSystemDNS: false, globalDNSFallbackEnabled: false,
+            enhancedTUNEnabled: false, systemProxyEnabled: true,
+            mihomoProcess: .init(), controllerEndpoint: .init(host: "127.0.0.1", port: 19090),
+            controllerSecret: "test-only", localDoH: .init()
+        )
+        var enhanced = standby
+        enhanced.enhancedTUNEnabled = true
+        enhanced.enhancedTUNResumeEnabled = true
+        enhanced.manageSystemDNS = true
+        enhanced.globalDNSFallbackEnabled = true
+        enhanced.localDoH = nil
+        try enhanced.validate()
+        XCTAssertTrue(standby.permitsResidentTransition(to: enhanced))
+        XCTAssertTrue(enhanced.permitsResidentTransition(to: standby))
+        XCTAssertEqual(enhanced.systemProxyEnabled, true)
+        let mutations: [(inout ProxyConfiguration) -> Void] = [
+            { $0.controllerSecret = "changed" },
+            { $0.controllerEndpoint = .init(host: "127.0.0.1", port: 19091) },
+            { $0.upstreamListen.port = 1055 },
+            { $0.mihomoDNS.port = 1154 },
+            { $0.systemDNSListen.host = "127.0.0.54" },
+            { $0.systemDNSBackupPath += ".other" },
+            { $0.aliasMarkerPath += ".other" },
+            { $0.loopbackAlias = "127.0.0.54" },
+            { $0.mihomoProcess?.binaryPath += ".other" },
+            { $0.mihomoProcess?.configPath += ".other" },
+            { $0.mihomoProcess?.pidPath += ".other" },
+            { $0.fallbackDNSServers = ["192.0.2.53"] },
+        ]
+        for mutate in mutations {
+            var invalid = enhanced
+            mutate(&invalid)
+            XCTAssertFalse(standby.permitsResidentTransition(to: invalid))
+        }
+    }
+
+    func testResidentHandoffIsConsumedOnceAndLegacyRequestsStillRestart() throws {
+        let generation = UUID().uuidString
+        let legacy = try JSONDecoder().decode(RuntimeReloadRequest.self,
+            from: Data("{\"generation\":\"\(generation)\"}".utf8))
+        XCTAssertNil(legacy.residentTransition)
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).path
+        defer { RuntimeReloadRequestStore.remove(at: path) }
+        let request = RuntimeReloadRequest(generation: generation, residentTransition: true)
+        try RuntimeReloadRequestStore.publish(request, to: path)
+        XCTAssertEqual(RuntimeReloadRequestStore.consume(from: path), request)
+        XCTAssertNil(RuntimeReloadRequestStore.consume(from: path))
+        XCTAssertThrowsError(try RuntimeReloadRequestStore.publish(
+            .init(generation: "invalid", residentTransition: true), to: path))
+    }
+
+    func testResidentSettingsPreserveModeWithoutCopyingPrivilegedFields() throws {
+        let profile = "mode: rule\ntun:\n  enable: false\ndns:\n  nameserver: [tcp://127.0.0.1:1054]\n"
+        let current = Data(#"{"mode":"Global","ipv6":false,"log-level":"warning","tun":{"enable":true},"secret":"do-not-copy","dns":{"nameserver":["192.0.2.53"]}}"#.utf8)
+        let rendered = try MihomoConfigurator.preservingResidentSettings(current, in: profile)
+        XCTAssertTrue(rendered.contains("mode: global"))
+        XCTAssertTrue(rendered.contains("ipv6: false"))
+        XCTAssertTrue(rendered.contains("enable: false"))
+        XCTAssertTrue(rendered.contains("tcp://127.0.0.1:1054"))
+        XCTAssertFalse(rendered.contains("do-not-copy"))
+        XCTAssertFalse(rendered.contains("192.0.2.53"))
+        XCTAssertThrowsError(try MihomoConfigurator.preservingResidentSettings(Data("{}".utf8), in: profile))
+    }
+}

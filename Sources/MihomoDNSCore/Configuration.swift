@@ -153,6 +153,20 @@ public struct ProxyConfiguration: Codable, Equatable {
             .path
     }
 
+    /// Resident transitions may change DNS ownership and TUN intent only. All
+    /// process, endpoint, credential and filesystem identities remain fixed.
+    public func permitsResidentTransition(to next: ProxyConfiguration) -> Bool {
+        var normalized = next
+        normalized.manageSystemDNS = manageSystemDNS
+        normalized.globalDNSFallbackEnabled = globalDNSFallbackEnabled
+        normalized.enhancedTUNEnabled = enhancedTUNEnabled
+        normalized.enhancedTUNPreviouslyEnabled = enhancedTUNPreviouslyEnabled
+        normalized.enhancedTUNResumeEnabled = enhancedTUNResumeEnabled
+        normalized.systemProxyEnabled = systemProxyEnabled
+        normalized.localDoH = localDoH
+        return self == normalized
+    }
+
     public var expectsEnhancedTUN: Bool {
         // Before this field existed every activated profile was started with
         // TUN enabled. Preserve that state for an in-place component upgrade;

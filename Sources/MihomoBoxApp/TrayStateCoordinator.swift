@@ -177,7 +177,7 @@ final class TrayStateCoordinator: TrayService {
           let startup = try await self.control.localDoHStatus()
           let restoreTUN = startup.resumeEnhancedTUN.map { $0 != self.currentSnapshot.enhancedTUN } ?? false
           let restoreSystemProxy = self.currentSnapshot.systemProxyRequested.map { $0 != self.currentSnapshot.systemProxyEnabled } ?? false
-          if restoreTUN || restoreSystemProxy {
+          if !self.currentSnapshot.agentRunning || restoreTUN || restoreSystemProxy {
             do {
               try await self.withShellMutation {
                 var busy = self.currentSnapshot

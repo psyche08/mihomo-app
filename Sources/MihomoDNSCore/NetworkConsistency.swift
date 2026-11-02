@@ -502,6 +502,33 @@ public enum MihomoRuntimeInspector {
         return (true, enabled, object["mode"] as? String ?? "")
     }
 
+    /// Root-agent-only reload of its fixed managed profile. force=false keeps
+    /// the mixed listener; unchanged custom App Proxy listeners are reused by
+    /// the pinned core. DNS policy and TUN are applied together in this process.
+    static func reloadResidentMihomo(configuration: ProxyConfiguration) throws {
+        guard let process = configuration.mihomoProcess,
+              configuration.controllerEndpoint?.host == "127.0.0.1" else {
+            throw NSError(domain: "MihomoResidentRuntime", code: 1)
+        }
+        guard let current = httpRequest(method: "GET", path: "/configs", configuration: configuration) else {
+            throw NSError(domain: "MihomoResidentRuntime", code: 5)
+        }
+        let file = URL(fileURLWithPath: process.configPath)
+        let rendered = try MihomoConfigurator.preservingResidentSettings(
+            current, in: String(contentsOf: file, encoding: .utf8)
+        )
+        try Data(rendered.utf8).write(to: file, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        let body = try JSONSerialization.data(withJSONObject: ["path": process.configPath])
+        guard let response = httpResponse(
+            method: "PUT", path: "/configs?force=false", configuration: configuration,
+            timeoutSeconds: 15, body: body
+        ), (200...299).contains(response.status) else {
+            throw NSError(domain: "MihomoResidentRuntime", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: "Mihomo live configuration failed"])
+        }
+    }
+
     struct ControllerResponse {
         let status: Int
         let body: Data
@@ -532,12 +559,15 @@ public enum MihomoRuntimeInspector {
         method: String,
         path: String,
         configuration: ProxyConfiguration,
-        timeoutSeconds: Int = 1
+        timeoutSeconds: Int = 1,
+        body: Data = Data()
     ) -> ControllerResponse? {
         let controller = configuration.controllerEndpoint ?? defaultController
         let descriptor = socket(AF_INET, SOCK_STREAM, 0)
         guard descriptor >= 0 else { return nil }
         defer { close(descriptor) }
+        var noSigPipe: Int32 = 1
+        setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout.size(ofValue: noSigPipe)))
         var timeout = timeval(tv_sec: timeoutSeconds, tv_usec: 0)
         setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout.size(ofValue: timeout)))
         setsockopt(descriptor, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout.size(ofValue: timeout)))
@@ -556,13 +586,21 @@ public enum MihomoRuntimeInspector {
 
         let authorization = configuration.controllerSecret
             .flatMap { $0.isEmpty ? nil : "Authorization: Bearer \($0)\r\n" } ?? ""
-        let request = "\(method) \(path) HTTP/1.0\r\n" +
+        let header = "\(method) \(path) HTTP/1.0\r\n" +
             "Host: \(controller.host):\(controller.port)\r\n" + authorization +
-            "Content-Length: 0\r\nConnection: close\r\n\r\n"
-        let sent = request.withCString { pointer in
-            Darwin.send(descriptor, pointer, strlen(pointer), 0)
+            "Content-Type: application/json\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n"
+        let request = Data(header.utf8) + body
+        let sent = request.withUnsafeBytes { bytes -> Bool in
+            guard let base = bytes.baseAddress else { return false }
+            var offset = 0
+            while offset < bytes.count {
+                let count = Darwin.send(descriptor, base.advanced(by: offset), bytes.count - offset, 0)
+                guard count > 0 else { return false }
+                offset += count
+            }
+            return true
         }
-        guard sent == request.utf8.count else { return nil }
+        guard sent else { return nil }
 
         var response = Data()
         var buffer = [UInt8](repeating: 0, count: 16_384)

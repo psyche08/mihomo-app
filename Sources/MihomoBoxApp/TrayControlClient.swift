@@ -91,8 +91,7 @@ actor TrayControlClient {
     )
     let observed = try poll()
     let standby = observed.agentRunning && observed.controllerReachable
-    let stopped = !observed.agentRunning && !observed.controllerReachable
-    guard (standby || stopped), !observed.enhancedTUN,
+    guard standby, !observed.enhancedTUN,
       observed.healthTUNEnabled == false, observed.systemDNSManaged == false,
       observed.networkHealthy == true
     else {

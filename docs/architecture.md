@@ -165,6 +165,14 @@ NSMenu / SwiftUI
 types, not services or subprocesses. `mihomoboxctl` remains bundled for explicit
 operator use, but the App never spawns it for normal control.
 
+After a profile is activated, the daemon-owned core remains resident regardless
+of the TUN, System Proxy and App Proxy switches. Routine TUN changes use a
+root-only, generation-bound in-process configuration reload, retaining the
+agent, original-DNS escape and unchanged proxy listeners. System Proxy controls
+macOS proxy preferences; App Proxy controls the user-scoped NetworkExtension.
+Neither switch controls the TUN lifecycle. Explicit service stop, uninstall,
+component replacement and unprovable recovery retain their safe shutdown paths.
+
 If the agent exits unexpectedly, the daemon restores the single-agent
 invariant before relaunch. Requested stop/uninstall paths suppress restart and
 wait for the agent's DNS restoration to finish.

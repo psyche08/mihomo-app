@@ -194,6 +194,34 @@ Global DNS fallback transaction and confirms removal of any overriding DoH
 profile. Disabling Enhanced TUN returns the core to standby in either DNS mode;
 Global DNS is restored to the original settings before that transition.
 
+TUN switches now retain the same agent and Mihomo process. The daemon stages
+and validates the protected runtime profile, then sends a one-shot resident
+transition request with a fresh health generation. The agent quiesces the old
+observer, restores and verifies any owned Global DNS before removing TUN, and
+applies the profile through the root-only controller using `PUT /configs?force=false`.
+The original-DNS escape stays bound; the mixed proxy listener and unchanged
+App Proxy listeners remain in the core. The Global DNS bridge is rebound only
+as required by the selected DNS ownership. A new observer verifies the requested
+TUN/DNS state before the daemon commits. Route ownership still excludes any
+preexisting VPN interface. Failed live transitions use the existing verified
+stop/restore and protected-file rollback path.
+
+DNS policy changes with TUN: standby returns real addresses, Enhanced mode
+restores the source Fake-IP policy, and DNS caches are flushed after application.
+The live routing mode and supported general scalar settings are retained across
+this transition. TUN does not change System Proxy preferences or the App Proxy
+extension's activation state. Profile import/switch, explicit restart, component
+updates, uninstall and failed recovery may still replace the process.
+
+The pinned core's [configuration endpoint](https://github.com/MetaCubeX/mihomo/blob/v1.19.30/hub/route/configs.go)
+and [listener reconciliation](https://github.com/MetaCubeX/mihomo/blob/v1.19.30/listener/listener.go)
+are the contract for this non-forced reload. The native integration test verifies
+PID continuity, existing and new mixed/App Proxy TCP streams, real/Fake-IP DNS
+transitions, routing-mode retention and rejection of malformed configuration
+using isolated loopback sockets. It leaves TUN disabled; real route teardown,
+Global DNS restoration and NetworkExtension coexistence still require signed
+machine acceptance before release.
+
 `enhancedTUNResumeEnabled` remembers the last explicit TUN choice. Turning TUN
 off persists standby across daemon restarts, component updates and App launches.
 Migration uses the old current TUN state and ignores the legacy sticky

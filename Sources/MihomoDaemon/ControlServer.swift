@@ -716,6 +716,11 @@ final class ControlDispatcher: @unchecked Sendable {
         // timer could rebind 443 while daemon.json still says LocalHttpDns.
         localDoHServer.shutdown()
         do {
+            if agent.isRunning {
+                try profiles.setEnhancedTUN(true, globalDNS: true)
+                finishGlobalDNSFallbackLocked()
+                return
+            }
             try GlobalDNSFallbackTransition.run(
                 stopAndRestore: { agent.stopAndRestoreVerified() },
                 configure: { try profiles.configureGlobalDNSFallback() },

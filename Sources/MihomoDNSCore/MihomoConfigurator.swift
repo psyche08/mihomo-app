@@ -162,6 +162,32 @@ public enum MihomoConfigurator {
         try persistController(controller, secret: secret, paths: paths)
     }
 
+    /// A TUN transition must not reset the independent routing mode or the
+    /// dashboard's general settings when the protected source is rendered again.
+    /// Only known scalar settings from the authenticated local core are copied.
+    static func preservingResidentSettings(_ current: Data, in profile: String) throws -> String {
+        guard let values = try JSONSerialization.jsonObject(with: current) as? [String: Any],
+              let mode = values["mode"] as? String, ["rule", "global", "direct"].contains(mode.lowercased()) else {
+            throw ConfiguratorError.daemonConfigUnreadable
+        }
+        var lines = profile.keepingLines()
+        lines = replaceTopLevelScalar(lines, key: "mode", value: mode.lowercased())
+        for key in ["allow-lan", "ipv6", "unified-delay", "tcp-concurrent"] {
+            if let value = values[key] as? Bool {
+                lines = replaceTopLevelScalar(lines, key: key, value: value ? "true" : "false")
+            }
+        }
+        for (key, allowed) in [
+            ("log-level", ["silent", "error", "warning", "info", "debug"]),
+            ("find-process-mode", ["always", "strict", "off"]),
+        ] {
+            if let value = values[key] as? String, allowed.contains(value.lowercased()) {
+                lines = replaceTopLevelScalar(lines, key: key, value: value.lowercased())
+            }
+        }
+        return lines.joined()
+    }
+
     public static func restore(config: String, backup: String) throws {
         guard FileManager.default.fileExists(atPath: backup) else {
             throw ConfiguratorError.backupMissing

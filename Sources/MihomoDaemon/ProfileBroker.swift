@@ -294,12 +294,16 @@ final class ProfileBroker: @unchecked Sendable {
     }
 
     /// Persists the desired TUN state and regenerates the managed profile as
-    /// one root-only transaction. LocalHttpDns is a daemon base service and
-    /// remains bound throughout this supervised agent restart.
-    func setEnhancedTUN(_ enabled: Bool) throws {
+    /// one root-only transaction. A running core applies the configuration in
+    /// place; only an unprovable failure uses stop/restore recovery.
+    func setEnhancedTUN(_ enabled: Bool, globalDNS: Bool = false) throws {
         try queue.sync {
-            guard agent.isRunning else {
-                throw profileError("Mihomo agent is not running")
+            if agent.isRunning, agent.expectsEnhancedTUN == enabled,
+               agent.globalDNSFallbackConfigured == globalDNS,
+               let health = try agent.expectedHealthSnapshot()?.health,
+               health.tunEnabled == enabled, health.networkConsistent {
+                try validateStartedRuntime()
+                return
             }
             let active = try activeProfileName()
             let source = root.appendingPathComponent("profiles").appendingPathComponent(active)
@@ -337,14 +341,19 @@ final class ProfileBroker: @unchecked Sendable {
                 )
             }
 
+            var runtimeTransitionRequested = false
             do {
-                guard agent.stopAndRestoreVerified() else {
-                    throw ControllerBrokerCriticalError.unsafeGlobalRuntime
+                if globalDNS {
+                    guard enabled else { throw profileError("Global DNS requires Enhanced TUN") }
+                    try LocalDoHConfigurationStore.useGlobalDNSFallback(
+                        configurationPath: root.appendingPathComponent("daemon.json").path
+                    )
+                } else {
+                    try LocalDoHConfigurationStore.setEnhancedTUN(
+                        enabled,
+                        configurationPath: root.appendingPathComponent("daemon.json").path
+                    )
                 }
-                try LocalDoHConfigurationStore.setEnhancedTUN(
-                    enabled,
-                    configurationPath: root.appendingPathComponent("daemon.json").path
-                )
                 let configured = try preparedProfile(data: data, publishController: true)
                 defer {
                     try? FileManager.default.removeItem(
@@ -357,19 +366,26 @@ final class ProfileBroker: @unchecked Sendable {
                     root.appendingPathComponent("mihomo-data/config.yaml"),
                     permissions: 0o600
                 )
-                try agent.start()
+                runtimeTransitionRequested = true
+                if agent.isRunning {
+                    try agent.reconfigureResidentMihomo()
+                } else {
+                    try agent.start()
+                }
                 try validateStartedRuntime()
             } catch {
                 let transitionError = error
-                _ = agent.stopAndRestoreVerified()
+                if runtimeTransitionRequested, !agent.stopAndRestoreVerified() {
+                    throw ControllerBrokerCriticalError.unsafeGlobalRuntime
+                }
                 do {
                     try restoreProtected(
                         protected,
                         transaction: transaction,
                         backupDigests: backupDigests
                     )
-                    try agent.start()
-                    try validateStartedRuntime()
+                    if runtimeTransitionRequested { try agent.start() }
+                    if agent.isRunning { try validateStartedRuntime() }
                 } catch {
                     _ = agent.stopAndRestoreVerified()
                     throw ControllerBrokerCriticalError.unsafeGlobalRuntime

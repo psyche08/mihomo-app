@@ -61,8 +61,12 @@ public final class RuntimeHealthGeneration: @unchecked Sendable {
 public struct RuntimeReloadRequest: Codable, Equatable, Sendable {
     public var generation: String
 
-    public init(generation: String) {
+    /// Missing in legacy requests: those retain the explicit child-restart behavior.
+    public var residentTransition: Bool?
+
+    public init(generation: String, residentTransition: Bool = false) {
         self.generation = generation
+        self.residentTransition = residentTransition
     }
 }
 

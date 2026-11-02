@@ -258,6 +258,14 @@ final class AgentSupervisor: @unchecked Sendable {
     /// exact health generation that must become ready before the mutation can
     /// commit. The fixed request file is root-only; SIGUSR1 is only a wakeup.
     func restartMihomoChild() throws {
+        try requestRuntimeReload(residentTransition: false)
+    }
+
+    func reconfigureResidentMihomo() throws {
+        try requestRuntimeReload(residentTransition: true)
+    }
+
+    private func requestRuntimeReload(residentTransition: Bool) throws {
         try queue.sync {
             guard let process, process.isRunning else {
                 throw supervisorError("mihomo-agent is not running")
@@ -265,7 +273,7 @@ final class AgentSupervisor: @unchecked Sendable {
             let configuration = try ProxyConfiguration.load(path: configPath)
             let generation = UUID().uuidString
             try RuntimeReloadRequestStore.publish(
-                RuntimeReloadRequest(generation: generation),
+                RuntimeReloadRequest(generation: generation, residentTransition: residentTransition),
                 to: configuration.runtimeReloadRequestPath
             )
             guard kill(process.processIdentifier, SIGUSR1) == 0 else {

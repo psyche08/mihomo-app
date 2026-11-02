@@ -87,7 +87,7 @@ final class TrayControlClientTests: XCTestCase {
     XCTAssertEqual(session.arguments.first?["enabled"], "false")
   }
 
-  func testDisableFallbackTUNRequiresVerifiedStoppedDNSReadback() async throws {
+  func testDisableTUNRejectsStoppedCoreEvenWhenDNSWasRestored() async throws {
     for dnsManaged in [false, true] {
       let poll = try JSONSerialization.data(withJSONObject: [
         "agent_running": false,
@@ -103,12 +103,9 @@ final class TrayControlClientTests: XCTestCase {
       ])
       let client = TrayControlClient(makeSession: { session })
       do {
-        let observed = try await client.disableEnhancedTUN()
-        XCTAssertFalse(dnsManaged, "stopped worker with managed DNS must be rejected")
-        XCTAssertFalse(observed.agentRunning)
-        XCTAssertFalse(observed.controllerReachable)
+        _ = try await client.disableEnhancedTUN()
+        XCTFail("TUN off must retain the resident proxy, regardless of restored DNS")
       } catch let error as TrayControlError {
-        XCTAssertTrue(dnsManaged)
         guard case .readbackMismatch = error else { return XCTFail("wrong error") }
       }
     }

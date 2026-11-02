@@ -69,6 +69,15 @@ authorize new Team scopes silently. A fresh setup requires Authorize & Enable
 on the App Proxy page first. Both checkmarks come from readback, share the
 mutation lock, and reject clicks on stale displayed state.
 
+Mihomo remains resident after profile activation, including when all three
+switches are off. **Enhanced TUN**, **System Proxy** and **App Proxy** control
+independent ingress paths to that core. Disabling TUN must read back a running
+controller/DNS standby; a stopped core is a failed transition. The tray describes
+this state as `Proxy ready — Enhanced TUN off`. App startup makes one recovery
+attempt when the resident agent is absent, even if no proxy switch is requested.
+TUN switches apply DNS/TUN policy inside the existing core and do not stop the
+App Proxy extension or restore System Proxy preferences.
+
 Each imported profile is also available under **Edit Profile**. The native
 editor keeps the user-owned YAML mirror in the current user context, provides
 Mihomo-key completion and YAML highlighting, and validates the complete draft
@@ -192,8 +201,8 @@ item starts the hidden menu-bar App after login and does not directly launch
 Mihomo or execute a privileged operation. After the first compatible controller
 snapshot with an active profile, the App reads the daemon's sticky Enhanced-mode
 preference and attempts one authenticated start if needed. Failed starts do not
-create a polling restart loop. Turning Enhanced mode off affects this session;
-the daemon remembers successful activation for the next boot or App launch.
+create a polling restart loop. Turning Enhanced TUN off persists that choice
+across boot and App launches while the proxy core remains available.
 
 The tray has exactly two administrator-authorized entry points: the first TUN
 enable when the daemon is not installed, and explicit `Install / Repair

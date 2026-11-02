@@ -4,11 +4,11 @@ import Foundation
 @preconcurrency import NIOPosix
 
 public final class ProxyService {
-    private let configuration: ProxyConfiguration
+    private var configuration: ProxyConfiguration
     private let group: MultiThreadedEventLoopGroup
     private let networkState: NetworkDNSState
     private let aliasManager: LoopbackAliasManager
-    private let globalDNS: GlobalDNSPreferences
+    private var globalDNS: GlobalDNSPreferences
     private let safetyState = NetworkSafetyState()
     private let healthGeneration: RuntimeHealthGeneration
     private let mihomoSupervisor: MihomoSupervisor?
@@ -18,6 +18,9 @@ public final class ProxyService {
     private var powerObserver: SystemPowerObserver?
     private var routeTableMonitor: RouteTableMonitor?
     private var channels: [Channel] = []
+    private var bridgeChannels: [Channel] = []
+    private var systemDNSForwarder: AsyncDNSForwarding?
+    private var preexistingFakeIPRouteInterface: String?
 
     public init(
         configuration: ProxyConfiguration,
@@ -79,71 +82,37 @@ public final class ProxyService {
             }
         )
 
+        self.systemDNSForwarder = systemDNSForwarder
         do {
             if configuration.localDoH == nil {
-                channels.append(try startUDP(endpoint: configuration.systemDNSListen, forwarder: systemDNSForwarder))
-                channels.append(try startTCP(endpoint: configuration.systemDNSListen, forwarder: systemDNSForwarder))
+                bridgeChannels.append(try startUDP(endpoint: configuration.systemDNSListen, forwarder: systemDNSForwarder))
+                bridgeChannels.append(try startTCP(endpoint: configuration.systemDNSListen, forwarder: systemDNSForwarder))
             }
             channels.append(try startUDP(endpoint: configuration.upstreamListen, forwarder: originalDNSForwarder))
             channels.append(try startTCP(endpoint: configuration.upstreamListen, forwarder: originalDNSForwarder))
             // Capture a route owned by another TUN before starting Mihomo. A
             // later controller-ready state is not sufficient ownership proof
             // if the Fake-IP route never moved away from that interface.
-            let preexistingFakeIPRouteInterface = MihomoRuntimeInspector.fakeIPRouteInterface()
+            preexistingFakeIPRouteInterface = MihomoRuntimeInspector.fakeIPRouteInterface()
             try mihomoSupervisor?.start()
-            if configuration.manageSystemDNS || configuration.localDoH != nil {
-                let controller = NetworkConsistencyController(
-                    configuration: configuration,
-                    globalDNS: globalDNS,
-                    aliasManager: aliasManager,
-                    safetyState: safetyState,
-                    runtimeRecoveryHandler: { [mihomoSupervisor] in
-                        mihomoSupervisor?.requestRecovery()
-                    },
-                    unsafeRuntimeHandler: { [mihomoSupervisor] in
-                        mihomoSupervisor?.stop()
-                    },
-                    preexistingFakeIPRouteInterface: preexistingFakeIPRouteInterface,
-                    healthGeneration: healthGeneration
-                )
-                consistencyController = controller
-                controller.start()
-
-                // Resolver and route changes also matter in local-DoH mode: the
-                // original-DNS escape still follows the physical network even
-                // though MihomoBox no longer writes the system resolver itself.
-                networkState.setRefreshHandler { [weak controller] signal in
-                    controller?.handleNetworkChange(reason: signal)
-                }
-
-                // SCDynamicStore reports effective resolver/interface state,
-                // while PF_ROUTE reports route/address/interface mutations at
-                // the kernel boundary. Keep an independent routing socket so
-                // lookup replies cannot race the broadcast consumer.
-                let routeMonitor = RouteTableMonitor { [weak networkState] event in
-                    guard !event.isEmpty else { return }
-                    networkState?.handleRouteTableChange()
-                }
-                routeTableMonitor = routeMonitor
-                do {
-                    try routeMonitor.start()
-                } catch let RouteTableMonitorError.openFailed(code) {
-                    ServiceLog.error("event=route_monitor_unavailable code=\(code)")
-                } catch {
-                    ServiceLog.error("event=route_monitor_unavailable code=unknown")
-                }
-
-                // A root LaunchDaemon gets no NSWorkspace wake notification, so
-                // this is IOKit-based. Wake is when TUN, the default route and
-                // the outbound interface binding are most likely to have moved
-                // underneath a runtime that still looks healthy locally.
-                let observer = SystemPowerObserver(
-                    onSleep: { [weak controller] in controller?.handleSystemSleep() },
-                    onWake: { [weak controller] in controller?.handleSystemWake() }
-                )
-                observer.start()
-                powerObserver = observer
+            startConsistencyObservation()
+            // SCDynamicStore reports effective resolver/interface state,
+            // while PF_ROUTE reports route/address/interface mutations at
+            // the kernel boundary. Keep an independent routing socket so
+            // lookup replies cannot race the broadcast consumer.
+            let routeMonitor = RouteTableMonitor { [weak networkState] event in
+                guard !event.isEmpty else { return }
+                networkState?.handleRouteTableChange()
             }
+            routeTableMonitor = routeMonitor
+            do {
+                try routeMonitor.start()
+            } catch let RouteTableMonitorError.openFailed(code) {
+                ServiceLog.error("event=route_monitor_unavailable code=\(code)")
+            } catch {
+                ServiceLog.error("event=route_monitor_unavailable code=unknown")
+            }
+
         } catch {
             stop()
             throw error
@@ -153,6 +122,93 @@ public final class ProxyService {
         ServiceLog.info(
             "event=service_started original_dns_count=\(snapshot.servers.count)"
         )
+    }
+
+    private func startConsistencyObservation() {
+        if configuration.manageSystemDNS || configuration.localDoH != nil {
+            let controller = NetworkConsistencyController(
+                configuration: configuration,
+                globalDNS: globalDNS,
+                aliasManager: aliasManager,
+                safetyState: safetyState,
+                runtimeRecoveryHandler: { [mihomoSupervisor] in
+                    mihomoSupervisor?.requestRecovery()
+                },
+                unsafeRuntimeHandler: { [mihomoSupervisor] in
+                    mihomoSupervisor?.stop()
+                },
+                preexistingFakeIPRouteInterface: preexistingFakeIPRouteInterface,
+                healthGeneration: healthGeneration
+            )
+            consistencyController = controller
+            controller.start()
+
+            // Resolver and route changes also matter in local-DoH mode: the
+            // original-DNS escape still follows the physical network even
+            // though MihomoBox no longer writes the system resolver itself.
+            networkState.setRefreshHandler { [weak controller] signal in
+                controller?.handleNetworkChange(reason: signal)
+            }
+
+            // A root LaunchDaemon gets no NSWorkspace wake notification, so
+            // this is IOKit-based. Wake is when TUN, the default route and
+            // the outbound interface binding are most likely to have moved
+            // underneath a runtime that still looks healthy locally.
+            let observer = SystemPowerObserver(
+                onSleep: { [weak controller] in controller?.handleSystemSleep() },
+                onWake: { [weak controller] in controller?.handleSystemWake() }
+            )
+            observer.start()
+            powerObserver = observer
+        }
+    }
+
+    /// Replaces DNS/TUN policy in the existing child, retaining the original-DNS
+    /// escape, process supervisor, mixed proxy port and App Proxy extension.
+    public func reconfigureResidentMihomo(configuration next: ProxyConfiguration, generation: String) throws {
+        stopLock.lock()
+        defer { stopLock.unlock() }
+        guard !stopped, UUID(uuidString: generation) != nil,
+              configuration.permitsResidentTransition(to: next),
+              let systemDNSForwarder else {
+            throw NSError(domain: "MihomoResidentRuntime", code: 3)
+        }
+        try next.validate()
+        // Quiesce the old observer before restoring its DNS. It must never
+        // reacquire Global DNS while the new configuration disables TUN.
+        networkState.setRefreshHandler(nil)
+        powerObserver?.stop()
+        powerObserver = nil
+        consistencyController?.stopAndRestore()
+        consistencyController = nil
+        guard try Self.isSystemDNSRestored(configuration: configuration) else {
+            throw NSError(domain: "MihomoResidentRuntime", code: 4)
+        }
+        if !configuration.expectsEnhancedTUN {
+            preexistingFakeIPRouteInterface = MihomoRuntimeInspector.fakeIPRouteInterface()
+        }
+        healthGeneration.replace(with: generation)
+        HealthSnapshotStore.remove(at: configuration.healthSnapshotPath)
+        safetyState.setRuntimeReady(false)
+        // Close only the Global DNS bridge. Port 1054 never leaves the process.
+        for channel in bridgeChannels { try channel.close().wait() }
+        bridgeChannels.removeAll()
+        configuration = next
+        globalDNS = GlobalDNSPreferences(
+            servers: next.managedSystemDNSServers,
+            backupPath: next.systemDNSBackupPath,
+            includeLegacyTUNDNS: next.usesGlobalDNSFallback
+        )
+        if next.manageSystemDNS { try aliasManager.ensure() }
+        if next.localDoH == nil {
+            bridgeChannels.append(try startUDP(endpoint: next.systemDNSListen, forwarder: systemDNSForwarder))
+            bridgeChannels.append(try startTCP(endpoint: next.systemDNSListen, forwarder: systemDNSForwarder))
+        }
+        try MihomoRuntimeInspector.reloadResidentMihomo(configuration: next)
+        MihomoRuntimeInspector.flushMihomoDNSCaches(configuration: next)
+        DNSCacheMaintenance.flushSystemCaches()
+        startConsistencyObservation()
+        ServiceLog.info("event=resident_runtime_transition result=applied generation=changed")
     }
 
     public static func restoreSystemDNS(configuration: ProxyConfiguration) throws {
@@ -207,7 +263,9 @@ public final class ProxyService {
     /// generation; until it sees the new child healthy, managed forwarding is
     /// held in its safe fallback state.
     public func reloadMihomo(generation: String) throws {
-        guard UUID(uuidString: generation) != nil, let mihomoSupervisor else {
+        stopLock.lock()
+        defer { stopLock.unlock() }
+        guard !stopped, UUID(uuidString: generation) != nil, let mihomoSupervisor else {
             throw NSError(
                 domain: "MihomoAgent",
                 code: 2,
@@ -239,7 +297,7 @@ public final class ProxyService {
             return
         }
         stopped = true
-        stopLock.unlock()
+        defer { stopLock.unlock() }
         ServiceLog.info("event=service_stop_started")
 
         safetyState.setRuntimeReady(false)
@@ -258,8 +316,9 @@ public final class ProxyService {
             try? aliasManager.removeIfManaged()
         }
         DNSCacheMaintenance.flushSystemCaches()
-        let active = channels
+        let active = channels + bridgeChannels
         channels.removeAll()
+        bridgeChannels.removeAll()
         for channel in active {
             try? channel.close().wait()
         }

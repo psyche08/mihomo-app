@@ -73,7 +73,11 @@ final class UnixDoHForwarderTests: XCTestCase {
         try checkPinnedMihomo(standby: true)
     }
 
-    private func checkPinnedMihomo(standby: Bool) throws {
+    func testResidentReloadKeepsPIDProxyStreamsAndIndependentDNSPolicy() throws {
+        try checkPinnedMihomo(standby: true, residentReload: true)
+    }
+
+    private func checkPinnedMihomo(standby: Bool, residentReload: Bool = false) throws {
         let checkout = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
         let binary = checkout.appendingPathComponent(".build/staging/mihomo-aarch64-apple-darwin")
@@ -104,9 +108,30 @@ final class UnixDoHForwarderTests: XCTestCase {
         let fakeQuery = try XCTUnwrap(DNSMessage.addressQuery(for: "fake.example.invalid"))
         // No kernel/socket yet: DNS still works through the independent upstream.
         XCTAssertEqual(DNSMessage.firstIPv4Answer(try routed.forward(fakeQuery, on: group.next()).wait()), "203.0.113.9")
-        // Isolated test kernel: no TUN, no TCP controller, no proxy listener,
-        // no system DNS mutation, no production profile or credentials.
-        try """
+        // All sockets are isolated loopback test endpoints. TUN stays disabled;
+        // the test never changes system DNS/routes or uses production settings.
+        let reservations = try (0..<3).map { _ in
+            try ServerBootstrap(group: group).bind(host: "127.0.0.1", port: 0).wait()
+        }
+        let ports = try reservations.map { try XCTUnwrap($0.localAddress?.port) }
+        for channel in reservations { try channel.close().wait() }
+        let controllerPort = ports[0], mixedPort = ports[1], appPort = ports[2]
+        let extra = residentReload ? """
+        external-controller: 127.0.0.1:\(controllerPort)
+        secret: resident-test-only
+        mixed-port: \(mixedPort)
+        listeners:
+          - name: resident-app
+            type: mixed
+            listen: 127.0.0.1
+            port: \(appPort)
+            rule: resident-app
+        sub-rules:
+          resident-app:
+            - MATCH,DIRECT
+
+        """ : ""
+        let initialProfile = """
         mode: direct
         log-level: silent
         external-controller-unix: "\(path)"
@@ -124,7 +149,8 @@ final class UnixDoHForwarderTests: XCTestCase {
           nameserver:
             - udp://127.0.0.1:\(port)
 
-        """.write(to: config, atomically: true, encoding: .utf8)
+        """
+        try (extra + initialProfile).write(to: config, atomically: true, encoding: .utf8)
         let process = Process()
         process.executableURL = binary
         process.arguments = ["-d", directory.path, "-f", config.path]
@@ -167,6 +193,52 @@ final class UnixDoHForwarderTests: XCTestCase {
             XCTAssertEqual(DNSMessage.firstIPv4Answer(fake), "203.0.113.9")
         } else {
             XCTAssertTrue(DNSMessage.firstIPv4Answer(fake)?.hasPrefix("198.18.") == true)
+        }
+        if residentReload {
+            let echo = try ServerBootstrap(group: group).childChannelInitializer { channel in
+                channel.pipeline.addHandler(ResidentEchoHandler())
+            }.bind(host: "127.0.0.1", port: 0).wait()
+            defer { try? echo.close().wait() }
+            let echoPort = try XCTUnwrap(echo.localAddress?.port)
+            let mixed = try ResidentProxyStream(proxyPort: mixedPort, targetPort: echoPort)
+            let app = try ResidentProxyStream(proxyPort: appPort, targetPort: echoPort)
+            let pid = process.processIdentifier
+            let configuration = ProxyConfiguration(
+                manageSystemDNS: false, enhancedTUNEnabled: false,
+                mihomoProcess: .init(binaryPath: binary.path, configDirectory: directory.path,
+                                     configPath: config.path),
+                controllerEndpoint: .init(host: "127.0.0.1", port: controllerPort),
+                controllerSecret: "resident-test-only", localDoH: .init()
+            )
+            try mixed.checkEcho(label: "initial mixed"); try app.checkEcho(label: "initial app")
+            for nextStandby in [false, true, false, true] {
+                var profile = extra + initialProfile
+                // The live Direct choice must survive a source profile in Rule mode.
+                profile = profile.replacingOccurrences(of: "mode: direct", with: "mode: rule")
+                if !nextStandby {
+                    profile = profile.replacingOccurrences(of: "fake-ip-filter-mode: rule", with: "fake-ip-filter-mode: blacklist")
+                        .replacingOccurrences(of: "MATCH,real-ip", with: "real.example.invalid")
+                }
+                try profile.write(to: config, atomically: true, encoding: .utf8)
+                try MihomoRuntimeInspector.reloadResidentMihomo(configuration: configuration)
+                MihomoRuntimeInspector.flushMihomoDNSCaches(configuration: configuration)
+                XCTAssertTrue(process.isRunning)
+                XCTAssertEqual(process.processIdentifier, pid)
+                XCTAssertTrue(try String(contentsOf: config, encoding: .utf8).contains("mode: direct"))
+                let address = DNSMessage.firstIPv4Answer(try client.forward(fakeQuery, on: group.next()).wait())
+                if nextStandby { XCTAssertEqual(address, "203.0.113.9") }
+                else { XCTAssertTrue(address?.hasPrefix("198.18.") == true) }
+                // Both established streams AND newly accepted connections must work.
+                try mixed.checkEcho(label: "retained mixed standby=\(nextStandby)")
+                try app.checkEcho(label: "retained app standby=\(nextStandby)")
+                try ResidentProxyStream(proxyPort: mixedPort, targetPort: echoPort).checkEcho()
+                try ResidentProxyStream(proxyPort: appPort, targetPort: echoPort).checkEcho()
+            }
+            // A rejected parse cannot kill the core or existing proxy connections.
+            try "tun: [invalid".write(to: config, atomically: true, encoding: .utf8)
+            XCTAssertThrowsError(try MihomoRuntimeInspector.reloadResidentMihomo(configuration: configuration))
+            XCTAssertTrue(process.isRunning)
+            try mixed.checkEcho(); try app.checkEcho()
         }
         process.terminate()
         let stopDeadline = Date().addingTimeInterval(2)
@@ -227,5 +299,79 @@ private final class EchoDNSHandler: ChannelInboundHandler {
             context.write(wrapOutboundOut(.body(.byteBuffer(body))), promise: nil)
             context.writeAndFlush(wrapOutboundOut(.end(nil)), promise: nil)
         }
+    }
+}
+
+private final class ResidentEchoHandler: ChannelInboundHandler {
+    typealias InboundIn = ByteBuffer
+    typealias OutboundOut = ByteBuffer
+    func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+        context.writeAndFlush(data, promise: nil)
+    }
+}
+
+/// Bounded TCP checks through the real pinned core, with no external network.
+private final class ResidentProxyStream {
+    private let descriptor: Int32
+    init(proxyPort: Int, targetPort: Int) throws {
+        descriptor = socket(AF_INET, SOCK_STREAM, 0)
+        guard descriptor >= 0 else { throw NSError(domain: "ResidentTestSocket", code: 1) }
+        var timeout = timeval(tv_sec: 3, tv_usec: 0)
+        setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout.size(ofValue: timeout)))
+        setsockopt(descriptor, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout.size(ofValue: timeout)))
+        var noSigPipe: Int32 = 1
+        setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout.size(ofValue: noSigPipe)))
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = UInt16(proxyPort).bigEndian
+        address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+        let result = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        guard result == 0 else { close(descriptor); throw NSError(domain: "ResidentTestConnect", code: 1) }
+        do {
+            try sendAll(Data("CONNECT 127.0.0.1:\(targetPort) HTTP/1.1\r\nHost: 127.0.0.1:\(targetPort)\r\n\r\n".utf8))
+            var header = Data()
+            while header.count < 4096, !header.suffix(4).elementsEqual([13, 10, 13, 10]) {
+                header.append(try receive(count: 1))
+            }
+            guard String(decoding: header, as: UTF8.self).hasPrefix("HTTP/1.1 200") else {
+                throw NSError(domain: "ResidentTestCONNECT", code: 1)
+            }
+        } catch { close(descriptor); throw error }
+    }
+    deinit { close(descriptor) }
+    func checkEcho(label: String = "new stream") throws {
+        let payload = Data(UUID().uuidString.utf8)
+        do {
+            try sendAll(payload)
+            let received = try receive(count: payload.count)
+            XCTAssertEqual(received, payload, label)
+        } catch {
+            throw NSError(domain: "ResidentTestEcho: " + label, code: 1, userInfo: [NSUnderlyingErrorKey: error])
+        }
+    }
+    private func sendAll(_ data: Data) throws {
+        try data.withUnsafeBytes { bytes in
+            var offset = 0
+            while offset < bytes.count {
+                let count = Darwin.send(descriptor, bytes.baseAddress!.advanced(by: offset), bytes.count - offset, 0)
+                guard count > 0 else { throw NSError(domain: "ResidentTestSend", code: 1) }
+                offset += count
+            }
+        }
+    }
+    private func receive(count: Int) throws -> Data {
+        var result = Data()
+        while result.count < count {
+            var buffer = [UInt8](repeating: 0, count: count - result.count)
+            let size = Darwin.recv(descriptor, &buffer, buffer.count, 0)
+            guard size > 0 else { throw NSError(domain: "ResidentTestReceive", code: 1) }
+            result.append(contentsOf: buffer.prefix(size))
+        }
+        return result
     }
 }

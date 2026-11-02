@@ -216,7 +216,7 @@ struct TraySnapshot: Equatable, Sendable {
       return "Network: Daemon unavailable"
     }
     if !enhancedTUN, networkHealthy == true {
-      return "Network: Standby — Enhanced TUN off"
+      return "Network: Proxy ready — Enhanced TUN off"
     }
     if networkHealthy == true {
       return "Network: Healthy"

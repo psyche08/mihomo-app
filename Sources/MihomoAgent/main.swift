@@ -238,7 +238,14 @@ do {
             return
         }
         do {
-            try service.reloadMihomo(generation: request.generation)
+            if request.residentTransition == true {
+                try service.reconfigureResidentMihomo(
+                    configuration: ProxyConfiguration.load(path: configPath),
+                    generation: request.generation
+                )
+            } else {
+                try service.reloadMihomo(generation: request.generation)
+            }
         } catch {
             // Let the normal service shutdown restore DNS and remove the alias.
             // The daemon will reject the missing generation and verify the same
