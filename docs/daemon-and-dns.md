@@ -74,6 +74,17 @@ through a proxy rule and accidentally breaks this recursion boundary. Mihomo
 uses the agent's TCP `1054` listener for its upstream requests so Enhanced TUN
 cannot recapture a UDP loopback flow emitted by Mihomo itself.
 
+The `1054` listeners are supervised like the bridge's
+([Global DNS bridge](#global-dns-bridge)), but rebind themselves: `127.0.0.1`
+never goes away, and a plain forwarder has no consistency observer. An
+unexpected close of either transport, for example after SwiftNIO closes the UDP
+listener on an `ENOBUFS` reply, is logged as `dns_escape_listener_closed
+protocol=udp|tcp` and rebound after 0.1 s, retrying after 1, 5 and then every
+30 s (`dns_escape_listener_rebound`, or `dns_escape_listener_rebind_failed`
+once per distinct error). The UDP escape matters even though Mihomo uses TCP:
+the proxy-server address resolver queries it, and falls back to the system
+resolver, which answers from Fake-IP while the agent owns system DNS.
+
 The bridge forwarders and the original-DNS escape use non-blocking SwiftNIO
 clients. Truncated UDP replies on the original-DNS escape continue
 asynchronously over TCP on the same selected endpoint and interface.
@@ -260,7 +271,8 @@ observer kept pointing system DNS at a bridge with no UDP listener (m4pro,
 
 - an unexpected listener close is logged as `dns_bridge_listener_closed
   protocol=udp|tcp` and triggers an immediate evaluation; the first failed UDP
-  reply of a channel is logged as `udp_listener_write_failed` with its errno;
+  reply of a channel is logged as `udp_listener_write_failed
+  listener=bridge|escape` with its errno;
 - every evaluation rebinds a closed listener while the alias is present
   (`dns_bridge_listener_rebound`, or `dns_bridge_listener_rebind_failed` once
   per distinct error);

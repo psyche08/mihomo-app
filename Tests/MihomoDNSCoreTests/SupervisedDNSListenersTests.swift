@@ -5,7 +5,7 @@ import Foundation
 import XCTest
 @testable import MihomoDNSCore
 
-final class DNSBridgeListenersTests: XCTestCase {
+final class SupervisedDNSListenersTests: XCTestCase {
     private var group: MultiThreadedEventLoopGroup!
 
     override func setUp() {
@@ -129,6 +129,93 @@ final class DNSBridgeListenersTests: XCTestCase {
         XCTAssertEqual(closes.transports, [.udp], "an intentional close is not reported")
     }
 
+    /// The original-DNS escape has no observer to ask for a rebind: after
+    /// SwiftNIO closes its UDP listener on a send error, it serves UDP again by
+    /// itself and never touches the surviving TCP listener.
+    func testEscapeRebindsItselfAfterASendErrorClosesUDP() throws {
+        let (listeners, endpoint) = try startListeners(
+            host: "127.0.0.1",
+            forwarder: AnsweringForwarder(),
+            role: .escape
+        )
+        defer { listeners.close() }
+        let queue = DispatchQueue(label: "escape-rebind-test")
+        listeners.enableAutomaticRebind(on: queue, delays: [.milliseconds(10)])
+        let udp = try XCTUnwrap(listeners.channel(for: .udp))
+        let tcp = try XCTUnwrap(listeners.channel(for: .tcp))
+
+        var buffer = udp.allocator.buffer(capacity: 12)
+        buffer.writeBytes(Data(repeating: 0, count: 12))
+        let offHost = AddressedEnvelope(
+            remoteAddress: try SocketAddress(ipAddress: "192.0.2.1", port: 53),
+            data: buffer
+        )
+        do {
+            try udp.writeAndFlush(offHost).wait()
+            throw XCTSkip("this host accepted a loopback-sourced off-host datagram")
+        } catch let error as IOError {
+            XCTAssertEqual(error.errnoCode, EADDRNOTAVAIL)
+        }
+        try udp.closeFuture.wait()
+
+        XCTAssertTrue(waitUntil { listeners.isListening }, "the escape rebinds without being asked")
+        XCTAssertFalse(listeners.channel(for: .udp) === udp)
+        XCTAssertTrue(listeners.channel(for: .tcp) === tcp)
+        try assertAnswersOverUDPAndTCP(endpoint)
+    }
+
+    func testEscapeKeepsRetryingUntilItsAddressCanBeBoundAgain() throws {
+        let gate = BindGate()
+        let (listeners, endpoint) = try startListeners(
+            host: "127.0.0.1",
+            forwarder: AnsweringForwarder(),
+            role: .escape,
+            gate: gate
+        )
+        defer { listeners.close() }
+        let queue = DispatchQueue(label: "escape-rebind-test")
+        listeners.enableAutomaticRebind(on: queue, delays: [.milliseconds(5), .milliseconds(10)])
+
+        gate.setBlocked(true)
+        try XCTUnwrap(listeners.channel(for: .tcp)).close().wait()
+
+        XCTAssertTrue(waitUntil { gate.attempts(.tcp) >= 4 }, "a failed rebind is retried")
+        XCTAssertFalse(listeners.isListening)
+        XCTAssertEqual(gate.attempts(.udp), 1, "an open transport is never rebound")
+
+        gate.setBlocked(false)
+        XCTAssertTrue(waitUntil { listeners.isListening })
+        try assertAnswersOverUDPAndTCP(endpoint)
+    }
+
+    func testClosedEscapeStopsRebinding() throws {
+        let gate = BindGate()
+        let (listeners, endpoint) = try startListeners(
+            host: "127.0.0.1",
+            forwarder: AnsweringForwarder(),
+            role: .escape,
+            gate: gate
+        )
+        let queue = DispatchQueue(label: "escape-rebind-test")
+        listeners.enableAutomaticRebind(on: queue, delays: [.milliseconds(50)])
+        let udp = try XCTUnwrap(listeners.channel(for: .udp))
+        try udp.close().wait()
+
+        listeners.close()
+        Thread.sleep(forTimeInterval: 0.15)
+        queue.sync {}
+
+        XCTAssertEqual(gate.attempts(.udp), 1, "a closed escape is not rebound")
+        XCTAssertNil(listeners.channel(for: .udp))
+        let squatter = try bindDatagramSocket(endpoint)
+        Darwin.close(squatter)
+    }
+
+    func testListenerEventsKeepTheirRoleNames() {
+        XCTAssertEqual(DNSListenerRole.bridge.eventPrefix, "dns_bridge_listener")
+        XCTAssertEqual(DNSListenerRole.escape.eventPrefix, "dns_escape_listener")
+    }
+
     /// The exact m4pro sequence on a real loopback alias: a reply is pending
     /// when a rollback removes the alias, the reply fails, SwiftNIO closes the
     /// UDP listener, and after the alias returns only a rebind serves UDP again.
@@ -182,7 +269,9 @@ final class DNSBridgeListenersTests: XCTestCase {
         XCTAssertNil(try? client.receive(timeoutMilliseconds: 300))
         ServiceLog.flush()
         let log = (try? String(contentsOfFile: logPath, encoding: .utf8)) ?? ""
-        XCTAssertTrue(log.contains("event=udp_listener_write_failed category=posix code=\(EADDRNOTAVAIL)"))
+        XCTAssertTrue(
+            log.contains("event=udp_listener_write_failed listener=bridge category=posix code=\(EADDRNOTAVAIL)")
+        )
         XCTAssertTrue(log.contains("event=dns_bridge_listener_closed protocol=udp"))
         XCTAssertFalse(log.contains("protocol=tcp"))
 
@@ -196,12 +285,27 @@ final class DNSBridgeListenersTests: XCTestCase {
 
     private func startListeners(
         host: String,
-        forwarder: AsyncDNSForwarding
-    ) throws -> (DNSBridgeListeners, Endpoint) {
+        forwarder: AsyncDNSForwarding,
+        role: DNSListenerRole = .bridge,
+        gate: BindGate? = nil
+    ) throws -> (SupervisedDNSListeners, Endpoint) {
+        let group: EventLoopGroup = self.group
         var lastError: Error?
         for _ in 0 ..< 20 {
             let endpoint = Endpoint(host: host, port: Int.random(in: 20_000 ... 60_000))
-            let listeners = DNSBridgeListeners(group: group, endpoint: endpoint, forwarder: forwarder)
+            let listeners = SupervisedDNSListeners(role: role) { transport in
+                try gate?.check(transport)
+                switch transport {
+                case .udp:
+                    return try DNSListenerBootstrap.bindUDP(
+                        group: group, endpoint: endpoint, forwarder: forwarder, role: role
+                    )
+                case .tcp:
+                    return try DNSListenerBootstrap.bindTCP(
+                        group: group, endpoint: endpoint, forwarder: forwarder, role: role
+                    )
+                }
+            }
             do {
                 try listeners.start()
                 return (listeners, endpoint)
@@ -233,6 +337,15 @@ final class DNSBridgeListenersTests: XCTestCase {
             interfaceName: nil
         )
         XCTAssertEqual(tcp, AnsweringForwarder.answer(to: query), file: file, line: line)
+    }
+
+    private func waitUntil(timeout: TimeInterval = 2, _ condition: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return true }
+            Thread.sleep(forTimeInterval: 0.005)
+        }
+        return condition()
     }
 
     private func bindDatagramSocket(_ endpoint: Endpoint) throws -> Int32 {
@@ -309,24 +422,51 @@ private final class HeldForwarder: AsyncDNSForwarding, @unchecked Sendable {
     }
 }
 
+/// Counts bind attempts per transport and fails them while blocked.
+private final class BindGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var blocked = false
+    private var counts: [DNSListenerTransport: Int] = [:]
+
+    func setBlocked(_ value: Bool) {
+        lock.lock()
+        blocked = value
+        lock.unlock()
+    }
+
+    func attempts(_ transport: DNSListenerTransport) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return counts[transport, default: 0]
+    }
+
+    func check(_ transport: DNSListenerTransport) throws {
+        lock.lock()
+        counts[transport, default: 0] += 1
+        let fail = blocked
+        lock.unlock()
+        if fail { throw IOError(errnoCode: EADDRINUSE, reason: "bind") }
+    }
+}
+
 private final class CloseRecorder: @unchecked Sendable {
     private let condition = NSCondition()
-    private var recorded: [DNSBridgeTransport] = []
+    private var recorded: [DNSListenerTransport] = []
 
-    var transports: [DNSBridgeTransport] {
+    var transports: [DNSListenerTransport] {
         condition.lock()
         defer { condition.unlock() }
         return recorded
     }
 
-    func record(_ transport: DNSBridgeTransport) {
+    func record(_ transport: DNSListenerTransport) {
         condition.lock()
         recorded.append(transport)
         condition.broadcast()
         condition.unlock()
     }
 
-    func wait(for transport: DNSBridgeTransport, timeout: TimeInterval = 2) -> Bool {
+    func wait(for transport: DNSListenerTransport, timeout: TimeInterval = 2) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         condition.lock()
         defer { condition.unlock() }

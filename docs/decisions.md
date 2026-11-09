@@ -564,7 +564,10 @@ unexpected close is logged and triggers an immediate evaluation; every
 evaluation rebinds a closed listener; bridge readiness and DNS acquisition
 require both listeners open; a bridge-unhealthy rollback rebuilds them; and a
 runtime rollback no longer removes the alias while the listeners are bound to
-it. Stop and resident transitions remove it as before.
+it. Stop and resident transitions remove it as before. The `1054` original-DNS
+escape has the same exposure to any other unrecoverable send error, so its
+listeners are supervised the same way but rebind themselves with backoff: its
+address never disappears, and a plain forwarder has no observer to ask.
 
 Rejected: tightening the probe to NOERROR/NXDOMAIN. A profile's Fake-IP filter
 can send the health name to upstream resolvers, which answer SERVFAIL while

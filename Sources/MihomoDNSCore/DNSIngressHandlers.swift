@@ -31,12 +31,14 @@ final class DNSUDPHandler: ChannelInboundHandler {
     typealias OutboundOut = AddressedEnvelope<ByteBuffer>
 
     private let forwarder: AsyncDNSForwarding
+    private let role: DNSListenerRole
     /// Only the first failed reply of this channel is logged: once SwiftNIO
     /// closes the channel, every later reply fails the same way.
     private var writeFailureLogged = false
 
-    init(forwarder: AsyncDNSForwarding) {
+    init(forwarder: AsyncDNSForwarding, role: DNSListenerRole) {
         self.forwarder = forwarder
+        self.role = role
     }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
@@ -67,13 +69,15 @@ final class DNSUDPHandler: ChannelInboundHandler {
         guard !writeFailureLogged else { return }
         writeFailureLogged = true
         ServiceLog.error(
-            "event=udp_listener_write_failed \(DNSListenerErrorClassifier.fields(for: error))"
+            "event=udp_listener_write_failed listener=\(role.rawValue) " +
+            DNSListenerErrorClassifier.fields(for: error)
         )
     }
 
     func errorCaught(context: ChannelHandlerContext, error: Error) {
         ServiceLog.error(
-            "event=udp_listener_error \(DNSListenerErrorClassifier.fields(for: error))"
+            "event=udp_listener_error listener=\(role.rawValue) " +
+            DNSListenerErrorClassifier.fields(for: error)
         )
     }
 }
@@ -107,9 +111,11 @@ final class DNSTCPHandler: ChannelInboundHandler {
     typealias OutboundOut = ByteBuffer
 
     private let forwarder: AsyncDNSForwarding
+    private let role: DNSListenerRole
 
-    init(forwarder: AsyncDNSForwarding) {
+    init(forwarder: AsyncDNSForwarding, role: DNSListenerRole) {
         self.forwarder = forwarder
+        self.role = role
     }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
@@ -132,7 +138,8 @@ final class DNSTCPHandler: ChannelInboundHandler {
 
     func errorCaught(context: ChannelHandlerContext, error: Error) {
         ServiceLog.error(
-            "event=tcp_listener_error \(DNSListenerErrorClassifier.fields(for: error))"
+            "event=tcp_listener_error listener=\(role.rawValue) " +
+            DNSListenerErrorClassifier.fields(for: error)
         )
         context.close(promise: nil)
     }
