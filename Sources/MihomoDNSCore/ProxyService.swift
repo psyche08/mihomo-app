@@ -18,8 +18,13 @@ public final class ProxyService {
     private var consistencyController: NetworkConsistencyController?
     private var powerObserver: SystemPowerObserver?
     private var routeTableMonitor: RouteTableMonitor?
-    private var channels: [Channel] = []
-    private var bridgeChannels: [Channel] = []
+    private var bridgeListeners: SupervisedDNSListeners?
+    private var escapeListeners: SupervisedDNSListeners?
+    /// Runs the original-DNS escape's automatic rebinds, off the event loops.
+    private let escapeRebindQueue = DispatchQueue(
+        label: "dev.linsheng.mihomo-app.agent.escape-rebind",
+        qos: .utility
+    )
     private var systemDNSForwarder: AsyncDNSForwarding?
     private var preexistingFakeIPRouteInterface: String?
 
@@ -90,11 +95,27 @@ public final class ProxyService {
             // The port-53 bridge exists while macOS Global DNS points at it
             // (Enhanced TUN). Standby leaves the system resolver alone.
             if configuration.servesSystemDNSBridge {
-                bridgeChannels.append(try startUDP(endpoint: configuration.systemDNSListen, forwarder: systemDNSForwarder))
-                bridgeChannels.append(try startTCP(endpoint: configuration.systemDNSListen, forwarder: systemDNSForwarder))
+                let listeners = SupervisedDNSListeners(
+                    role: .bridge,
+                    group: group,
+                    endpoint: configuration.systemDNSListen,
+                    forwarder: systemDNSForwarder
+                )
+                bridgeListeners = listeners
+                try listeners.start()
             }
-            channels.append(try startUDP(endpoint: configuration.upstreamListen, forwarder: originalDNSForwarder))
-            channels.append(try startTCP(endpoint: configuration.upstreamListen, forwarder: originalDNSForwarder))
+            // Mihomo's own upstream. 127.0.0.1 never goes away, and a plain
+            // forwarder has no consistency observer, so the escape rebinds
+            // itself after SwiftNIO closes one of its transports.
+            let escape = SupervisedDNSListeners(
+                role: .escape,
+                group: group,
+                endpoint: configuration.upstreamListen,
+                forwarder: originalDNSForwarder
+            )
+            escapeListeners = escape
+            try escape.start()
+            escape.enableAutomaticRebind(on: escapeRebindQueue)
             // Capture a route owned by another TUN before starting Mihomo. A
             // later controller-ready state is not sufficient ownership proof
             // if the Fake-IP route never moved away from that interface.
@@ -147,7 +168,8 @@ public final class ProxyService {
                 },
                 preexistingFakeIPRouteInterface: preexistingFakeIPRouteInterface,
                 healthGeneration: healthGeneration,
-                ownedTUN: ownedTUN
+                ownedTUN: ownedTUN,
+                bridgeListeners: bridgeListeners
             )
             consistencyController = controller
             controller.start()
@@ -204,8 +226,9 @@ public final class ProxyService {
         HealthSnapshotStore.remove(at: configuration.healthSnapshotPath)
         safetyState.setRuntimeReady(false)
         // Close only the Global DNS bridge. Port 1054 never leaves the process.
-        for channel in bridgeChannels { try channel.close().wait() }
-        bridgeChannels.removeAll()
+        // A bridge transport SwiftNIO already closed must not fail the switch.
+        bridgeListeners?.close()
+        bridgeListeners = nil
         configuration = next
         globalDNS = GlobalDNSPreferences(
             servers: next.managedSystemDNSServers,
@@ -214,8 +237,14 @@ public final class ProxyService {
         )
         if next.manageSystemDNS { try aliasManager.ensure() }
         if next.servesSystemDNSBridge {
-            bridgeChannels.append(try startUDP(endpoint: next.systemDNSListen, forwarder: systemDNSForwarder))
-            bridgeChannels.append(try startTCP(endpoint: next.systemDNSListen, forwarder: systemDNSForwarder))
+            let listeners = SupervisedDNSListeners(
+                role: .bridge,
+                group: group,
+                endpoint: next.systemDNSListen,
+                forwarder: systemDNSForwarder
+            )
+            bridgeListeners = listeners
+            try listeners.start()
         }
         try MihomoRuntimeInspector.reloadResidentMihomo(configuration: next)
         ServiceLog.info("event=resident_runtime_transition phase=applied elapsed_ms=\(clock.elapsedMilliseconds())")
@@ -267,11 +296,6 @@ public final class ProxyService {
 
     public static func networkHealth(configuration: ProxyConfiguration) -> NetworkConsistencyHealth {
         MihomoRuntimeInspector.inspect(configuration: configuration)
-    }
-
-    public func wait() throws {
-        guard let first = channels.first else { return }
-        try first.closeFuture.wait()
     }
 
     /// Applies a profile reload without replacing the agent or either DNS
@@ -332,48 +356,18 @@ public final class ProxyService {
             try? aliasManager.removeIfManaged()
         }
         DNSCacheMaintenance.flushSystemCaches()
-        let active = channels + bridgeChannels
-        channels.removeAll()
-        bridgeChannels.removeAll()
-        for channel in active {
-            try? channel.close().wait()
-        }
+        bridgeListeners?.close()
+        bridgeListeners = nil
+        escapeListeners?.close()
+        escapeListeners = nil
+        // An automatic rebind already running finishes before the event loops
+        // go away; any later one finds the escape closed.
+        escapeRebindQueue.sync {}
         networkState.stop()
         mihomoSupervisor?.stop()
         do { try ownedTUN?.deactivate() }
         catch { ServiceLog.error("event=owned_tun_cleanup result=failed") }
         try? group.syncShutdownGracefully()
         ServiceLog.info("event=service_stopped")
-    }
-
-    private func startUDP(endpoint: Endpoint, forwarder: AsyncDNSForwarding) throws -> Channel {
-        return try DatagramBootstrap(group: group)
-            .channelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
-            .channelInitializer { channel in
-                channel.eventLoop.makeCompletedFuture {
-                    try channel.pipeline.syncOperations.addHandler(
-                        DNSUDPHandler(forwarder: forwarder)
-                    )
-                }
-            }
-            .bind(host: endpoint.host, port: endpoint.port)
-            .wait()
-    }
-
-    private func startTCP(endpoint: Endpoint, forwarder: AsyncDNSForwarding) throws -> Channel {
-        return try ServerBootstrap(group: group)
-            .serverChannelOption(ChannelOptions.backlog, value: 64)
-            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
-            .childChannelInitializer { channel in
-                channel.eventLoop.makeCompletedFuture {
-                    try channel.pipeline.syncOperations.addHandlers(
-                        ByteToMessageHandler(DNSTCPFrameDecoder()),
-                        DNSTCPHandler(forwarder: forwarder)
-                    )
-                }
-            }
-            .childChannelOption(ChannelOptions.socket(IPPROTO_TCP, TCP_NODELAY), value: 1)
-            .bind(host: endpoint.host, port: endpoint.port)
-            .wait()
     }
 }

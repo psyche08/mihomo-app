@@ -109,8 +109,15 @@ enum RuntimeDNSHealthProbePolicy {
     /// The system bridge's exact health query is always sent to Mihomo and may
     /// never use original-DNS fallback. If Mihomo DNS is unavailable, probing
     /// the bridge can only wait for another timeout and still return false.
+    ///
+    /// - Parameter bridgeListening: whether the bridge is managed and the
+    ///   agent's own UDP and TCP bridge listeners are open. A DNS Proxy provider
+    ///   such as MTTA intercepts the port-53 probe and answers it with SERVFAIL
+    ///   when nothing listens behind it, which the probe accepts; only the
+    ///   listener state itself proves that the agent is the one answering.
     static func evaluate(
         mihomoDNS: () -> Bool,
+        bridgeListening: Bool = true,
         systemDNSBridge: () -> Bool
     ) -> RuntimeDNSHealthProbeResult {
         guard mihomoDNS() else {
@@ -120,7 +127,7 @@ enum RuntimeDNSHealthProbePolicy {
             )
         }
         return RuntimeDNSHealthProbeResult(
-            dnsBridgeReady: systemDNSBridge(),
+            dnsBridgeReady: bridgeListening && systemDNSBridge(),
             mihomoDNSReady: true
         )
     }
@@ -202,14 +209,35 @@ public enum MihomoRuntimeInspector {
         globalDNS: GlobalDNSPreferences? = nil,
         preexistingFakeIPRouteInterface: String? = nil
     ) -> NetworkConsistencyHealth {
+        inspect(
+            configuration: configuration,
+            globalDNS: globalDNS,
+            preexistingFakeIPRouteInterface: preexistingFakeIPRouteInterface,
+            bridgeListening: nil
+        )
+    }
+
+    /// - Parameter bridgeListening: the agent's own bridge listener state, when
+    ///   the caller owns the listeners; `nil` (the daemon's view) probes only.
+    static func inspect(
+        configuration: ProxyConfiguration,
+        globalDNS: GlobalDNSPreferences?,
+        preexistingFakeIPRouteInterface: String?,
+        bridgeListening: Bool?
+    ) -> NetworkConsistencyHealth {
         let controller = controllerConfiguration(configuration: configuration)
         let fakeIPMode = configuration.mihomoProcess
             .map { inspectFakeIPMode(path: $0.configPath) } ?? false
         let visibleRouteInterface = fakeIPRouteInterface()
-        let mihomoDNSReady = dnsEndpointResponds(endpoint: configuration.mihomoDNS)
-        let dnsBridgeReady = configuration.manageSystemDNS && mihomoDNSReady
-            ? bridgeEndpointResponds(endpoint: configuration.managedDNSProbeEndpoint)
-            : false
+        let dnsHealth = RuntimeDNSHealthProbePolicy.evaluate(
+            mihomoDNS: { dnsEndpointResponds(endpoint: configuration.mihomoDNS) },
+            bridgeListening: configuration.manageSystemDNS && bridgeListening != false,
+            systemDNSBridge: {
+                bridgeEndpointResponds(endpoint: configuration.managedDNSProbeEndpoint)
+            }
+        )
+        let mihomoDNSReady = dnsHealth.mihomoDNSReady
+        let dnsBridgeReady = dnsHealth.dnsBridgeReady
         let preferences: GlobalDNSPreferences
         if let globalDNS {
             preferences = globalDNS
@@ -773,19 +801,24 @@ enum DNSAcquisitionAttemptResult: Equatable {
 
 /// Executes one bounded system-DNS acquisition attempt.
 ///
-/// A rollback can remove the loopback alias, so an acquisition may begin with
-/// a failed bridge probe. Repairing the alias and deferring the second probe to
-/// the next two-second observer tick creates a latch when the bridge flaps
-/// between ticks. The repair, bridge re-probe and System Configuration write
-/// therefore belong to one transaction.
+/// The loopback alias or a bridge listener can be missing when an acquisition
+/// begins, so it may start with a failed bridge probe. Repairing them and
+/// deferring the second probe to the next two-second observer tick creates a
+/// latch when the bridge flaps between ticks. The repair, bridge re-probe and
+/// System Configuration write therefore belong to one transaction, and system
+/// DNS is never pointed at the bridge unless both of its listeners are open.
 struct DNSAcquisitionAttempt {
     static func run(
         reprobeBridge: Bool,
         ensureAlias: () throws -> Void,
+        ensureListeners: () -> Bool = { true },
         bridgeReady: () -> Bool,
         applyDNS: () throws -> Void
     ) throws -> DNSAcquisitionAttemptResult {
         try ensureAlias()
+        guard ensureListeners() else {
+            return .bridgeUnavailable
+        }
         if reprobeBridge, !bridgeReady() {
             return .bridgeUnavailable
         }
@@ -796,13 +829,13 @@ struct DNSAcquisitionAttempt {
 
 /// Decides whether the observer should (re)take ownership of system DNS.
 ///
-/// The key case is `reacquireBridge`: after a rollback removes the loopback
-/// alias, the system-DNS bridge stops answering, so `dnsBridgeReady` reads
-/// false even though the Mihomo runtime is healthy. Because re-management used
-/// to require a ready bridge — and the alias was only ensured while managing —
-/// the observer could latch into passive observation and never recover on its
-/// own until the agent was restarted. Re-ensuring the alias (which never
-/// touches system DNS) breaks that latch.
+/// The key case is `reacquireBridge`: after the loopback alias or a bridge
+/// listener is lost, the system-DNS bridge stops answering, so `dnsBridgeReady`
+/// reads false even though the Mihomo runtime is healthy. Because
+/// re-management used to require a ready bridge — and the alias was only
+/// ensured while managing — the observer could latch into passive observation
+/// and never recover on its own until the agent was restarted. Re-ensuring the
+/// alias and the listeners (neither touches system DNS) breaks that latch.
 struct DNSAcquisitionPolicy {
     private var backoffUntilNanoseconds: UInt64?
     private(set) var consecutiveFailures = 0
@@ -829,10 +862,10 @@ struct DNSAcquisitionPolicy {
         }
         // Taking ownership can fail persistently — most realistically when
         // another network extension is fighting us over macOS DNS. Without a
-        // backoff the retry runs at tick rate, and because a failed attempt
-        // rolls back (removing the loopback alias) while the next tick
-        // re-creates it, 127.0.0.53 would be added and removed every couple of
-        // seconds for as long as the conflict lasts.
+        // backoff the retry runs at tick rate and every failed attempt rolls
+        // system DNS back. (A rollback used to remove the loopback alias as
+        // well, adding and removing 127.0.0.53 every couple of seconds; it now
+        // keeps the alias while the bridge listeners are bound to it.)
         if let backoffUntilNanoseconds, nowNanoseconds < backoffUntilNanoseconds {
             return .none
         }
@@ -861,11 +894,33 @@ struct DNSAcquisitionPolicy {
     }
 }
 
+/// Why the observer restores the original network.
+enum SafeNetworkRestoreScope: Equatable {
+    /// A rollback while the agent keeps running (DNS apply failure, bridge or
+    /// runtime unhealthy). The bridge listeners stay bound.
+    case runtimeRollback
+    /// The observer is stopping: agent shutdown or a resident transition.
+    case shutdown
+
+    /// Whether this restore removes the agent-created loopback alias.
+    ///
+    /// A runtime rollback keeps the alias while this process still binds the
+    /// bridge listeners to it. Removing it under them made every in-flight
+    /// reply fail with EADDRNOTAVAIL, which closes the SwiftNIO UDP listener,
+    /// and re-adding it a tick later only churned `lo0`. Nothing resolves
+    /// through the alias once system DNS has been restored.
+    func removesLoopbackAlias(ownsBridgeListeners: Bool) -> Bool {
+        self == .shutdown || !ownsBridgeListeners
+    }
+}
+
 public final class NetworkConsistencyController: @unchecked Sendable {
     private let configuration: ProxyConfiguration
     private let ownedTUN: DaemonOwnedTUN?
     private let globalDNS: GlobalDNSPreferences
     private let aliasManager: LoopbackAliasManager
+    /// The agent's Global DNS bridge listeners, when this process binds them.
+    private let bridgeListeners: DNSBridgeListenerControl?
     private let safetyState: NetworkSafetyState
     private let runtimeRecoveryHandler: @Sendable () -> Void
     private let unsafeRuntimeHandler: @Sendable () -> Void
@@ -919,7 +974,35 @@ public final class NetworkConsistencyController: @unchecked Sendable {
             egressProbe: EgressProbeCoordinator(configuration: configuration),
             preexistingFakeIPRouteInterface: preexistingFakeIPRouteInterface,
             healthGeneration: healthGeneration,
-            ownedTUN: ownedTUN
+            ownedTUN: ownedTUN,
+            bridgeListeners: nil
+        )
+    }
+
+    convenience init(
+        configuration: ProxyConfiguration,
+        globalDNS: GlobalDNSPreferences,
+        aliasManager: LoopbackAliasManager,
+        safetyState: NetworkSafetyState,
+        runtimeRecoveryHandler: @escaping @Sendable () -> Void,
+        unsafeRuntimeHandler: @escaping @Sendable () -> Void,
+        preexistingFakeIPRouteInterface: String? = nil,
+        healthGeneration: RuntimeHealthGeneration = RuntimeHealthGeneration(),
+        ownedTUN: DaemonOwnedTUN? = nil,
+        bridgeListeners: DNSBridgeListenerControl?
+    ) {
+        self.init(
+            configuration: configuration,
+            globalDNS: globalDNS,
+            aliasManager: aliasManager,
+            safetyState: safetyState,
+            runtimeRecoveryHandler: runtimeRecoveryHandler,
+            unsafeRuntimeHandler: unsafeRuntimeHandler,
+            egressProbe: EgressProbeCoordinator(configuration: configuration),
+            preexistingFakeIPRouteInterface: preexistingFakeIPRouteInterface,
+            healthGeneration: healthGeneration,
+            ownedTUN: ownedTUN,
+            bridgeListeners: bridgeListeners
         )
     }
 
@@ -933,12 +1016,14 @@ public final class NetworkConsistencyController: @unchecked Sendable {
         egressProbe: EgressProbeCoordinator,
         preexistingFakeIPRouteInterface: String? = nil,
         healthGeneration: RuntimeHealthGeneration = RuntimeHealthGeneration(),
-        ownedTUN: DaemonOwnedTUN? = nil
+        ownedTUN: DaemonOwnedTUN? = nil,
+        bridgeListeners: DNSBridgeListenerControl? = nil
     ) {
         self.configuration = configuration
         self.ownedTUN = ownedTUN
         self.globalDNS = globalDNS
         self.aliasManager = aliasManager
+        self.bridgeListeners = bridgeListeners
         self.safetyState = safetyState
         self.runtimeRecoveryHandler = runtimeRecoveryHandler
         self.unsafeRuntimeHandler = unsafeRuntimeHandler
@@ -1037,6 +1122,11 @@ public final class NetworkConsistencyController: @unchecked Sendable {
     }
 
     public func start() {
+        // A listener SwiftNIO closes is rebound by the next evaluation; do not
+        // leave the bridge dead until the next timer tick.
+        bridgeListeners?.setUnexpectedCloseHandler { [weak self] _ in
+            self?.scheduleImmediateEvaluation(reason: "dns_bridge_listener_closed")
+        }
         queue.sync {
             evaluate()
             let timer = DispatchSource.makeTimerSource(queue: queue)
@@ -1048,6 +1138,7 @@ public final class NetworkConsistencyController: @unchecked Sendable {
     }
 
     public func stopAndRestore() {
+        bridgeListeners?.setUnexpectedCloseHandler(nil)
         queue.sync {
             proxyServerResolutionProbe.invalidate()
             timer?.cancel()
@@ -1056,7 +1147,7 @@ public final class NetworkConsistencyController: @unchecked Sendable {
             if let healthSnapshotPath {
                 HealthSnapshotStore.remove(at: healthSnapshotPath)
             }
-            restoreSafeNetwork(source: "shutdown")
+            restoreSafeNetwork(source: "shutdown", scope: .shutdown)
         }
     }
 
@@ -1087,10 +1178,12 @@ public final class NetworkConsistencyController: @unchecked Sendable {
             resolverTopologyObservationPending = false
             observeResolverTopology()
         }
+        let bridgeListening = configuration.manageSystemDNS ? ensureBridgeListenersIfAliasPresent() : nil
         let before = MihomoRuntimeInspector.inspect(
             configuration: configuration,
             globalDNS: globalDNS,
-            preexistingFakeIPRouteInterface: preexistingFakeIPRouteInterface
+            preexistingFakeIPRouteInterface: preexistingFakeIPRouteInterface,
+            bridgeListening: bridgeListening
         )
         // The independent DNS bridge is not the kernel. A bridge failure must
         // not restart a healthy Mihomo child or bypass the failure debounce.
@@ -1126,6 +1219,9 @@ public final class NetworkConsistencyController: @unchecked Sendable {
                     ensureAlias: {
                         try aliasManager.ensure()
                     },
+                    ensureListeners: {
+                        bridgeListeners?.ensureListening() ?? true
+                    },
                     bridgeReady: {
                         MihomoRuntimeInspector.systemDNSBridgeResponds(
                             configuration: configuration
@@ -1158,7 +1254,7 @@ public final class NetworkConsistencyController: @unchecked Sendable {
                     "consecutive=\(acquisitionPolicy.consecutiveFailures) " +
                     "code=\(systemConfigurationCode(error))"
                 )
-                restoreSafeNetwork(source: "manage_dns_failure")
+                restoreSafeNetwork(source: "manage_dns_failure", scope: .runtimeRollback)
                 action = "manage_dns_failed"
                 changed = true
             }
@@ -1185,7 +1281,7 @@ public final class NetworkConsistencyController: @unchecked Sendable {
             action = "debounce_dns_bridge_failure"
         case .restoreOriginalDNS:
             safetyState.setRuntimeReady(false)
-            restoreSafeNetwork(source: "dns_bridge_unhealthy")
+            restoreSafeNetwork(source: "dns_bridge_unhealthy", scope: .runtimeRollback)
             acquisitionPolicy.recordManageFailed(nowNanoseconds: DispatchTime.now().uptimeNanoseconds)
             action = "restore_original_dns"
             changed = true
@@ -1193,6 +1289,13 @@ public final class NetworkConsistencyController: @unchecked Sendable {
                 "event=dns_bridge_unhealthy action=restore_original_dns " +
                 "mihomo_dns_ready=\(before.mihomoDNSReady)"
             )
+            // Flipping system DNS alone cannot repair the bridge. Rebuild both
+            // listeners now that nothing resolves through them, so the next
+            // acquisition probes a fresh bridge rather than a wedged one.
+            if let bridgeListeners {
+                let rebuilt = bridgeListeners.rebuild()
+                ServiceLog.info("event=dns_bridge_listeners_rebuilt result=\(rebuilt ? "ok" : "failed")")
+            }
         }
 
         let recoveryDecision = chargeFailures && configuration.expectsEnhancedTUN
@@ -1236,7 +1339,7 @@ public final class NetworkConsistencyController: @unchecked Sendable {
             safetyState.setRuntimeReady(false)
             if networkOwned {
                 invalidateEgressMeasurement()
-                restoreSafeNetwork(source: "runtime_unhealthy")
+                restoreSafeNetwork(source: "runtime_unhealthy", scope: .runtimeRollback)
                 MihomoRuntimeInspector.flushMihomoDNSCaches(configuration: configuration)
                 DNSCacheMaintenance.flushSystemCaches()
                 unsafeRuntimeHandler()
@@ -1263,7 +1366,8 @@ public final class NetworkConsistencyController: @unchecked Sendable {
             ? MihomoRuntimeInspector.inspect(
                 configuration: configuration,
                 globalDNS: globalDNS,
-                preexistingFakeIPRouteInterface: preexistingFakeIPRouteInterface
+                preexistingFakeIPRouteInterface: preexistingFakeIPRouteInterface,
+                bridgeListening: configuration.manageSystemDNS ? bridgeListeners?.isListening : nil
             )
             : before
         // Publish the reading so the daemon can answer tray polls without
@@ -1456,7 +1560,18 @@ public final class NetworkConsistencyController: @unchecked Sendable {
         }
     }
 
-    private func restoreSafeNetwork(source: String) {
+    /// Re-binds a bridge listener SwiftNIO closed. Binding to an absent alias
+    /// can only fail, so then only the current state is reported; acquisition
+    /// re-adds the alias and binds the listeners in one transaction.
+    private func ensureBridgeListenersIfAliasPresent() -> Bool? {
+        guard let bridgeListeners else { return nil }
+        guard (try? aliasManager.isPresent()) == true else {
+            return bridgeListeners.isListening
+        }
+        return bridgeListeners.ensureListening()
+    }
+
+    private func restoreSafeNetwork(source: String, scope: SafeNetworkRestoreScope) {
         let dnsRestored = retryRestore(
             source: source,
             component: "system_dns",
@@ -1470,6 +1585,7 @@ public final class NetworkConsistencyController: @unchecked Sendable {
         if !dnsRestored {
             ServiceLog.error("event=network_restore_failed source=\(source) component=system_dns")
         }
+        guard scope.removesLoopbackAlias(ownsBridgeListeners: bridgeListeners != nil) else { return }
         let aliasRestored = retryRestore(
             source: source,
             component: "loopback_alias",

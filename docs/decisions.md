@@ -604,3 +604,30 @@ replaces the cache, so a path-less rule beside path tools of the same identifier
 an arbitrary copy's UUID. An identifier is therefore matched by path everywhere or
 nowhere; copies of an identifier with path tools share one rule naming the highest
 bundle version's path.
+
+## 2026-11-09: Supervise the Global DNS bridge listeners; keep the alias on rollback
+
+On m4pro, during `pmset sleepnow` churn, a failed DNS apply rolled back and
+removed `127.0.0.53` while queries were in flight. The pending replies failed
+with `EADDRNOTAVAIL`; SwiftNIO closes a datagram channel on that error without
+calling `errorCaught`, so the UDP listener vanished with no log line. The TCP
+listener and the kernel socket binding both survive alias removal. MTTA's DNS
+Proxy answered the bridge probe with SERVFAIL, the probe accepts any RCODE, and
+the observer re-pointed system DNS at the dead bridge every 40–60 s until the
+agent was restarted.
+
+Decision: the agent owns the bridge listeners as one supervised unit. An
+unexpected close is logged and triggers an immediate evaluation; every
+evaluation rebinds a closed listener; bridge readiness and DNS acquisition
+require both listeners open; a bridge-unhealthy rollback rebuilds them; and a
+runtime rollback no longer removes the alias while the listeners are bound to
+it. Stop and resident transitions remove it as before. The `1054` original-DNS
+escape has the same exposure to any other unrecoverable send error, so its
+listeners are supervised the same way but rebind themselves with backoff: its
+address never disappears, and a plain forwarder has no observer to ask.
+
+Rejected: tightening the probe to NOERROR/NXDOMAIN. A profile's Fake-IP filter
+can send the health name to upstream resolvers, which answer SERVFAIL while
+offline, and the agent's own listener state is the direct evidence. Also
+rejected: patching SwiftNIO's recoverable datagram errors, which would put a
+fork of a pinned dependency on the DNS path.
