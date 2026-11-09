@@ -589,3 +589,18 @@ children: launch hosts now carry every listed identifier, though never `nil`, so
 unlisted children still connect directly. Rejected: `matchTools == nil` (routes every
 child of a terminal), and dropping folder grants (code in the home directory would fail
 NetworkExtension validation).
+
+Amendment (same day, path entries): path-less entries resolve only through
+LaunchServices by bundle identifier, so ChatGPT's helpers and standalone CLIs (`codex`)
+were not diverted on build 1125. Passes now list the Mach-O files in found
+applications' `MacOS` and `Helpers` folders and in granted folders, read only their
+embedded identifier and Team ID, and give each listed pair's file a tool entry with
+its path; identifiers with none keep a path-less entry. There is still no validation,
+hashing or pinning, reads are cached by file metadata, and the code stamp covers the
+path entries so updates republish. Rejected: registering CLIs with LaunchServices
+(not bundles) and per-file consent.
+NetworkExtension caches Mach-O UUIDs per signing identifier and a lookup by path
+replaces the cache, so a path-less rule beside path tools of the same identifier reads
+an arbitrary copy's UUID. An identifier is therefore matched by path everywhere or
+nowhere; copies of an identifier with path tools share one rule naming the highest
+bundle version's path.

@@ -41,12 +41,12 @@ package-scope candidate, not NE framework acceptance or Claude API recovery.
 
 | Stage | Owner and check | What success establishes |
 |---|---|---|
-| Discovery | Unsandboxed per-user host: LaunchServices lookup of the listed identifiers, `.app` bundles (Info.plist only) up to three levels below a granted folder, and known launch hosts; no executable enumeration | Which top-level applications and launch hosts get an OS rule of their own |
-| Static identity | When an application is added: Team ID and signing identifiers of the chosen code (`AIAppTargets.codeIdentity`). Each pass reads only the embedded signature of top-level main executables | The policy names its publishers and identifiers |
+| Discovery | Unsandboxed per-user host: LaunchServices lookup of the listed identifiers, `.app` bundles (Info.plist only) up to three levels below a granted folder, and known launch hosts; Mach-O files in found applications' `MacOS` and `Helpers` folders and in granted folders, read for their embedded identifier and Team ID only | Which top-level applications and launch hosts get an OS rule of their own, and which executables get a path tool entry |
+| Static identity | When an application is added: Team ID and signing identifiers of the chosen code (`AIAppTargets.codeIdentity`). Each pass reads only embedded signatures: top-level main executables, and the identifier and Team ID of candidate executables | The policy names its publishers and identifiers |
 | Durable consent | Host confirmation sheet listing Team IDs, identifiers and code folders; per-user `MihomoCodeAccess.xpc` stores the approved folders | Consent for one application's folders, including ones that do not exist yet |
 | Ephemeral delegation | Broker mints one read-only implicit bookmark per existing approved folder; policy v5 carries them; host transports opaque data | A candidate process-local capability, not proof the provider can consume it |
 | Provider preparation | `AppProxyFolderAccess` resolves each grant at its exact path, starts its scope and opens the folder read-only, without following links | Code in granted folders is readable inside the provider sandbox before rules are published |
-| OS rules | One path-less tool entry per identifier (`identifier` + Team requirement); one rule per top-level application or launch host carrying all tool entries; save/reload/readback + rules digest | Persisted rules match the approved policy |
+| OS rules | A tool entry with `matchPath` per found executable of a listed (identifier, Team ID) pair, otherwise one path-less entry per identifier (`identifier` + Team requirement); one rule per top-level application or launch host carrying all tool entries; save/reload/readback + rules digest | Persisted rules match the approved policy |
 | NE framework | Apple's process/flow code validation, outside our callback | A correlated `handleNewFlow` receipt proves that flow reached the provider; host verification alone does not |
 | Provider runtime | Audit token owner UID; `SecCodeCopyGuestWithAttributes` reports the flow's signing identifier; that identifier's route lists the code's Team ID; `SecCodeCheckValidity` with the route's Team requirement | The running source is valid code of a listed publisher under a listed identifier |
 | DNS | Bounded `AppProxyDNSRequest` to the root daemon's `dns.resolve` XPC operation (extension-only), which queries shared Mihomo DNS `127.0.0.1:1153`; fails closed | `dnsAnswered` means a response was obtained for this flow, not necessarily a successful DNS answer code or API request |
@@ -153,7 +153,10 @@ use (`node`) belongs to each publisher's entry and admits each of them.
 
 Discovery never validates or hashes code; NetworkExtension and the provider validate
 the running process. Bundle searches skip links and hidden entries and read at most
-4,000 entries per folder. A bundle found in a granted folder but not yet known to
+4,000 entries per folder. Executable searches go at most 10 levels deep, skip links,
+hidden entries and non-Mach-O files, read at most 20,000 entries per folder and keep
+at most 256 path entries; signature reads are cached by device, inode, size and
+modification time. A bundle found in a granted folder but not yet known to
 LaunchServices is registered with `LSRegisterURL`, because NetworkExtension resolves
 a path-less rule through LaunchServices. Grant paths use lexical validation and
 `O_NOFOLLOW_ANY`; Foundation's canonicalization can rewrite `/private/tmp` to
@@ -239,7 +242,7 @@ remains macOS 14. Results on older supported OS versions are not inferred.
 
 | Layer / case | Local evidence | Remaining acceptance |
 |---|---|---|
-| Policy and rules | Swift tests: v5 bounds, unique (team, identifier) pairs, zero owner UID, older routings rejected, extra/missing keys, builtin and custom ports, path-less tool entries, one OR'd rule for copies, rules digest, stale generation/replay/abort/expiry | Real NE preference serialization and live rule mutation |
+| Policy and rules | Swift tests: v5 bounds, unique (team, identifier) pairs, zero owner UID, older routings rejected, extra/missing keys, builtin and custom ports, path tool entries for found executables and path-less ones otherwise, only granted folders searched, one OR'd rule for copies, rules digest, stale generation/replay/abort/expiry | Real NE preference serialization and live rule mutation |
 | Folders and signing | Team/identifier/folder syntax; requirements compile; writable, linked, file and missing folders rejected; forged grant is stale; ad-hoc and platform code have no identity | Vendor-signed hostile fixtures in real NE |
 | Read-only capability | Two independent ad-hoc sandbox apps: initial read denied, folder grant reads and validates code, write, create and sibling read denied; fresh receiver process; relabelled and replaced folder stale, fresh grant works; separate UID 0 receiver confirms read-only cross-UID access | Powerbox issuer, Developer ID peer authentication, actual root NE consumer and console-user switch |
 | Over-broad grant | Writable implicit grant from unsandboxed issuer rejected | Assert production provider remains read-only on every supported OS |
@@ -726,13 +729,20 @@ running code's identifier is listed, that identifier's route lists the code's Te
 and `SecCodeCheckValidity` passes with the route's Team requirement. It never reads
 files on renewal.
 
-**OS rules.** Each identifier becomes one path-less tool entry with an
-`identifier` + Team requirement, which NetworkExtension matches wherever the code
-lives (verified on the test Mac in build 1123 for CLIs outside LaunchServices).
+**OS rules.** Each found executable of a listed (identifier, Team ID) pair becomes a
+tool entry with its `matchPath` and an `identifier` + Team requirement; an identifier
+with no found executable keeps one path-less entry. NetworkExtension matches a tool by
+the Mach-O UUIDs of its `matchPath`, and resolves a path-less entry only through
+LaunchServices by bundle identifier (see *Path entries*). It caches UUIDs per
+identifier and each lookup by path replaces that cache, so an identifier is matched by
+path everywhere or nowhere: copies of an identifier that also has path tools get one rule
+naming the highest bundle version's path (other copies are then not responsible
+processes of their own), and a listed identifier found only as a top-level executable
+gets a tool with that path.
 Each installed top-level application and each launch host (SSH, terminals, editors)
 gets one rule carrying all tool entries, so a CLI keeps its own route whichever
-selected application or launcher starts it. Copies of one identifier share a
-path-less rule that ORs their requirements. This reverses the 2026-10-26 decision
+selected application or launcher starts it. Copies of one identifier without path tools
+(Xcode and Xcode-beta) share a path-less rule that ORs their requirements. This reverses the 2026-10-26 decision
 not to route all children: the tool list is now every listed identifier, but never
 `nil`, so unlisted children of a terminal still connect directly.
 
@@ -744,9 +754,10 @@ ad-hoc code is unsupported.
 **Updates.** FSEvents on `/Applications`, `~/Applications` and the granted folders
 triggers a pass within seconds; the periodic pass runs every 3 minutes. A pass looks
 applications up through LaunchServices, registers bundles found in granted folders,
-and compares a metadata stamp of top-level executables and granted folders (device,
-inode, size, modification time). New versions under listed identifiers need no new
-rule. Lease renewal stays at 20 seconds and reads no files.
+and compares a metadata stamp of top-level executables, path entries and granted
+folders (device, inode, size, modification time), so a replaced executable republishes
+the rules. New versions under listed identifiers need no new
+consent; their path entries are republished automatically. Lease renewal stays at 20 seconds and reads no files.
 
 **Mihomo process routes.** The App sends each application's folders (except folders
 named `Applications` or `bin`) and found bundles as path prefixes, rendered as anchored
@@ -756,3 +767,25 @@ but do not authenticate, code at those paths.
 **Limits.** 8 Team IDs, 64 identifiers and 16 folders per entry; 256 identifiers in
 all; a Team ID or folder belongs to one entry. A CLI started by an unlisted launcher
 (cron, a launchd job) connects without App Proxy.
+
+**Path entries (2026-11-09).** On build 1125 LaunchServices resolved
+`com.anthropic.claudefordesktop.helper`, Claude Desktop's Claude Code and
+`com.openai.sky.CUAService`, but nothing for `com.openai.codex.helper`, its renderer,
+`codex`, `node` or `github-mcp-server`. A running ChatGPT produced no App Proxy flows
+and a Homebrew `codex` reached the API without a NetworkExtension match; a Homebrew
+`claude` 2.1.309 was captured only because its Mach-O UUID equals the registered
+2.1.309 bundle's (as was the 1123 home-directory copy). Each pass therefore lists the
+Mach-O files in found applications' `MacOS` and `Helpers` folders and in granted
+folders, reads only their embedded identifier and Team ID (no validation, hashing or
+pinning), and gives each listed pair's file a tool entry with its path. Folders the
+user has not approved are not searched, because the provider could not validate code
+there. On the test Mac the ChatGPT and Claude defaults give 11 rules, 32 tool entries
+(25 with a path) and 38,984 bytes against the 440 KiB budget.
+
+On build 1126 ChatGPT's `Codex (Aperitif)` helper and bundled `CodexCLI.app` codex
+reached `upstream_connected`, but CLIs started from a Claude Code shell did not: the
+path-less `com.anthropic.claude-code` rule (2.1.309 and 2.1.317 copies) read the UUID
+cache after nehelper had cached each of six claude-code paths in turn (330 "Caching 1
+UUID(s)" lines for 6 × 55 lookups), so the running 2.1.317 matched no rule. Its UUID was
+known from a tool entry, so NECP evaluated the CLIs as started by an unmatched
+application instead of as themselves. The rule now names the newest copy's path.

@@ -267,7 +267,9 @@ admits a flow only when its running code carries a listed signing identifier, is
 signed by that identifier's listed Team ID and passes `SecCodeCheckValidity`; it
 holds no file exception and keeps console-owner leases. Trust is the publisher:
 later versions need no approval, unsigned and ad-hoc code is never routed, and a new
-Team ID or identifier needs a policy edit. Same-UID and separate root sandbox fixture
+Team ID or identifier needs a policy edit. The App's path tool entries come from
+embedded signatures it reads without validating; they only tell NetworkExtension which
+files to divert, and a forged identifier or Team ID still fails the provider. Same-UID and separate root sandbox fixture
 success are not evidence that real NetworkExtension or Claude end-to-end behavior
 has been validated.
 

@@ -281,9 +281,12 @@ retain stable ports. Each entry's policy is Team IDs, signing identifiers and co
 folders (see `claude-app-proxy-identity.md`, Identifier and Team policy). The App
 looks the installed applications up through LaunchServices before enabling, again
 within seconds when FSEvents reports a change under a watched location, and every
-3 minutes as a fallback. It never hashes or enumerates executables. Path-less rules
-match each signing identifier anywhere; the provider then checks the running code
-against the Team IDs of the route that lists its identifier. A (Team ID, identifier)
+3 minutes as a fallback. It lists the Mach-O files of found applications and granted
+folders and reads only their embedded identifier and Team ID, never validating or
+hashing them; each listed pair's file gets a tool entry with its path, and an
+identifier with none keeps a path-less entry that NetworkExtension resolves through
+LaunchServices. The provider then checks the running code against the Team IDs of
+the route that lists its identifier. A (Team ID, identifier)
 pair belongs to one entry. LoadBalance groups have no current selection; route
 validation checks every member recursively.
 

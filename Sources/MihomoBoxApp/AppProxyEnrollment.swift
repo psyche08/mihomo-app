@@ -27,7 +27,7 @@ struct AppProxyEnrollment {
                         failures[app.id] = AppProxyIdentityFailure.needsAuthorization.rawValue
                     }
                 }
-                policies.append(policy)
+                policies.append(policy.granted(granted.map(\.0)))
                 for (folder, grant) in granted where !folders.contains(folder) { folders.append(folder); grants.append(grant) }
             } catch {
                 failures[app.id] = (error as? AppProxyIdentityFailure)?.rawValue

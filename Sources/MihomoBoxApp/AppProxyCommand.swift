@@ -64,12 +64,16 @@ import MihomoControl
                 }])
                 return 0
             case "targets":
-                let executables = try await coordinator.discoverExecutables(applications: [try entry()])
-                // Top-level code with rules of its own; everything it starts matches by identifier.
-                write(["application": try entry().id, "executables": executables.map {
-                    ["path": $0.path, "signingIdentifier": $0.signingIdentifier,
-                     "teamIdentifier": $0.teamIdentifier.map { $0 as Any } ?? NSNull()] as [String: Any]
-                }])
+                let policies = AppProxyCoordinator.policies([try entry()])
+                let found = await Task.detached(priority: .utility) { AIAppTargets(applications: policies) }.value
+                // Top-level code with rules of its own, and the executables matched by path.
+                write(["application": try entry().id,
+                       "executables": found.applications.filter { $0.category != nil }.map {
+                           ["path": $0.path, "signingIdentifier": $0.identifier,
+                            "teamIdentifier": $0.team.map { $0 as Any } ?? NSNull()] as [String: Any]
+                       },
+                       "matchedByPath": found.located.map { ["path": $0.path, "signingIdentifier": $0.identifier] },
+                       "issues": found.issues])
                 return 0
             case "enable":
                 try await coordinator.setApplicationEnabled(try entry().id, enabled: true, settings: settings,

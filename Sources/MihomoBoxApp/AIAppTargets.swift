@@ -36,17 +36,27 @@ struct AppProxyApplicationPolicy: Equatable, Sendable {
         return Self(category: entry.id, teams: teams, identifiers: identifiers, folders: folders,
                     existingFolders: existing, path: entry.path)
     }
+    /// Only the folders the provider holds grants for: code elsewhere would be dropped, not routed.
+    func granted(_ folders: [String]) -> Self {
+        Self(category: category, teams: teams, identifiers: identifiers, folders: self.folders,
+             existingFolders: existingFolders.filter(folders.contains), path: path)
+    }
 }
 
-/// OS rules from Team IDs and signing identifiers, without scanning code.
+/// OS rules from Team IDs and signing identifiers, without validating code.
 ///
 /// NetworkExtension needs a rule for every process that can be a flow's responsible process:
 /// a top-level application, a CLI that its application starts with responsibility disclaimed
 /// (Claude Desktop's `claude.app`), a terminal, an editor or an SSH login. LaunchServices and a
 /// shallow listing of the configured code folders locate these; reading each one's signature
 /// (no validation) gives its designated requirement. Everything they start is matched by one
-/// shared, version-independent list of tools: one path-less entry per signing identifier with a
-/// Team ID requirement. The provider then routes each flow by the Team ID of its running code.
+/// shared list of tools with Team ID requirements. NetworkExtension matches a tool by the
+/// Mach-O UUIDs of its path; a tool without a path resolves through LaunchServices by bundle
+/// identifier, which finds no CLI and few nested helpers. So each executable of a listed
+/// identifier found in the applications and granted folders gets a tool with its path, located
+/// by reading its embedded identifier and Team ID (cached by file metadata); an identifier
+/// with no such executable keeps one path-less tool. The provider then routes each flow by the
+/// identifier and Team ID of its running code.
 struct AIAppTargets {
     /// Top-level code with a rule of its own.
     struct Application: Equatable, Sendable {
@@ -60,7 +70,14 @@ struct AIAppTargets {
         /// nil for a launch host, which only selects tools and is never routed.
         let category: String?
     }
+    /// An executable of a listed identifier, matched by its path.
+    struct Located: Equatable, Sendable {
+        let category: String
+        let identifier: String
+        let path: String
+    }
     let applications: [Application]
+    let located: [Located]
     let rules: [NEAppRule]
     let tools: [NEAppRule]
     let routes: [AppProxyPolicy.Route]
@@ -70,10 +87,14 @@ struct AIAppTargets {
     /// "category:reason" -> count, for status. Never paths.
     let issues: [String: Int]
 
+    /// At most this many path tools; NetworkExtension's configuration grows with rules × tools.
+    static let maximumLocated = 256
+
     init(applications policies: [AppProxyApplicationPolicy],
          lookup: (String) -> [URL] = AIAppTargets.launchServicesURLs,
          register: (URL) -> Void = AIAppTargets.registerWithLaunchServices,
-         hostExecutables: [String] = AIAppTargets.launchHostExecutables) {
+         hostExecutables: [String] = AIAppTargets.launchHostExecutables,
+         identify: (String) -> Identity? = AIAppTargets.cachedIdentity) {
         var applications: [Application] = [], issues: [String: Int] = [:]
         for policy in policies {
             var bundles = Set<String>(), standalone = Set<String>()
@@ -112,30 +133,63 @@ struct AIAppTargets {
                                    bundle: bundle, category: nil))
             }
         }
-        // One tool entry per identifier. An identifier several publishers use (`node`) admits each of them.
+        // Executables of the listed identifiers in each application's bundles and granted folders.
+        var located: [Located] = [], seen = Set<String>()
+        for policy in policies {
+            let wanted = Set(policy.identifiers), teams = Set(policy.teams)
+            let own = applications.filter { $0.category == policy.category }
+            var candidates = own.filter { $0.bundle == nil }.map(\.path)
+            for bundle in own.compactMap(\.bundle) { candidates += Self.executables(in: bundle, bundle: true) }
+            for folder in policy.existingFolders { candidates += Self.executables(in: folder, bundle: false) }
+            for path in candidates where !seen.contains(path) && Self.providerCanRead(path, folders: policy.existingFolders) {
+                guard let code = identify(path), wanted.contains(code.identifier), let team = code.team, teams.contains(team) else { continue }
+                guard located.count < Self.maximumLocated else { issues[policy.category + ":tooManyExecutables", default: 0] += 1; break }
+                seen.insert(path)
+                located.append(.init(category: policy.category, identifier: code.identifier, path: path))
+            }
+        }
+        // Tools: an identifier several publishers use (`node`) admits each of them.
         var teamsByIdentifier: [String: [String]] = [:]
         for policy in policies {
             for id in policy.identifiers {
                 teamsByIdentifier[id, default: []] += policy.teams.filter { !(teamsByIdentifier[id] ?? []).contains($0) }
             }
         }
-        let tools = teamsByIdentifier.keys.sorted().map {
-            NEAppRule(signingIdentifier: $0, designatedRequirement: AppProxyCode.requirement(identifier: $0, teams: teamsByIdentifier[$0] ?? []))
-        }
-        // NetworkExtension keeps one rule per signing identifier. Several copies (versions,
-        // Xcode and Xcode-beta) share one rule without a path, which it resolves through
-        // LaunchServices, and admit any of their requirements.
+        let toolPaths = Dictionary(grouping: located, by: \.identifier).mapValues { $0.map(\.path).sorted() }
+        // NetworkExtension keeps one rule per signing identifier. It caches Mach-O UUIDs per
+        // identifier, and each lookup by path replaces that cache, so a path-less rule or tool
+        // reads whichever path came last. An identifier is therefore matched by path
+        // everywhere or nowhere: copies of an identifier that also has path tools get the
+        // preferred copy's path; other copies (Xcode and Xcode-beta) share one rule without a
+        // path, which NetworkExtension resolves through LaunchServices, and admit any of
+        // their requirements.
         let top = applications + hosts
         let grouped = Dictionary(grouping: top, by: \.identifier)
+        var rulePaths: [String: String] = [:]
+        for (id, members) in grouped {
+            let paths = Set(members.map(\.path))
+            if paths.count == 1 { rulePaths[id] = paths.first } else if toolPaths[id] != nil { rulePaths[id] = Self.preferredCopy(members) }
+        }
+        let tools = teamsByIdentifier.keys.sorted().flatMap { id -> [NEAppRule] in
+            let requirement = AppProxyCode.requirement(identifier: id, teams: teamsByIdentifier[id] ?? [])
+            guard let found = toolPaths[id] ?? rulePaths[id].map({ [$0] }) else {
+                return [NEAppRule(signingIdentifier: id, designatedRequirement: requirement)]
+            }
+            return found.map { path in
+                let tool = NEAppRule(signingIdentifier: id, designatedRequirement: requirement)
+                tool.matchPath = path
+                return tool
+            }
+        }
         rules = tools.isEmpty ? [] : grouped.keys.sorted().map { id in
             let members = grouped[id] ?? []
             let rule = NEAppRule(signingIdentifier: id, designatedRequirement: Self.requirement(members.map(\.requirement)))
-            let paths = Set(members.map(\.path))
-            if paths.count == 1 { rule.matchPath = paths.first }
+            rule.matchPath = rulePaths[id]
             rule.matchTools = tools
             return rule
         }
         self.tools = tools
+        self.located = located.sorted { ($0.category, $0.path) < ($1.category, $1.path) }
         self.applications = top.sorted { $0.path < $1.path }
         routes = policies.map { .init(category: $0.category, teams: $0.teams, identifiers: $0.identifiers) }
         var prefixes: [String: [String]] = [:], paths: [String: [String]] = [:]
@@ -148,7 +202,7 @@ struct AIAppTargets {
             paths[policy.category] = found.filter { $0.bundle == nil }.map(\.path).filter(AppProxyProcessRoutes.isRoutable)
         }
         processRoutes = AppProxyProcessRoutes(paths.filter { !$0.value.isEmpty }, prefixes: prefixes.filter { !$0.value.isEmpty })
-        codeStamp = Self.stamp(paths: top.map(\.path), folders: policies.flatMap(\.existingFolders))
+        codeStamp = Self.stamp(paths: top.map(\.path) + located.map(\.path), folders: policies.flatMap(\.existingFolders))
         for policy in policies where !applications.contains(where: { $0.category == policy.category }) && policy.existingFolders.isEmpty {
             issues[policy.category + ":notInstalled", default: 0] += 1
         }
@@ -206,6 +260,84 @@ struct AIAppTargets {
     /// read is dropped ("Failed to get a SecCodeRef") instead of routed.
     static func providerCanRead(_ path: String, folders: [String]) -> Bool {
         providerReadableRoots.contains(where: path.hasPrefix) || folders.contains { path.hasPrefix($0 + "/") }
+    }
+
+    /// Mach-O executables to match by path. In an application: the files in its `MacOS` and
+    /// `Helpers` folders, which include nested apps, XPC services and framework helpers. In a code
+    /// folder: every executable file. Links are not followed; reads directory entries and the first
+    /// four bytes of each candidate.
+    static func executables(in root: String, bundle: Bool, depth: Int = 10, limit: Int = 20000) -> [String] {
+        let keys: [URLResourceKey] = [.isRegularFileKey, .isSymbolicLinkKey]
+        guard let entries = FileManager.default.enumerator(at: URL(fileURLWithPath: root, isDirectory: true),
+                                                           includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]) else { return [] }
+        var found: [String] = [], visited = 0
+        for case let entry as URL in entries {
+            visited += 1
+            guard visited <= limit else { break }
+            if entries.level > depth { entries.skipDescendants(); continue }
+            if bundle, !["MacOS", "Helpers"].contains(entry.deletingLastPathComponent().lastPathComponent) { continue }
+            guard let values = try? entry.resourceValues(forKeys: Set(keys)), values.isRegularFile == true,
+                  values.isSymbolicLink != true, FileManager.default.isExecutableFile(atPath: entry.path),
+                  isMachO(entry.path) else { continue }
+            found.append(entry.standardizedFileURL.path)
+        }
+        return found.sorted()
+    }
+    /// The copy a rule names when several share an identifier: the highest bundle version
+    /// (an updater installs the new version beside the old one), then the last path.
+    static func preferredCopy(_ members: [Application]) -> String? {
+        func version(_ member: Application) -> String {
+            guard let bundle = member.bundle else { return "" }
+            let info = NSDictionary(contentsOfFile: bundle + "/Contents/Info.plist")
+            return (info?["CFBundleVersion"] as? String) ?? (info?["CFBundleShortVersionString"] as? String) ?? ""
+        }
+        return members.max { a, b in
+            switch version(a).compare(version(b), options: .numeric) {
+            case .orderedAscending: return true
+            case .orderedDescending: return false
+            case .orderedSame: return a.path < b.path
+            }
+        }?.path
+    }
+    static func isMachO(_ path: String) -> Bool {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return false }
+        defer { try? handle.close() }
+        guard let bytes = try? handle.read(upToCount: 4), bytes.count == 4 else { return false }
+        let magic = bytes.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }
+        return [0xfeedfacf, 0xcffaedfe, 0xfeedface, 0xcefaedfe, 0xcafebabe, 0xbebafeca, 0xcafebabf, 0xbfbafeca].contains(magic)
+    }
+
+    /// The embedded signing identifier and Team ID, without validating the code.
+    struct Identity: Equatable, Sendable { let identifier: String; let team: String? }
+    static func identity(_ path: String) -> Identity? {
+        var code: SecStaticCode?; var info: CFDictionary?
+        guard SecStaticCodeCreateWithPath(URL(fileURLWithPath: path) as CFURL, [], &code) == errSecSuccess, let code,
+              SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
+              let values = info as? [String: Any], let id = values[kSecCodeInfoIdentifier as String] as? String,
+              AppProxyCode.isSigningIdentifier(id) else { return nil }
+        let team = (values[kSecCodeInfoTeamIdentifier as String] as? String).flatMap { AppProxyCode.isTeamIdentifier($0) ? $0 : nil }
+        return Identity(identifier: id, team: team)
+    }
+    /// `identity`, reread only when the file's device, inode, size or modification time changes.
+    static func cachedIdentity(_ path: String) -> Identity? { identityCache.value(path) }
+    private static let identityCache = IdentityCache()
+    private final class IdentityCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var entries: [String: (key: String, identity: Identity?)] = [:]
+        func value(_ path: String) -> Identity? {
+            var info = stat()
+            guard stat(path, &info) == 0 else { return nil }
+            let key = "\(info.st_dev):\(info.st_ino):\(info.st_size):\(info.st_mtimespec.tv_sec).\(info.st_mtimespec.tv_nsec)"
+            lock.lock()
+            if let cached = entries[path], cached.key == key { lock.unlock(); return cached.identity }
+            lock.unlock()
+            let identity = AIAppTargets.identity(path)
+            lock.lock()
+            if entries.count >= 8192 { entries.removeAll() }
+            entries[path] = (key, identity)
+            lock.unlock()
+            return identity
+        }
     }
 
     /// Read Info.plist directly: Bundle(url:) returns Bundle.main for the running app.

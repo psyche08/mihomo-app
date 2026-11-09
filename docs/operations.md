@@ -105,8 +105,10 @@ working TUN connection is not evidence that App Proxy captured it.
 
 ## App Proxy configuration size and updates
 
-The rules hold one shared, path-less tool entry per signing identifier and one rule
-per installed top-level application or launch host, so the configuration stays small.
+The rules hold one shared tool list and one rule per installed top-level application
+or launch host. The list has a tool entry with its path for each found executable of a
+listed signing identifier and Team ID (inside found applications and granted folders),
+and one path-less entry for an identifier with none.
 Each install logs its measured size and rule and tool counts:
 
 ```bash
@@ -115,8 +117,14 @@ Each install logs its measured size and rule and tool counts:
 
 An update that replaces a top-level application or a code folder logs
 `event=app_proxy_refresh reason=update` within a few seconds (FSEvents); the periodic
-pass runs every 3 minutes as a fallback. Helpers and CLIs match by identifier and
-Team ID, so their updates need no new rules.
+pass runs every 3 minutes as a fallback. To see which executables have path entries:
+
+```bash
+mihomoboxctl app-proxy targets chatgpt
+```
+
+`matchedByPath` lists them for every configured folder; the installed rules keep only
+those in folders the user approved, because the provider cannot validate code elsewhere.
 
 ## Verify App Proxy without system proxy or TUN
 
