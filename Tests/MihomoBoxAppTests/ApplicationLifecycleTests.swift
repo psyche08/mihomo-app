@@ -38,6 +38,32 @@ final class ApplicationLifecycleTests: XCTestCase {
     XCTAssertEqual(AppVersionMenuPolicy.title(bundle: bundle), "Version 0.8.4")
   }
 
+  func testVersionMenuAppendsTheBuildNumber() throws {
+    func title(build: String) throws -> String {
+      let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("mihomobox-version-build-\(UUID().uuidString).bundle")
+      defer { try? FileManager.default.removeItem(at: root) }
+      try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+      let info: [String: Any] = [
+        "CFBundleIdentifier": "dev.linsheng.mihomo-app.version-tests.build",
+        "CFBundlePackageType": "BNDL",
+        "CFBundleShortVersionString": "1.1.2",
+        "CFBundleVersion": build,
+      ]
+      let data = try PropertyListSerialization.data(
+        fromPropertyList: info,
+        format: .xml,
+        options: 0
+      )
+      try data.write(to: root.appendingPathComponent("Info.plist"))
+      return AppVersionMenuPolicy.title(bundle: try XCTUnwrap(Bundle(url: root)))
+    }
+
+    XCTAssertEqual(try title(build: "1127"), "Version 1.1.2 (1127)")
+    XCTAssertEqual(try title(build: "1.1.2"), "Version 1.1.2")
+    XCTAssertEqual(try title(build: ""), "Version 1.1.2")
+  }
+
   func testVersionMenuFailsClosedWhenBundleVersionIsMissing() throws {
     let root = FileManager.default.temporaryDirectory
       .appendingPathComponent("mihomobox-version-missing-\(UUID().uuidString).bundle")

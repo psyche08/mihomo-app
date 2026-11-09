@@ -9,7 +9,15 @@ enum AppVersionMenuPolicy {
     else {
       return "Version unavailable"
     }
-    return "Version \(version)"
+    // Every local build of a release shares the marketing version, so the build
+    // number is what tells two installed builds apart.
+    guard
+      let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
+      !build.isEmpty, build != version
+    else {
+      return "Version \(version)"
+    }
+    return "Version \(version) (\(build))"
   }
 }
 
