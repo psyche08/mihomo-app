@@ -97,7 +97,7 @@ final class AppProxyCoordinatorTests: XCTestCase {
         XCTAssertEqual(AIAppTargets.requirement(["b", "a", "a"]), "(a) or (b)")
         XCTAssertEqual(AIAppTargets.requirement(["a", "a"]), "a")
     }
-    func testOnlyResponsibleCodeListsItsCategory() throws {
+    func testResponsibleCodeListsOnlyWhatItCanStart() throws {
         let fm = FileManager.default
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent(".build/responsible-rule-test-\(UUID().uuidString)")
@@ -128,27 +128,98 @@ final class AppProxyCoordinatorTests: XCTestCase {
         let main = try bundle(app, executable: "Tool")
         let nested = try bundle(nestedApp, executable: "Tool Helper")
         let login = try bundle(loginItem, executable: "Tool Login")
+        let other = try bundle(root.appendingPathComponent("Other.app"), executable: "Other")
         let helper = app.appendingPathComponent("Contents/MacOS/tool-helper")
         let cli = root.appendingPathComponent("cli")
         try copyTrue(helper); try copyTrue(cli)
-        XCTAssertEqual([main, login, cli, helper, nested].map { AIAppTargets.startsResponsible($0.path) },
-                       [true, true, true, false, false])
+        XCTAssertEqual([main, login, cli, helper, nested, other].map { AIAppTargets.startsResponsible($0.path) },
+                       [true, true, true, false, false, true])
         try fm.removeItem(at: loginItem)
         try sign(helper, "helper"); try sign(nestedApp, "nested"); try sign(app, "main"); try sign(cli, "cli")
-        var entry = AppProxyEntry.legacyDefaults[1]
+        try sign(root.appendingPathComponent("Other.app"), "other")
+        // An application category: a CLI category lists all of its code as launched CLIs.
+        var entry = AppProxyEntry.defaults.first { $0.id == "jetbrains" }!
+        entry.teamIdentifiers = []
         entry.directories = [root.path]
         let discovered = try AIAppTargets(requireAll: false, applications: [entry], applicationDirectories: [])
-        let combined = try AIAppTargets(combining: [discovered])
-        let all = Set([main, nested, helper, cli].map(\.path))
+        let combined = try AIAppTargets(combining: [discovered], toolsByIdentifier: false)
+        let application = Set([main, nested, helper].map(\.path))
         for targets in [discovered, combined] {
             func tools(_ name: String) -> Set<String> {
                 Set(targets.rules.first { $0.matchSigningIdentifier == prefix + name }?.matchTools?.compactMap(\.matchPath) ?? [])
             }
-            XCTAssertTrue(tools("main").isSuperset(of: all))
-            XCTAssertTrue(tools("cli").isSuperset(of: all))
+            // An application lists its own code and code outside any bundle, not another application.
+            XCTAssertTrue(tools("main").isSuperset(of: application.union([cli.path])))
+            XCTAssertFalse(tools("main").contains(other.path))
+            XCTAssertTrue(tools("other").isSuperset(of: [other.path, cli.path]))
+            XCTAssertTrue(tools("other").isDisjoint(with: application))
+            // A CLI starts other loose code, never an application's helpers.
+            XCTAssertTrue(tools("cli").contains(cli.path))
+            XCTAssertTrue(tools("cli").isDisjoint(with: application.union([other.path])))
             XCTAssertEqual(tools("helper"), [helper.path])
             XCTAssertEqual(tools("nested"), [nested.path])
         }
+    }
+    func testMayStartOwnApplicationAndLooseCode() {
+        let app = "/Applications/Tool.app/Contents/MacOS/Tool"
+        XCTAssertEqual(AIAppTargets.topLevelApplication("/Applications/Tool.app/Contents/Frameworks/H.app/Contents/MacOS/H"),
+                       "/Applications/Tool.app")
+        XCTAssertNil(AIAppTargets.topLevelApplication("/opt/homebrew/bin/tool"))
+        XCTAssertTrue(AIAppTargets.mayStart(app, "/Applications/Tool.app/Contents/Frameworks/H.app/Contents/MacOS/H"))
+        XCTAssertTrue(AIAppTargets.mayStart(app, "/Users/u/.local/bin/uv"))
+        XCTAssertFalse(AIAppTargets.mayStart(app, "/Applications/Other.app/Contents/MacOS/Other"))
+        XCTAssertFalse(AIAppTargets.mayStart("/opt/homebrew/bin/tool", app))
+        XCTAssertTrue(AIAppTargets.mayStart("/opt/homebrew/bin/tool", "/Users/u/.local/bin/uv"))
+    }
+    func testToolsByIdentifierKeepsGenericIdentifiersExact() {
+        func tool(_ id: String, _ requirement: String, _ path: String) -> NEAppRule {
+            let rule = NEAppRule(signingIdentifier: id, designatedRequirement: requirement)
+            rule.matchPath = path
+            return rule
+        }
+        let team = "identifier \"com.vendor.cli\" and anchor apple generic and certificate leaf[subject.OU] = TEAM"
+        let collapsed = AIAppTargets.byIdentifier([
+            tool("com.vendor.cli", team, "/v/1/cli"), tool("com.vendor.cli", team, "/v/2/cli"),
+            tool("node", "identifier node and anchor apple generic and certificate leaf[subject.OU] = TEAM", "/v/node"),
+            tool("com.adhoc.cli", "cdhash H\"00\"", "/v/adhoc"),
+        ])
+        XCTAssertEqual(collapsed.count, 3)
+        let vendor = collapsed.first { $0.matchSigningIdentifier == "com.vendor.cli" }
+        XCTAssertNil(vendor?.matchPath)
+        XCTAssertEqual(vendor?.matchDesignatedRequirement, team)
+        XCTAssertEqual(collapsed.first { $0.matchSigningIdentifier == "node" }?.matchPath, "/v/node")
+        XCTAssertEqual(collapsed.first { $0.matchSigningIdentifier == "com.adhoc.cli" }?.matchPath, "/v/adhoc")
+    }
+    func testWithoutLaunchedCLIsKeepsOwnCodeAndHosts() {
+        func rule(_ id: String, path: String?, tools: [NEAppRule]) -> NEAppRule {
+            let rule = NEAppRule(signingIdentifier: id, designatedRequirement: "identifier \"\(id)\"")
+            rule.matchPath = path; rule.matchTools = tools
+            return rule
+        }
+        let own = rule("com.a.helper", path: "/A.app/h", tools: [])
+        let ownCLI = rule("com.a.cli", path: "/bin/a", tools: [])
+        let otherCLI = rule("com.b.cli", path: "/bin/b", tools: [])
+        let rules = [rule("com.a.app", path: "/A.app/a", tools: [own, ownCLI, otherCLI]),
+                     rule("com.apple.Terminal", path: "/T.app/t", tools: [ownCLI, otherCLI])]
+        let reduced = AIAppTargets.withoutLaunchedCLIs(rules,
+            pathCategories: ["/A.app/a": "a", "/A.app/h": "a", "/bin/a": "a", "/bin/b": "b"],
+            identifierCategories: ["com.a.app": ["a"], "com.a.helper": ["a"], "com.a.cli": ["a"], "com.b.cli": ["b"]])
+        XCTAssertEqual(reduced[0].matchTools?.compactMap(\.matchPath), ["/A.app/h", "/bin/a"])
+        XCTAssertEqual(reduced[1].matchTools?.compactMap(\.matchPath), ["/bin/a", "/bin/b"])
+        XCTAssertEqual(rules[0].matchTools?.count, 3, "the original rules are not mutated")
+    }
+    func testUpdateRootsFollowSelectedApplications() {
+        let home = URL(fileURLWithPath: "/Users/u")
+        var claude = AppProxyEntry.defaults.first { $0.id == "claude" }!
+        claude.directories = ["/opt/tools"]
+        let roots = AIAppTargets.updateRoots(applications: [claude], homeDirectory: home)
+        XCTAssertTrue(roots.contains("/Users/u/Library/Application Support/Claude/claude-code"))
+        XCTAssertTrue(roots.contains("/Users/u/.claude/remote/ccd-cli"))
+        XCTAssertTrue(roots.contains("/opt/tools"))
+        XCTAssertFalse(roots.contains("/Users/u/.codex/computer-use"))
+        let chatgpt = AIAppTargets.updateRoots(applications: AppProxyEntry.defaults.filter { $0.id == "chatgpt" }, homeDirectory: home)
+        XCTAssertTrue(chatgpt.contains("/Users/u/.codex/computer-use"))
+        XCTAssertFalse(chatgpt.contains("/Users/u/.claude/remote/ccd-cli"))
     }
     @MainActor func testConfigurationSizeCountsSharedToolsOncePerRule() {
         let tool = NEAppRule(signingIdentifier: "dev.linsheng.tool", designatedRequirement: "identifier \"dev.linsheng.tool\"")

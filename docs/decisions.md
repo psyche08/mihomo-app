@@ -519,3 +519,31 @@ through its application's route. None of the current targets ships an embedded
 login item or launchd agent. Rejected: shortening tool requirements (weaker
 identity), and moving the duplicated `targets` list out of the provider
 configuration (a provider protocol change for about 60 KB).
+
+## 2026-11-09: App Proxy rules scale per application; updates are event driven
+
+Each Team ID policy multiplied the configuration: every responsible rule of a
+category listed every executable of that category, and launchers added every CLI.
+Locally ChatGPT and Claude produced 62 rules with 513 tool entries; ChatGPT alone
+had six responsible rules of 55 entries each. Vendors update their applications and
+CLIs in place, which left new versions unrouted until the next 20 s pass.
+
+Decision:
+- A responsible rule lists its own top-level application's code, code outside any
+  bundle, and, for launchers, the verified CLIs. Applications of the same category
+  start each other through LaunchServices, which makes the started one responsible.
+- Over the 440 KiB budget the host drops the launched-CLI tier
+  (`reducedCoverage=launchedCLIs`) instead of failing. Launch hosts keep their CLIs.
+- FSEvents on the selected applications' discovery roots wakes maintenance.
+- Mihomo process routes are pushed before the NetworkExtension configuration is
+  saved, so TUN and the system proxy route a new version first.
+- Path-less tool entries per vendor identifier are an experiment behind
+  `appProxy.toolsByIdentifier.experiment`, off by default.
+
+Trade-off: an application that execs another application's bundled code directly
+(not through LaunchServices) leaves that code unmatched; it connects directly, or
+through Mihomo with TUN on. In the reduced tier, CLIs that another selected
+application starts have the same fallback. Rejected for now: moving CLIs to Mihomo
+over TUN only (reverses the 2026-10-26 launch-host decision), and a transparent
+proxy (captures all traffic and coexists poorly with the MTTA DNS proxy and content
+filter).

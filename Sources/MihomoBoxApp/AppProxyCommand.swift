@@ -94,6 +94,7 @@ import MihomoControl
             "identityReady": status.identityReady, "verifiedTargets": status.verifiedTargetCount,
             "identityIssue": status.identityIssue.map { $0 as Any } ?? NSNull(),
             "discoveryIssues": status.discoveryIssues,
+            "reducedCoverage": status.reducedCoverage.map { $0 as Any } ?? NSNull(),
             // The same process-validation receipts as the app's diagnostics: PIDs and stages, no paths or traffic.
             "diagnostics": status.diagnostics.map { live in
                 ["generation": live.generation?.uuidString as Any? ?? NSNull(), "counters": live.counters,

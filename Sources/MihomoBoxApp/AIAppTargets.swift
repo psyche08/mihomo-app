@@ -209,15 +209,20 @@ struct AIAppTargets {
             let rule = NEAppRule(signingIdentifier: id, designatedRequirement: Self.requirement(members.map(\.requirement)))
             if members.count == 1 { rule.matchPath = members[0].path }
             let categories = Set(members.map(\.category))
-            // Only a responsible process needs its category's code: macOS attributes the
-            // processes it starts to it. Other bundled code is started by its application and
-            // matches only itself. Listing the category under every helper grew with the square
-            // of the category's size, past NetworkExtension's 512 KiB configuration limit.
-            guard members.contains(where: \.responsible) else {
+            // Only a responsible process needs other code: macOS attributes the processes it
+            // starts to it. Other bundled code is started by its application and matches only
+            // itself. Listing the category under every helper grew with the square of the
+            // category's size, past NetworkExtension's 512 KiB configuration limit.
+            let starters = members.filter(\.responsible).map(\.path)
+            guard !starters.isEmpty else {
                 rule.matchTools = Self.uniqueByPath(members.map(\.rule))
                 return rule
             }
-            var matched = roots.filter { categories.contains($0.category) }.map(\.rule)
+            // A responsible process lists what it can start: its own application's code and code
+            // outside any bundle, not every application of the category (see `mayStart`).
+            var matched = members.map(\.rule) + roots.filter { candidate in
+                categories.contains(candidate.category) && starters.contains { Self.mayStart($0, candidate.path) }
+            }.map(\.rule)
             // An application may launch another application's CLI (Claude Code running codex).
             // macOS attributes it to the launching application; the provider routes the CLI by
             // its own identity, so it still uses the CLI's own application route.
@@ -259,7 +264,9 @@ struct AIAppTargets {
 
     /// Union already verified per-application discoveries. Shared responsible
     /// hosts merge only their explicit tools; nil must never expand inheritance.
-    init(combining groups: [AIAppTargets]) throws {
+    /// `toolsByIdentifier` is the experiment in `toolsByIdentifierKey`.
+    init(combining groups: [AIAppTargets],
+         toolsByIdentifier: Bool = UserDefaults.standard.bool(forKey: AIAppTargets.toolsByIdentifierKey)) throws {
         var identities: [String: Target] = [:]
         var tools: [String: [NEAppRule]] = [:], requirements: [String: [String]] = [:], paths: [String: Set<String>] = [:]
         var pathless = Set<String>()
@@ -288,7 +295,8 @@ struct AIAppTargets {
         rules = tools.keys.sorted().map { id in
             let rule = NEAppRule(signingIdentifier: id, designatedRequirement: Self.requirement(requirements[id] ?? []))
             if !pathless.contains(id), let only = paths[id], only.count == 1 { rule.matchPath = only.first }
-            rule.matchTools = Self.uniqueByPath(tools[id] ?? [])
+            let unique = Self.uniqueByPath(tools[id] ?? [])
+            rule.matchTools = toolsByIdentifier ? Self.byIdentifier(unique) : unique
             return rule
         }
         issues = groups.flatMap(\.issues)
@@ -373,6 +381,89 @@ struct AIAppTargets {
                 .standardizedFileURL.resolvingSymlinksInPath().path == path else { return false }
         let container = root.deletingLastPathComponent().path
         return !container.contains(".app/") || container.hasSuffix(".app/Contents/Library/LoginItems")
+    }
+
+    /// Code that a responsible process at `starter` starts without LaunchServices, so that macOS
+    /// attributes it to that process: code of the same top-level application, and code outside
+    /// any bundle. Another top-level application, started through LaunchServices, is its own
+    /// responsible process and lists its own code.
+    static func mayStart(_ starter: String, _ path: String) -> Bool {
+        guard let application = topLevelApplication(path) else { return true }
+        return topLevelApplication(starter) == application
+    }
+    /// The outermost `.app` containing `path`, or nil for code outside any bundle.
+    static func topLevelApplication(_ path: String) -> String? {
+        path.range(of: ".app/").map { String(path[..<$0.lowerBound]) + ".app" }
+    }
+
+    /// Experiment, off by default: one path-less tool entry per vendor signing identifier, so a
+    /// new version of a tool needs no new entry. `NEAppRule.h` documents tools by identifier
+    /// (Terminal + curl); matching a CLI that LaunchServices does not know is unverified.
+    static let toolsByIdentifierKey = "appProxy.toolsByIdentifier.experiment"
+    /// Generic identifiers (no reverse-DNS dot, e.g. `node`) and code without a Team ID keep
+    /// their exact paths: an identifier alone would select unrelated binaries.
+    static func byIdentifier(_ tools: [NEAppRule]) -> [NEAppRule] {
+        var exact: [NEAppRule] = [], vendor: [String: [String]] = [:]
+        for tool in tools {
+            if tool.matchSigningIdentifier.contains("."), tool.matchDesignatedRequirement.contains("subject.OU") {
+                vendor[tool.matchSigningIdentifier, default: []].append(tool.matchDesignatedRequirement)
+            } else { exact.append(tool) }
+        }
+        return exact + vendor.keys.sorted().map {
+            NEAppRule(signingIdentifier: $0, designatedRequirement: requirement(vendor[$0] ?? []))
+        }
+    }
+
+    /// These rules without other applications' CLIs under application rules (`capturesLaunchedCLIs`):
+    /// the first coverage given up when the configuration exceeds its budget. Such a CLI then
+    /// connects without the provider; under TUN, Mihomo's process rules still route it.
+    func withoutLaunchedCLIs() -> [NEAppRule] {
+        Self.withoutLaunchedCLIs(rules,
+            pathCategories: Dictionary(targets.map { ($0.path, $0.category) }, uniquingKeysWith: { first, _ in first }),
+            identifierCategories: Dictionary(grouping: targets, by: \.id).mapValues { Set($0.map(\.category)) })
+    }
+    /// Launch-host rules, whose identifier has no target, keep every tool. Returns copies.
+    static func withoutLaunchedCLIs(_ rules: [NEAppRule], pathCategories: [String: String],
+                                    identifierCategories: [String: Set<String>]) -> [NEAppRule] {
+        rules.map { rule in
+            let copy = NEAppRule(signingIdentifier: rule.matchSigningIdentifier, designatedRequirement: rule.matchDesignatedRequirement)
+            copy.matchPath = rule.matchPath
+            guard let own = identifierCategories[rule.matchSigningIdentifier] else {
+                copy.matchTools = rule.matchTools
+                return copy
+            }
+            copy.matchTools = rule.matchTools?.filter { tool in
+                let categories = tool.matchPath.flatMap { pathCategories[$0] }.map { Set([$0]) }
+                    ?? identifierCategories[tool.matchSigningIdentifier] ?? []
+                return !own.isDisjoint(with: categories)
+            }
+            return copy
+        }
+    }
+
+    /// Directories whose changes can add, replace or remove the selected applications' code:
+    /// application folders, the updaters' version trees and the conventional CLI folders.
+    /// A change wakes maintenance; the pass itself decides whether anything changed.
+    static func updateRoots(applications: [AppProxyEntry], homeDirectory: URL? = nil) -> [String] {
+        let home = homeDirectory ?? FileManager.default.homeDirectoryForCurrentUser
+        var roots = ["/Applications", home.appendingPathComponent("Applications").path,
+                     "/opt/homebrew/bin", "/usr/local/bin", home.appendingPathComponent(".local/bin").path]
+        let selected = Set(applications.map(\.id))
+        if selected.contains("chatgpt") {
+            roots += [home.appendingPathComponent(".codex/computer-use").path,
+                      home.appendingPathComponent("Library/Application Support/Codex/artifact-sessions/runtime-generations").path]
+        }
+        if !selected.isDisjoint(with: ["claude", "claude_cli"]) || applications.contains(where: { $0.teamIdentifiers.contains("Q6L2SF6YDW") }) {
+            roots += claudeCodeRoots.map { home.appendingPathComponent($0.0).path }
+        }
+        for entry in applications {
+            roots += entry.directories
+            roots += entry.executablePaths.map { URL(fileURLWithPath: $0).deletingLastPathComponent().path }
+            if let path = entry.path {
+                roots.append(path.hasSuffix(".app") ? path : URL(fileURLWithPath: path).deletingLastPathComponent().path)
+            }
+        }
+        return Array(Set(roots)).sorted()
     }
 
     /// One OS rule may stand for several approved copies of an identifier: match any of their requirements.

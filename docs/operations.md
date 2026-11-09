@@ -103,6 +103,28 @@ App Proxy + TUN operation, keep System Proxy off and distinguish the two
 application-specific inbounds from `DEFAULT-TUN`. A Team ID application's
 working TUN connection is not evidence that App Proxy captured it.
 
+## App Proxy configuration size and updates
+
+Each install logs its measured size and whether the launched-CLI tier was dropped:
+
+```bash
+/usr/bin/log show --last 10m --info --predicate 'eventMessage CONTAINS "app_proxy_configuration_size"'
+```
+
+`reduced=launchedCLIs` (also `reducedCoverage` in `mihomoboxctl app-proxy status`)
+means CLIs that another selected application starts are not captured by App Proxy;
+keep TUN on so Mihomo's process rules route them. An application or CLI update
+logs `event=app_proxy_refresh reason=update` within a few seconds.
+
+The path-less tool experiment is off by default. Enable it only for a test, then
+toggle App Proxy so the configuration is rebuilt, and verify with
+`mihomoboxctl app-proxy flows` that an updated CLI is still captured:
+
+```bash
+defaults write dev.linsheng.mihomo-app appProxy.toolsByIdentifier.experiment -bool YES
+defaults delete dev.linsheng.mihomo-app appProxy.toolsByIdentifier.experiment
+```
+
 ## Verify App Proxy without system proxy or TUN
 
 An active row proves enrollment, not that macOS diverted that application's

@@ -117,6 +117,10 @@ struct AppProxyView: View {
                 Text(issue == "rollbackUnverified" ? "App Proxy could not verify that interception was disabled. Check MihomoBox VPN status in System Settings before retrying." : "Application identity protection: \(issue). Review code access, then turn App Proxy off and on to retry.")
                     .font(.callout).foregroundStyle(.orange)
             }
+            if model.extensionStatus.reducedCoverage == "launchedCLIs" {
+                Text("Configuration limit reached: CLIs started by another selected application connect without App Proxy. With TUN on, Mihomo's process rules still route them.")
+                    .font(.caption).foregroundStyle(.orange)
+            }
             if !model.extensionStatus.discoveryIssues.isEmpty {
                 Text("Discovery exclusions: " + model.extensionStatus.discoveryIssues.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)" }.joined(separator: ", "))
                     .font(.caption).foregroundStyle(.orange)

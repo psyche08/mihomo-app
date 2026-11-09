@@ -91,6 +91,31 @@ NetworkExtension measures it, which drops object sharing, so the host measures t
 provider configuration plus detached rule copies before saving and refuses above
 440 KiB with `capacity`, logging `event=app_proxy_configuration_size`. That model
 read 729319 bytes for the 781915-byte configuration.
+
+A responsible process lists only what it can start: its own top-level application's
+code, code outside any bundle, and (for launchers) the verified CLIs. Another
+application of the same category is reached through LaunchServices and is its own
+responsible process, so its code is not listed. This keeps entries linear in the
+category's size instead of applications × executables. When the complete rules
+still exceed the budget, the host drops the launched-CLI tier first: each
+application rule keeps only its own category's code, launch hosts (terminals,
+editors, SSH) keep every CLI, the size log reports `reduced=launchedCLIs`, and the
+status shows `reducedCoverage`. CLIs that another selected application starts then
+connect without App Proxy; with TUN on, Mihomo's process rules still route them.
+Only when this tier also exceeds the budget does the save fail with `capacity`.
+
+Updates are event driven. FSEvents watches the discovery roots of the selected
+applications (`/Applications`, `~/Applications`, the conventional CLI directories,
+Claude Code and Codex runtime roots, and each entry's directories) with a 3 s
+latency; a change wakes the maintenance pass instead of waiting up to 20 s, and the
+pass decides whether the verified snapshot changed. Before saving a new
+NetworkExtension configuration the coordinator pushes the Mihomo process routes, so
+a new version's TUN and system-proxy traffic is routed while NetworkExtension
+prepares. The defaults key `appProxy.toolsByIdentifier.experiment` (off) collapses
+tool entries of a reverse-DNS identifier with a Team ID requirement into one
+path-less entry, so a new version needs no new entry. `NEAppRule.h` documents tools
+matched by identifier; whether a CLI outside LaunchServices matches this way is
+unverified, so the key stays off until tested.
 Executable and metadata write access and writable package roots are rejected.
 The broker's v2 consent store does not reuse earlier broader code-root grants.
 

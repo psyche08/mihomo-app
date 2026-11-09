@@ -72,8 +72,12 @@ public struct AppProxyExtensionStatus: Equatable, Sendable {
     public var targetCounts: [String: Int]
     public var executables: [AppProxyExecutable]
     public var launchHosts: [AppProxyLaunchHost] = []
+    /// Coverage given up to fit NetworkExtension's configuration limit, e.g. `launchedCLIs`; nil when complete.
+    public var reducedCoverage: String?
     public init(available: Bool, enabled: Bool = false, connected: Bool = false, requiresReactivation: Bool = false, targetCounts: [String: Int] = [:], executables: [AppProxyExecutable] = [], identityReady: Bool = false, verifiedTargetCount: Int = 0,
-                identityIssue: String? = nil, diagnostics: AppProxyRuntimeStatus? = nil, discoveryIssues: [String: Int] = [:], applications: [String: AppProxyApplicationStatus] = [:], requestedEnabled: Bool? = nil) {
+                identityIssue: String? = nil, diagnostics: AppProxyRuntimeStatus? = nil, discoveryIssues: [String: Int] = [:], applications: [String: AppProxyApplicationStatus] = [:], requestedEnabled: Bool? = nil,
+                reducedCoverage: String? = nil) {
+        self.reducedCoverage = reducedCoverage
         self.applications = applications
         self.requestedEnabled = requestedEnabled ?? enabled
         self.available = available; self.enabled = enabled; self.connected = connected; self.targetCounts = targetCounts
