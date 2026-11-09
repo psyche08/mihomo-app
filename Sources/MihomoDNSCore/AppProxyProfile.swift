@@ -71,14 +71,18 @@ public enum AppProxyProfile {
     public static func processProviderName(_ id: String) -> String { "mihomobox-app-\(id)-processes" }
     /// Relative to Mihomo's home directory.
     public static func processProviderPath(_ id: String) -> String { "mihomobox/app-\(id)-processes.yaml" }
-    public static func processProviderContents(_ paths: [String]) throws -> String {
-        guard paths.allSatisfy(AppProxyProcessRoutes.isRoutable) else { throw AppProxySettingsError.invalidExecutables }
-        guard !paths.isEmpty else { return "payload: []\n" }
+    /// Exact executables as `PROCESS-PATH`, bundles and code folders as anchored `PROCESS-PATH-REGEX`.
+    public static func processProviderContents(_ paths: [String], prefixes: [String] = []) throws -> String {
+        guard paths.allSatisfy(AppProxyProcessRoutes.isRoutable),
+              prefixes.allSatisfy({ AppProxyProcessRoutes.isRoutable($0) && $0 != "/" }) else {
+            throw AppProxySettingsError.invalidExecutables
+        }
+        guard !paths.isEmpty || !prefixes.isEmpty else { return "payload: []\n" }
         // JSON string literals are valid YAML double-quoted scalars.
         let encoder = JSONEncoder(); encoder.outputFormatting = [.withoutEscapingSlashes]
-        let lines = try paths.sorted().map { path in
-            "  - " + String(decoding: try encoder.encode("PROCESS-PATH," + path), as: UTF8.self)
-        }
+        let rules = Array(Set(paths)).sorted().map { "PROCESS-PATH," + $0 }
+            + Array(Set(prefixes)).sorted().map { "PROCESS-PATH-REGEX," + AppProxyProcessRoutes.pattern(prefix: $0) }
+        let lines = try rules.map { "  - " + String(decoding: try encoder.encode($0), as: UTF8.self) }
         return (["payload:"] + lines).joined(separator: "\n") + "\n"
     }
 

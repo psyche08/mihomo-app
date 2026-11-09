@@ -7,7 +7,7 @@ private final class RoutingGateway: AppProxyRoutingGateway, @unchecked Sendable 
     var writes = 0
     var fail = false
     var failRead = false
-    var dropsExecutablePaths = false
+    var dropsPolicy = false
     func fetchAppProxyRouting() async throws -> AppProxyRoutingState {
         if failRead { throw AppProxySettingsError.staleState }; return state
     }
@@ -19,8 +19,8 @@ private final class RoutingGateway: AppProxyRoutingGateway, @unchecked Sendable 
         if fail { throw AppProxySettingsError.staleState }
         guard update.expectedRevision == state.revision else { throw AppProxySettingsError.staleState }
         state = .init(settings: update.settings, profile: state.profile, revision: "2")
-        if dropsExecutablePaths {
-            for index in state.settings.applications.indices { state.settings.applications[index].executablePaths = [] }
+        if dropsPolicy {
+            for index in state.settings.applications.indices { state.settings.applications[index].signingIdentifiers = [] }
         }
         return state
     }
@@ -64,9 +64,16 @@ private final class RoutingGateway: AppProxyRoutingGateway, @unchecked Sendable 
         self.enabled = enabled
     }
     func chooseApplication(port: UInt16) async throws -> AppProxyEntry? {
-        .init(id: "app_00000000-0000-0000-0000-000000000001", title: "Test App", path: "/Applications/Test.app", port: port)
+        .init(id: "app_00000000-0000-0000-0000-000000000001", title: "Test App", path: "/Applications/Test.app", port: port,
+              teamIdentifiers: ["TESTTEAM01"], signingIdentifiers: ["dev.test.app"])
     }
-    func chooseExecutable() async throws -> String? { "/usr/bin/curl" }
+    /// The coordinator reads the Team ID and identifiers from the code's signature.
+    func application(at path: String, port: UInt16) async throws -> AppProxyEntry {
+        let name = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+        return .init(id: "app_" + UUID().uuidString, title: name, path: path, port: port,
+                     teamIdentifiers: ["TESTTEAM02"], signingIdentifiers: [name])
+    }
+    func chooseFolder() async throws -> String? { FileManager.default.homeDirectoryForCurrentUser.path + "/tools" }
     var hosts: [AppProxyLaunchHost] = []
     func launchHosts() async -> [AppProxyLaunchHost] { hosts }
 }
@@ -117,44 +124,53 @@ final class AppProxyStoreTests: XCTestCase {
         XCTAssertTrue(model.draft.bypass.cidrs.isEmpty)
         XCTAssertEqual(model.draft.routes, routes)
     }
-    @MainActor func testDaemonDroppingExecutableMembershipCannotReportSuccessfulSave() async throws {
+    @MainActor func testDaemonDroppingPolicyFieldsCannotReportSuccessfulSave() async throws {
         let gateway = RoutingGateway(); let model = AppProxyStore(gateway: gateway); let service = ExtensionService()
         model.configure(service); await model.refresh()
-        try await model.setExecutablePaths(["/usr/bin/curl"], for: "chatgpt")
-        gateway.dropsExecutablePaths = true
-        do { try await model.apply(); XCTFail("Must verify saved membership") } catch {}
+        try await model.setPolicy(teamIdentifiers: ["2DC432GLL2"], signingIdentifiers: ["codex"], directories: [], for: "chatgpt")
+        gateway.dropsPolicy = true
+        do { try await model.apply(); XCTFail("Must verify the saved policy") } catch {}
         XCTAssertNil(model.routing)
-        XCTAssertEqual(model.draft.applications[0].executablePaths, ["/usr/bin/curl"])
+        XCTAssertEqual(model.draft.applications[0].signingIdentifiers, ["codex"])
         do { try await model.setEnabled(true); XCTFail("Must not enable after incomplete save") } catch {}
         XCTAssertFalse(service.enabled)
     }
-    @MainActor func testExecutableEditsValidateBeforeDraftAndPersistWithOwnerRoute() async throws {
+    @MainActor func testPolicyEditsValidateBeforeDraftAndPersistWithOwnerRoute() async throws {
         let gateway = RoutingGateway(); let model = AppProxyStore(gateway: gateway); let service = ExtensionService()
         model.configure(service); await model.refresh()
-        try await model.setExecutablePaths(["/usr/bin/curl"], for: "chatgpt")
-        XCTAssertEqual(model.draft.applications[0].executablePaths, ["/usr/bin/curl"])
-        XCTAssertTrue(gateway.state.settings.applications[0].executablePaths.isEmpty)
+        let chatgpt = AppProxyEntry.defaults[0]
+        func restore() async throws {
+            try await model.setPolicy(teamIdentifiers: chatgpt.teamIdentifiers, signingIdentifiers: chatgpt.signingIdentifiers,
+                                      directories: chatgpt.directories, for: "chatgpt")
+        }
+        try await model.setPolicy(teamIdentifiers: chatgpt.teamIdentifiers, signingIdentifiers: ["codex"], directories: [], for: "chatgpt")
+        XCTAssertEqual(model.draft.applications[0].signingIdentifiers, ["codex"])
+        XCTAssertEqual(gateway.state.settings.applications[0], chatgpt)
         XCTAssertEqual(model.changedApplicationCount, 1)
         try await model.apply()
-        XCTAssertEqual(gateway.state.settings.applications[0].executablePaths, ["/usr/bin/curl"])
+        XCTAssertEqual(gateway.state.settings.applications[0].signingIdentifiers, ["codex"])
+        XCTAssertEqual(gateway.state.settings.applications[0].directories, [])
         XCTAssertEqual(gateway.state.settings.routes["chatgpt"], "one")
         let saved = model.draft
         service.failScan = true
-        do { try await model.setExecutablePaths(["/invalid"], for: "chatgpt"); XCTFail("Expected signature failure") } catch {}
+        do { try await restore(); XCTFail("Expected discovery failure") } catch {}
         XCTAssertEqual(model.draft, saved)
         service.failScan = false
-        do { try await model.setExecutablePaths(["/usr/bin/curl"], for: "claude"); XCTFail("Expected duplicate rejection") } catch {}
+        do {
+            try await model.setPolicy(teamIdentifiers: ["Q6L2SF6YDW"], signingIdentifiers: ["codex"], directories: [], for: "chatgpt")
+            XCTFail("Team ID owned by claude")
+        } catch {}
         XCTAssertEqual(model.draft, saved)
         try await model.setEnabled(true)
-        do { try await model.setExecutablePaths([], for: "chatgpt"); XCTFail("Disable first") } catch {}
+        do { try await restore(); XCTFail("Disable first") } catch {}
         XCTAssertEqual(model.draft, saved)
         try await model.setEnabled(false)
-        try await model.setExecutablePaths([], for: "chatgpt")
+        try await restore()
         model.discardChanges()
         XCTAssertEqual(model.draft, saved)
-        try await model.setExecutablePaths([], for: "chatgpt")
+        try await restore()
         try await model.apply()
-        XCTAssertTrue(gateway.state.settings.applications[0].executablePaths.isEmpty)
+        XCTAssertEqual(gateway.state.settings.applications[0], chatgpt)
     }
     @MainActor func testAddRemoveAndEmptyListPersistWithoutChangingOtherRoutes() async throws {
         let gateway = RoutingGateway(); let model = AppProxyStore(gateway: gateway); let service = ExtensionService()
@@ -202,23 +218,29 @@ final class AppProxyStoreTests: XCTestCase {
         XCTAssertEqual(model.draft.applications.count, count + 1)
         XCTAssertNotNil(model.error)
     }
-    @MainActor func testPolicyNormalizesTeamsAndDirectoriesAndRejectsInvalidScopes() async throws {
+    @MainActor func testPolicyNormalizesTeamsIdentifiersAndFoldersAndRejectsInvalidPolicies() async throws {
         let gateway = RoutingGateway(); let model = AppProxyStore(gateway: gateway); let service = ExtensionService()
         model.configure(service); await model.refresh()
-        try await model.setPolicy(executablePaths: ["/usr/bin/curl"], teamIdentifiers: [" 2dc432gll2 "],
-                                  directories: ["/usr/local/../bin/"], for: "chatgpt")
+        try await model.setPolicy(teamIdentifiers: [" 2dc432gll2 "], signingIdentifiers: [" codex "],
+                                  directories: ["/usr/local/../bin/", "~/tools/../.codex/"], for: "chatgpt")
         let entry = try XCTUnwrap(model.draft.applications.first { $0.id == "chatgpt" })
         XCTAssertEqual(entry.teamIdentifiers, ["2DC432GLL2"])
-        XCTAssertEqual(entry.directories, ["/usr/bin"], "directories are stored canonically")
-        XCTAssertEqual(entry.executablePaths, ["/usr/bin/curl"])
-        XCTAssertTrue(entry.capturesLaunchedCLIs)
-        try await model.setPolicy(executablePaths: ["/usr/bin/curl"], teamIdentifiers: ["2DC432GLL2"], directories: ["/usr/bin"],
-                                  capturesLaunchedCLIs: false, for: "chatgpt")
-        XCTAssertEqual(model.draft.applications.first { $0.id == "chatgpt" }?.capturesLaunchedCLIs, false)
-        try await model.setExecutablePaths(["/usr/bin/curl"], for: "chatgpt")
-        XCTAssertEqual(model.draft.applications.first { $0.id == "chatgpt" }?.capturesLaunchedCLIs, false, "kept when not given")
-        do { try await model.setPolicy(executablePaths: [], teamIdentifiers: ["SHORT"], directories: [], for: "chatgpt"); XCTFail() } catch {}
-        do { try await model.setPolicy(executablePaths: [], teamIdentifiers: ["2DC432GLL2"], directories: [], for: "claude"); XCTFail("team owned by chatgpt") } catch {}
+        XCTAssertEqual(entry.signingIdentifiers, ["codex"])
+        XCTAssertEqual(entry.directories, ["/usr/bin", "~/.codex"], "folders are stored canonically, home folders as ~/")
+        let chosen = try await model.chooseFolder()
+        XCTAssertEqual(chosen, "~/tools")
+        for (teams, identifiers, directories) in [(["SHORT"], ["codex"], [String]()), (["2DC432GLL2"], ["a b"], []),
+                                                  (["2DC432GLL2"], ["codex"], ["/"]), (["2DC432GLL2"], ["codex", "codex"], [])] {
+            do {
+                try await model.setPolicy(teamIdentifiers: teams, signingIdentifiers: identifiers, directories: directories, for: "chatgpt")
+                XCTFail("\(teams) \(identifiers) \(directories)")
+            } catch {}
+        }
+        do {
+            try await model.setPolicy(teamIdentifiers: ["2DC432GLL2"], signingIdentifiers: [], directories: [], for: "claude")
+            XCTFail("Team ID owned by chatgpt")
+        } catch {}
+        XCTAssertEqual(model.draft.applications.first { $0.id == "chatgpt" }, entry)
         XCTAssertEqual(AppProxyStore.teamIdentifier(ofCodeAt: "/usr/bin/curl"), nil, "platform code has no Team ID")
     }
     @MainActor func testEnabledExtensionPreventsApplicationTopologyChanges() async throws {

@@ -925,24 +925,24 @@ private func printProfiles(json: Bool) throws {
 private let appProxyUsage = """
     usage: mihomoboxctl app-proxy status | set-all PROXY
            mihomoboxctl app-proxy policy show [APP] | migrate-defaults | add-defaults PROXY
-           mihomoboxctl app-proxy policy set APP [--team ID]... [--directory PATH]... [--executable PATH]...
-                                             [--launched-clis on|off]
+           mihomoboxctl app-proxy policy set APP [--team ID]... [--identifier ID]... [--directory PATH]...
            mihomoboxctl app-proxy targets APP | runtime | flows | enable APP [--approve] | disable APP | on | off
     """
 
 /// Show or replace one application's routing policy in the daemon-owned settings.
-/// `set` replaces all three scopes and keeps `--launched-clis` unless given; it takes effect
-/// at the next enable (or approval).
+/// `set` replaces the Team IDs, signing identifiers and code folders; it takes effect at the
+/// next enable (new folders need `enable APP --approve`).
 private func appProxyPolicy(_ arguments: [String]) throws -> Int32 {
     guard let data = try sendControl(.appProxyStatus) else { throw CLIError(message: "missing App Proxy state") }
     let state = try JSONDecoder().decode(AppProxyRoutingState.self, from: data)
     func policy(_ entry: AppProxyEntry) -> [String: Any] {
         ["id": entry.id, "title": entry.title, "teamIdentifiers": entry.teamIdentifiers,
-         "directories": entry.directories, "executablePaths": entry.executablePaths,
-         "capturesLaunchedCLIs": entry.capturesLaunchedCLIs]
+         "signingIdentifiers": entry.signingIdentifiers, "directories": entry.directories]
     }
-    func canonical(_ path: String) -> String {
-        URL(fileURLWithPath: (path as NSString).expandingTildeInPath).standardizedFileURL.resolvingSymlinksInPath().path
+    /// Keeps `~/` so the setting follows the user's home directory.
+    func folder(_ path: String) -> String {
+        guard path.hasPrefix("~/") else { return URL(fileURLWithPath: path).standardizedFileURL.path }
+        return "~" + URL(fileURLWithPath: String(path.dropFirst())).standardizedFileURL.path
     }
     switch arguments.first {
     case "show" where arguments.count <= 2:
@@ -1002,25 +1002,22 @@ private func appProxyPolicy(_ arguments: [String]) throws -> Int32 {
         guard let index = state.settings.applications.firstIndex(where: { $0.id == arguments[1] }) else {
             throw CLIError(message: "Unknown App Proxy application: \(arguments[1])")
         }
-        var teams: [String] = [], directories: [String] = [], executables: [String] = []
-        var launched = state.settings.applications[index].capturesLaunchedCLIs
+        var teams: [String] = [], identifiers: [String] = [], directories: [String] = []
         var rest = Array(arguments.dropFirst(2))
         while !rest.isEmpty {
             guard rest.count >= 2 else { throw CLIError(message: appProxyUsage) }
             switch rest[0] {
             case "--team": teams.append(rest[1].trimmingCharacters(in: .whitespaces).uppercased())
-            case "--directory": directories.append(canonical(rest[1]))
-            case "--executable": executables.append(canonical(rest[1]))
-            case "--launched-clis" where ["on", "off"].contains(rest[1]): launched = rest[1] == "on"
+            case "--identifier": identifiers.append(rest[1].trimmingCharacters(in: .whitespaces))
+            case "--directory": directories.append(folder(rest[1]))
             default: throw CLIError(message: appProxyUsage)
             }
             rest.removeFirst(2)
         }
         var settings = state.settings
         settings.applications[index].teamIdentifiers = teams
+        settings.applications[index].signingIdentifiers = identifiers
         settings.applications[index].directories = directories
-        settings.applications[index].executablePaths = executables
-        settings.applications[index].capturesLaunchedCLIs = launched
         try settings.validate()
         let update = AppProxyRoutingUpdate(settings: settings, expectedRevision: state.revision)
         _ = try sendControl(.setAppProxyRouting, payload: JSONEncoder().encode(update))
@@ -1071,19 +1068,18 @@ private func usage() {
       app-proxy policy add-defaults PROXY
                                       Add missing built-in Team ID policies (e.g. JetBrains)
                                       routed to PROXY; leaves interception off
-      app-proxy policy show [APP]     Show Team ID, directory and executable scopes
-      app-proxy policy set APP [--team ID]... [--directory PATH]... [--executable PATH]...
-                               [--launched-clis on|off]
-                                      Replace one app's scopes (applies at next enable);
-                                      --launched-clis: other apps' CLIs it launches keep
-                                      their own routes (on, default) or connect directly
-      app-proxy targets APP           List the signed executables the policy captures
+      app-proxy policy show [APP]     Show Team IDs, signing identifiers and code folders
+      app-proxy policy set APP [--team ID]... [--identifier ID]... [--directory PATH]...
+                                      Replace one app's policy (applies at next enable;
+                                      new folders need enable APP --approve). PATH may
+                                      start with ~/
+      app-proxy targets APP           List the installed applications the policy names
       app-proxy runtime               Show interception state per application
       app-proxy flows                 Show the verified process behind each App Proxy
                                       connection to Mihomo, by its source port
       app-proxy enable APP [--approve]
                                       Authorize and enable one app; --approve consents
-                                      to its scanned code and scopes like the app's sheet
+                                      to its code folders like the app's sheet
       app-proxy disable APP | on | off
                                       Disable one app, or resume/turn off App Proxy
       profile list [--json]           List imported local YAML profiles

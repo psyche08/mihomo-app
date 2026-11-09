@@ -1,6 +1,7 @@
 import Foundation
 import Darwin
 import Security
+import CryptoKit
 
 /// Shared host / sandbox broker / provider wire contract. Never contains traffic or credentials.
 public enum AppProxyIdentityFailure: String, Error, Codable, Sendable {
@@ -9,253 +10,115 @@ public enum AppProxyIdentityFailure: String, Error, Codable, Sendable {
     case codeAccessTimeout, providerTimeout
 }
 
-public struct AppProxyFileStamp: Codable, Equatable, Sendable {
-    public let device: Int32
-    public let inode: UInt64
-    public let size: Int64
-    public let modified: Int64
-    public let modifiedNS: Int64
-    public let changed: Int64
-    public let changedNS: Int64
-
+/// Syntax of Team IDs, signing identifiers and code folders, shared by the settings, the host,
+/// the code-access broker and the provider, and the code requirements built from them.
+public enum AppProxyCode {
+    public static func isTeamIdentifier(_ value: String) -> Bool {
+        value.utf8.count == 10 && value.utf8.allSatisfy { (48...57).contains($0) || (65...90).contains($0) }
+    }
+    /// Identifiers are embedded in requirement strings: printable ASCII without spaces, quotes or backslashes.
+    public static func isSigningIdentifier(_ value: String) -> Bool {
+        !value.isEmpty && value.utf8.count <= 255
+            && value.utf8.allSatisfy { $0 > 0x20 && $0 < 0x7f && $0 != 0x22 && $0 != 0x5c }
+    }
     public static func isCanonicalPath(_ path: String) -> Bool {
         let parts = path.split(separator: "/", omittingEmptySubsequences: false)
         return path.hasPrefix("/") && path.utf8.count <= 4096 && !path.contains("\0")
             && parts.dropFirst().allSatisfy { !$0.isEmpty && $0 != "." && $0 != ".." }
     }
-    /// Reject links in every component without requiring access to parent directories.
-    public static func read(_ path: String) throws -> Self {
-        guard Self.isCanonicalPath(path) else { throw AppProxyIdentityFailure.escapedPath }
-        // Opening ancestor directory FDs requires extra sandbox privileges even with O_EVTONLY.
-        // Darwin's public O_NOFOLLOW_ANY rejects links in *all* path components in one open.
-        let fd = open(path, O_RDONLY | O_NOFOLLOW_ANY | O_CLOEXEC)
-        guard fd >= 0 else {
-            switch errno {
-            case ENOENT: throw AppProxyIdentityFailure.missingFile
-            case ELOOP, ENOTDIR: throw AppProxyIdentityFailure.escapedPath
-            default: throw AppProxyIdentityFailure.permission
-            }
-        }
-        defer { close(fd) }
-        var s = stat()
-        guard fstat(fd, &s) == 0, s.st_mode & S_IFMT == S_IFREG else { throw AppProxyIdentityFailure.escapedPath }
-        return Self(device: s.st_dev, inode: s.st_ino, size: s.st_size,
-                    modified: Int64(s.st_mtimespec.tv_sec), modifiedNS: Int64(s.st_mtimespec.tv_nsec),
-                    changed: Int64(s.st_ctimespec.tv_sec), changedNS: Int64(s.st_ctimespec.tv_nsec))
-    }
-}
-
-public struct AppProxyCodeIdentity: Codable, Equatable, Sendable {
-    public let id: String
-    public let path: String
-    public let category: String
-    public let requirement: String
-    public let team: String?
-    public let cdHash: Data
-    public let stamp: AppProxyFileStamp
-
-    /// Security.framework treats a bundle executable as its enclosing code package.
-    /// Grant the nearest package, never an updater's version tree or user-data directory.
-    public static func accessURL(for path: String) throws -> URL {
-        guard AppProxyFileStamp.isCanonicalPath(path) else { throw AppProxyIdentityFailure.escapedPath }
-        let executable = URL(fileURLWithPath: path)
-        var parent = executable.deletingLastPathComponent()
-        while parent.path != "/" {
-            if parent.pathExtension == "app" {
-                guard path.hasPrefix(parent.path + "/Contents/") else { throw AppProxyIdentityFailure.escapedPath }
-                return parent
-            }
-            parent.deleteLastPathComponent()
-        }
-        return executable
-    }
-
-    public func validateAccessScope() throws {
-        let root = try Self.accessURL(for: path)
-        if root.path != path {
-            let fd = open(root.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY | O_CLOEXEC)
-            guard fd >= 0 else { throw AppProxyIdentityFailure.escapedPath }
-            close(fd)
-        }
-        // A capability must not give effective write access to the executable or its metadata.
-        var checked = [path]
-        if root.path != path {
-            checked += ["Contents/Info.plist", "Contents/CodeResources", "Contents/_CodeSignature/CodeResources"].map {
-                root.appendingPathComponent($0).path
-            }
-            guard access(root.path, W_OK) != 0 else { throw AppProxyIdentityFailure.permission }
-        }
-        for file in checked {
-            let fd = open(file, O_WRONLY | O_NOFOLLOW_ANY | O_CLOEXEC)
-            if fd >= 0 { close(fd); throw AppProxyIdentityFailure.permission }
-        }
-    }
-
-    public static func inspect(path: String, category: String, team: String? = nil, identifier: String? = nil) throws -> Self {
-        let before = try AppProxyFileStamp.read(path)
-        var code: SecStaticCode?
-        guard SecStaticCodeCreateWithPath(URL(fileURLWithPath: path) as CFURL, [], &code) == errSecSuccess, let code,
-              SecStaticCodeCheckValidity(code, SecCSFlags(rawValue: kSecCSStrictValidate | kSecCSCheckAllArchitectures), nil) == errSecSuccess else {
-            throw AppProxyIdentityFailure.signature
-        }
-        var info: CFDictionary?
-        guard SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
-              let v = info as? [String: Any], let id = v[kSecCodeInfoIdentifier as String] as? String,
-              let hash = v[kSecCodeInfoUnique as String] as? Data, !hash.isEmpty else { throw AppProxyIdentityFailure.signature }
-        let actualTeam = v[kSecCodeInfoTeamIdentifier as String] as? String
-        if let identifier, identifier != id { throw AppProxyIdentityFailure.signature }
-        if let team {
-            var anchor: SecRequirement?
-            guard actualTeam == team,
-                  SecRequirementCreateWithString("anchor apple generic" as CFString, [], &anchor) == errSecSuccess,
-                  SecStaticCodeCheckValidity(code, [], anchor) == errSecSuccess else { throw AppProxyIdentityFailure.signature }
-        }
-        var req: SecRequirement?; var text: CFString?
-        guard SecCodeCopyDesignatedRequirement(code, [], &req) == errSecSuccess, let req,
-              SecRequirementCopyString(req, [], &text) == errSecSuccess, let text else { throw AppProxyIdentityFailure.signature }
-        guard try AppProxyFileStamp.read(path) == before else { throw AppProxyIdentityFailure.changedFile }
-        return Self(id: id, path: path, category: category, requirement: text as String, team: actualTeam, cdHash: hash, stamp: before)
-    }
-
-    public func validateFile() throws {
-        guard try Self.inspect(path: path, category: category, team: team, identifier: id) == self else {
-            throw AppProxyIdentityFailure.changedFile
-        }
-    }
-}
-
-/// A user-approved policy admitting code beyond the exact discovered records:
-/// everything signed by one Team ID, or everything under one directory.
-/// The OS sees one rule per discovered signing identifier; the provider
-/// enforces the scope against the running code.
-public struct AppProxyScope: Codable, Hashable, Sendable {
-    public enum Kind: String, Codable, Sendable { case team, directory }
-    public let category: String
-    public let kind: Kind
-    public let value: String
-    public init(category: String, kind: Kind, value: String) {
-        self.category = category; self.kind = kind; self.value = value
-    }
-    public static func isTeamIdentifier(_ value: String) -> Bool {
-        value.utf8.count == 10 && value.utf8.allSatisfy { (48...57).contains($0) || (65...90).contains($0) }
-    }
-    public static func isDirectory(_ value: String) -> Bool {
-        value != "/" && AppProxyFileStamp.isCanonicalPath(value)
+    public static func isFolder(_ value: String) -> Bool {
+        value != "/" && isCanonicalPath(value)
             && !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
     }
-    public var isValid: Bool {
-        !category.isEmpty && category.utf8.count <= 64
-            && (kind == .team ? Self.isTeamIdentifier(value) : Self.isDirectory(value))
+    /// Code signed by one of `teams` through Apple's Developer ID or Mac App Store chain.
+    public static func teamRequirement(_ teams: [String]) -> String {
+        "anchor apple generic and " + teamClause(teams)
     }
-    /// Directory scopes admit any validly signed code (including ad-hoc); team scopes require the Apple anchor.
-    public var requirement: String? {
-        kind == .team ? "anchor apple generic and certificate leaf[subject.OU] = \"\(value)\"" : nil
+    /// One vendor signing identifier signed by one of `teams`: a version-independent tool entry.
+    public static func requirement(identifier: String, teams: [String]) -> String {
+        "anchor apple generic and identifier \"\(identifier)\" and " + teamClause(teams)
     }
-    /// The most specific scope admitting `path`: the deepest directory, then a team.
-    public static func match(path: String, team: String?, in scopes: [AppProxyScope]) -> AppProxyScope? {
-        let directories = scopes.filter { $0.kind == .directory && path.hasPrefix($0.value + "/") }
-        if let deepest = directories.max(by: { $0.value.utf8.count < $1.value.utf8.count }) { return deepest }
-        guard let team else { return nil }
-        return scopes.first { $0.kind == .team && $0.value == team }
+    private static func teamClause(_ teams: [String]) -> String {
+        let clauses = teams.map { "certificate leaf[subject.OU] = \"\($0)\"" }
+        return clauses.count == 1 ? clauses[0] : "(" + clauses.joined(separator: " or ") + ")"
+    }
+    /// Opens `path` as a directory without following a link in any component.
+    public static func requireReadableFolder(_ path: String) throws {
+        let fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY | O_CLOEXEC)
+        guard fd >= 0 else {
+            throw errno == ENOENT ? AppProxyIdentityFailure.missingFile
+                : (errno == ELOOP || errno == ENOTDIR ? AppProxyIdentityFailure.escapedPath : AppProxyIdentityFailure.permission)
+        }
+        close(fd)
+    }
+    /// A grant must never give effective write access to code: open the folder, then require
+    /// that this process cannot write to it.
+    public static func requireReadOnlyFolder(_ path: String) throws {
+        try requireReadableFolder(path)
+        guard access(path, W_OK) != 0 else { throw AppProxyIdentityFailure.permission }
     }
 }
 
-public struct AppProxyIdentitySnapshot: Codable, Equatable, Sendable {
-    public static let maximumBytes = 4 * 1024 * 1024
+/// The provider's whole authority for one generation: which publishers route to which
+/// application listener, and read-only grants for the code folders its sandbox cannot read
+/// otherwise. NetworkExtension must read a diverted process's code to validate it, so code
+/// in the home directory or under Homebrew needs a grant; `/Applications` does not.
+/// There is no executable list, hash or file stamp: the provider checks each flow's running
+/// code against its route's Team requirement, so vendor updates need no new authority.
+public struct AppProxyPolicy: Codable, Equatable, Sendable {
+    public struct Route: Codable, Equatable, Sendable {
+        public let category: String
+        public let teams: [String]
+        /// Signing identifiers this route accepts; the OS rules divert exactly these.
+        public let identifiers: [String]
+        public init(category: String, teams: [String], identifiers: [String]) {
+            self.category = category; self.teams = teams; self.identifiers = identifiers
+        }
+        public var requirement: String { AppProxyCode.teamRequirement(teams) }
+    }
+    public static let currentVersion = 5
+    public static let maximumBytes = 512 * 1024
     public let version: Int
     public let generation: UUID
     public let ownerUID: UInt32
-    public let records: [AppProxyCodeIdentity]
-    /// Version 3: one grant per distinct access root, in first-record order. A bundle's
-    /// executables share its root, so per-record copies would repeat the same bookmark;
-    /// NetworkExtension caps the whole saved configuration at 512 KiB. Version 2 carried
-    /// one grant per record and is still decoded.
+    public let routes: [Route]
+    /// Granted code folders, paired by index with `grants`.
+    public let folders: [String]
     public let grants: [Data]
-    /// Approved team/directory scopes; `scopeGrants` holds one read-only grant per directory scope, in order.
-    public let scopes: [AppProxyScope]
-    public let scopeGrants: [Data]
-    /// `grants` may be per record (they collapse to the first grant of each root) or per root.
-    public init(ownerUID: UInt32, records: [AppProxyCodeIdentity], grants: [Data],
-                scopes: [AppProxyScope] = [], scopeGrants: [Data] = [], generation: UUID = UUID()) {
-        version = 3; self.generation = generation; self.ownerUID = ownerUID; self.records = records
-        self.grants = Self.collapsedGrants(records: records, grants: grants)
-        self.scopes = scopes; self.scopeGrants = scopeGrants
+    /// Digest of the top-level executables and granted folders behind the OS rules. An update
+    /// replaces them, which changes the digest and saves the rules again for the new binaries.
+    public let codeStamp: String
+    public init(ownerUID: UInt32, routes: [Route], folders: [String], grants: [Data], codeStamp: String,
+                generation: UUID = UUID()) {
+        version = Self.currentVersion; self.generation = generation; self.ownerUID = ownerUID
+        self.routes = routes; self.folders = folders; self.grants = grants; self.codeStamp = codeStamp
     }
-    /// Distinct access roots of `records` in first-record order; nil for a path no root admits.
-    public static func accessRoots(_ records: [AppProxyCodeIdentity]) -> [String]? {
-        var seen = Set<String>(), roots: [String] = []
-        for record in records {
-            guard let root = try? AppProxyCodeIdentity.accessURL(for: record.path).path else { return nil }
-            if seen.insert(root).inserted { roots.append(root) }
-        }
-        return roots
-    }
-    private static func collapsedGrants(records: [AppProxyCodeIdentity], grants: [Data]) -> [Data] {
-        guard grants.count == records.count,
-              let paths = try? records.map({ try AppProxyCodeIdentity.accessURL(for: $0.path).path }) else { return grants }
-        var seen = Set<String>(), collapsed: [Data] = []
-        for (root, grant) in zip(paths, grants) where seen.insert(root).inserted { collapsed.append(grant) }
-        return collapsed
-    }
-    /// Each access root paired with its grant; version 2 may repeat a root.
-    public func rootGrants() throws -> [(root: String, grant: Data)] {
-        let roots = version == 2 ? try records.map { try AppProxyCodeIdentity.accessURL(for: $0.path).path }
-            : Self.accessRoots(records)
-        guard let roots, roots.count == grants.count else { throw AppProxyIdentityFailure.malformed }
-        return zip(roots, grants).map { (root: $0, grant: $1) }
-    }
-    private enum CodingKeys: String, CodingKey { case version, generation, ownerUID, records, grants, scopes, scopeGrants }
-    public init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        version = try values.decode(Int.self, forKey: .version)
-        generation = try values.decode(UUID.self, forKey: .generation)
-        ownerUID = try values.decode(UInt32.self, forKey: .ownerUID)
-        records = try values.decode([AppProxyCodeIdentity].self, forKey: .records)
-        grants = try values.decode([Data].self, forKey: .grants)
-        scopes = try values.decodeIfPresent([AppProxyScope].self, forKey: .scopes) ?? []
-        scopeGrants = try values.decodeIfPresent([Data].self, forKey: .scopeGrants) ?? []
-    }
-    public var directoryScopes: [AppProxyScope] { scopes.filter { $0.kind == .directory } }
     public func validate() throws {
-        guard version == 2 || version == 3, ownerUID > 0, !records.isEmpty, records.count <= 512,
-              version == 2 ? records.count == grants.count : Self.accessRoots(records)?.count == grants.count,
-              Set(records.map(\.path)).count == records.count,
-              grants.allSatisfy({ !$0.isEmpty && $0.count <= 65536 }),
-              scopes.count <= 64, Set(scopes).count == scopes.count, scopes.allSatisfy(\.isValid),
-              scopeGrants.count == directoryScopes.count,
-              scopeGrants.allSatisfy({ !$0.isEmpty && $0.count <= 65536 }) else { throw AppProxyIdentityFailure.malformed }
-        for r in records {
-            guard r.path.hasPrefix("/"), !r.path.contains("\0"), r.path.utf8.count <= 4096,
-                  AppProxyFileStamp.isCanonicalPath(r.path),
-                  !r.id.isEmpty, r.id.utf8.count <= 512, r.requirement.utf8.count <= 8192,
-                  !r.cdHash.isEmpty, r.cdHash.count <= 64 else { throw AppProxyIdentityFailure.malformed }
-        }
+        // A running process must select exactly one route: no Team ID and identifier pair repeats.
+        let pairs = routes.flatMap { route in route.teams.flatMap { team in route.identifiers.map { team + "\u{0}" + $0 } } }
+        guard version == Self.currentVersion, ownerUID > 0, !routes.isEmpty, routes.count <= 32,
+              Set(routes.map(\.category)).count == routes.count,
+              routes.allSatisfy({ route in
+                  !route.category.isEmpty && route.category.utf8.count <= 64
+                    && (1...8).contains(route.teams.count) && route.teams.allSatisfy(AppProxyCode.isTeamIdentifier)
+                    && (1...64).contains(route.identifiers.count) && Set(route.identifiers).count == route.identifiers.count
+                    && route.identifiers.allSatisfy(AppProxyCode.isSigningIdentifier)
+              }),
+              Set(pairs).count == pairs.count,
+              folders.count <= 64, Set(folders).count == folders.count, folders.allSatisfy(AppProxyCode.isFolder),
+              grants.count == folders.count, grants.allSatisfy({ !$0.isEmpty && $0.count <= 65536 }),
+              codeStamp.utf8.count == 64, codeStamp.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) })
+        else { throw AppProxyIdentityFailure.malformed }
     }
-    /// Automatic refresh may change vendor code, never the previously approved publisher/identity.
-    public func validateRefresh(_ next: [AppProxyCodeIdentity], scopes: [AppProxyScope] = []) throws {
-        let priorByPath = Dictionary(uniqueKeysWithValues: records.map { ($0.path, $0) })
-        for candidate in next {
-            // An approved team or directory scope covers new versions, paths and helpers.
-            if AppProxyScope.match(path: candidate.path, team: candidate.team,
-                                   in: scopes.filter { $0.category == candidate.category }) != nil { continue }
-            if let prior = priorByPath[candidate.path] {
-                guard candidate.category == prior.category, candidate.id == prior.id,
-                      candidate.team == prior.team, candidate.requirement == prior.requirement,
-                      prior.team != nil || candidate == prior else { throw AppProxyIdentityFailure.needsAuthorization }
-            } else if candidate.category.hasPrefix("app_") {
-                // New helpers under a custom app must share an already approved publisher.
-                guard let team = candidate.team,
-                      records.contains(where: { $0.category == candidate.category && $0.team == team }) else {
-                    throw AppProxyIdentityFailure.needsAuthorization
-                }
-            }
-        }
+    /// The same routes, folders and code, ignoring the generation and the bytes of freshly minted grants.
+    public func sameAuthority(as other: Self) -> Bool {
+        ownerUID == other.ownerUID && routes == other.routes && folders == other.folders && codeStamp == other.codeStamp
     }
     public func encoded() throws -> Data {
         try validate()
-        let d = try JSONEncoder().encode(self)
-        guard d.count <= Self.maximumBytes else { throw AppProxyIdentityFailure.capacity }
-        return d
+        let data = try JSONEncoder().encode(self)
+        guard data.count <= Self.maximumBytes else { throw AppProxyIdentityFailure.capacity }
+        return data
     }
     public static func decode(_ data: Data) throws -> Self {
         guard data.count <= maximumBytes else { throw AppProxyIdentityFailure.capacity }
@@ -263,15 +126,16 @@ public struct AppProxyIdentitySnapshot: Codable, Equatable, Sendable {
     }
 }
 
-/// Only the read-only sandbox broker may mint grants; the unsandboxed host must not.
-/// Public implicit bookmarks are ephemeral (at most one boot), never durable consent.
-public final class AppProxyAccessLease {
+/// The provider's read access to the granted folders, held while its generation is active or prepared.
+/// Only the read-only broker mints grants; public implicit bookmarks expire no later than reboot,
+/// so a provider restarted from saved preferences fails here and the host mints fresh grants.
+public final class AppProxyFolderAccess {
     private var urls: [URL] = []
-    public let snapshot: AppProxyIdentitySnapshot
-    public init(_ snapshot: AppProxyIdentitySnapshot) throws {
-        try snapshot.validate(); self.snapshot = snapshot
+    public let policy: AppProxyPolicy
+    public init(_ policy: AppProxyPolicy) throws {
+        try policy.validate(); self.policy = policy
         do {
-            for (root, data) in try snapshot.rootGrants() {
+            for (folder, data) in zip(policy.folders, policy.grants) {
                 var stale = false
                 let url: URL
                 do {
@@ -279,42 +143,14 @@ public final class AppProxyAccessLease {
                                   options: [.withoutUI, .withoutMounting, .withoutImplicitStartAccessing],
                                   bookmarkDataIsStale: &stale)
                 } catch { throw AppProxyIdentityFailure.staleAuthorization }
-                guard !stale, url.path == root else { throw AppProxyIdentityFailure.staleAuthorization }
+                guard !stale, url.path == folder else { throw AppProxyIdentityFailure.staleAuthorization }
                 if url.startAccessingSecurityScopedResource() { urls.append(url) }
-            }
-            for record in snapshot.records {
-                // Static sandbox access may require no dynamic scope; actual file validation is authoritative.
-                try record.validateFile()
-                try record.validateAccessScope()
-            }
-            for (scope, data) in zip(snapshot.directoryScopes, snapshot.scopeGrants) {
-                var stale = false
-                let url: URL
-                do {
-                    url = try URL(resolvingBookmarkData: data,
-                                  options: [.withoutUI, .withoutMounting, .withoutImplicitStartAccessing],
-                                  bookmarkDataIsStale: &stale)
-                } catch { throw AppProxyIdentityFailure.staleAuthorization }
-                guard !stale, url.path == scope.value else { throw AppProxyIdentityFailure.staleAuthorization }
-                if url.startAccessingSecurityScopedResource() { urls.append(url) }
-                try Self.requireReadableDirectory(scope.value)
+                // Static sandbox access may need no dynamic scope; opening the folder is authoritative.
+                try AppProxyCode.requireReadOnlyFolder(folder)
             }
         } catch {
             release(); throw error
         }
-    }
-    public func revalidate() throws {
-        for record in snapshot.records { try record.validateFile(); try record.validateAccessScope() }
-        for scope in snapshot.directoryScopes { try Self.requireReadableDirectory(scope.value) }
-    }
-    /// Directory grants come only from the read-only broker; the provider still proves it can open them.
-    public static func requireReadableDirectory(_ path: String) throws {
-        let fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY | O_CLOEXEC)
-        guard fd >= 0 else {
-            throw errno == ENOENT ? AppProxyIdentityFailure.missingFile
-                : (errno == ELOOP || errno == ENOTDIR ? AppProxyIdentityFailure.escapedPath : AppProxyIdentityFailure.permission)
-        }
-        close(fd)
     }
     private func release() { for url in urls.reversed() { url.stopAccessingSecurityScopedResource() }; urls.removeAll() }
     deinit { release() }
@@ -325,19 +161,36 @@ public final class AppProxyAccessLease {
     func authorize(_ request: Data, interactive: Bool, reply: @escaping (Data?, String?) -> Void)
 }
 
-public struct AppProxyAccessRequest: Codable, Sendable {
+/// One application's code folders. An interactive request approves all of them, existing or not,
+/// so a vendor installing one later needs no new consent; grants cover the existing ones.
+public struct AppProxyFolderRequest: Codable, Equatable, Sendable {
     public let ownerUID: UInt32
-    public let records: [AppProxyCodeIdentity]
-    public let scopes: [AppProxyScope]
-    public init(ownerUID: UInt32, records: [AppProxyCodeIdentity], scopes: [AppProxyScope] = []) {
-        self.ownerUID = ownerUID; self.records = records; self.scopes = scopes
+    public let category: String
+    public let folders: [String]
+    public init(ownerUID: UInt32, category: String, folders: [String]) {
+        self.ownerUID = ownerUID; self.category = category; self.folders = folders
     }
-    private enum CodingKeys: String, CodingKey { case ownerUID, records, scopes }
-    public init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        ownerUID = try values.decode(UInt32.self, forKey: .ownerUID)
-        records = try values.decode([AppProxyCodeIdentity].self, forKey: .records)
-        scopes = try values.decodeIfPresent([AppProxyScope].self, forKey: .scopes) ?? []
+    public func validate() throws {
+        guard ownerUID > 0, !category.isEmpty, category.utf8.count <= 64, (1...16).contains(folders.count),
+              Set(folders).count == folders.count, folders.allSatisfy(AppProxyCode.isFolder) else {
+            throw AppProxyIdentityFailure.malformed
+        }
+    }
+}
+
+public struct AppProxyFolderGrants: Codable, Equatable, Sendable {
+    public let ownerUID: UInt32
+    public let category: String
+    /// The requested folders that exist, in request order, each with one read-only grant.
+    public let folders: [String]
+    public let grants: [Data]
+    public init(ownerUID: UInt32, category: String, folders: [String], grants: [Data]) {
+        self.ownerUID = ownerUID; self.category = category; self.folders = folders; self.grants = grants
+    }
+    public func validate(for request: AppProxyFolderRequest) throws {
+        guard ownerUID == request.ownerUID, category == request.category, grants.count == folders.count,
+              folders.allSatisfy(request.folders.contains), Set(folders).count == folders.count,
+              grants.allSatisfy({ !$0.isEmpty && $0.count <= 65536 }) else { throw AppProxyIdentityFailure.malformed }
     }
 }
 
@@ -354,7 +207,6 @@ public enum AppProxyPeerRequirement {
         return "anchor apple generic and identifier \"\(identifier)\" and certificate leaf = H\"\(digest)\""
     }
 }
-import CryptoKit
 
 public struct AppProxyRuntimeMessage: Codable {
     public enum Action: String, Codable { case status, prepare, commit, abort, renew, flowOwners }
@@ -385,6 +237,7 @@ public struct AppProxyFlowEvidence: Codable, Equatable, Sendable {
 public struct AppProxyRuntimeStatus: Codable, Equatable, Sendable {
     public var generation: UUID?
     public var ready: Bool
+    /// Applications (routes) in the active policy; executables before policy version 5.
     public var verifiedTargets: Int
     public var failure: AppProxyIdentityFailure?
     public var counters: [String: Int]
@@ -472,20 +325,20 @@ public struct AppProxyGenerationGate {
 extension AppProxyIdentityFailure: LocalizedError {
     public var errorDescription: String? {
         switch self {
-        case .permission: return "The sandbox could not obtain read-only access to the selected executable."
-        case .signature: return "The executable does not satisfy its required signing identity."
-        case .changedFile: return "The executable changed during identity validation. Retry discovery."
-        case .escapedPath: return "An executable path crosses a symbolic link or is not a regular file."
-        case .missingFile: return "A previously selected executable is no longer present."
-        case .staleAuthorization, .needsAuthorization: return "Code access needs approval or renewal. Turn App Proxy off and on to authorize it."
-        case .wrongUser: return "App Proxy identity authorization belongs to another login session."
-        case .generationMismatch: return "The saved rules and active identity generation do not agree."
-        case .capacity: return "The application identity snapshot exceeds its safety limits."
-        case .malformed: return "The application identity snapshot is invalid."
+        case .permission: return "The sandbox could not obtain read-only access to an application code folder."
+        case .signature: return "The running code does not satisfy its application's Team ID requirement."
+        case .changedFile: return "Application code changed while it was being checked. Retry shortly."
+        case .escapedPath: return "A code folder crosses a symbolic link or is not a directory."
+        case .missingFile: return "A code folder is no longer present."
+        case .staleAuthorization, .needsAuthorization: return "Code folder access needs approval or renewal. Turn the application off and on to approve it."
+        case .wrongUser: return "App Proxy authorization belongs to another login session."
+        case .generationMismatch: return "The saved rules and active policy generation do not agree."
+        case .capacity: return "The App Proxy policy exceeds its safety limits."
+        case .malformed: return "The App Proxy policy is invalid."
         case .runtimeIdentity: return "The operating system could not validate the running process identity. Inspect framework validation diagnostics."
-        case .undiscoveredTarget: return "The running executable is not in the current application identity snapshot."
-        case .unavailable: return "The code authorization service or provider did not respond."
-        case .codeAccessTimeout: return "Code access verification took too long. Retry after the application finishes updating."
+        case .undiscoveredTarget: return "The running code is not signed by a selected application's Team ID with a listed signing identifier."
+        case .unavailable: return "The code access service or provider did not respond."
+        case .codeAccessTimeout: return "Code folder access took too long. Retry shortly."
         case .providerTimeout: return "The App Proxy extension did not finish the request before its deadline."
         }
     }

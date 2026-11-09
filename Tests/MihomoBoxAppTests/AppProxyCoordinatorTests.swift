@@ -4,222 +4,177 @@ import MihomoControl
 @testable import MihomoBoxApp
 
 final class AppProxyCoordinatorTests: XCTestCase {
-    func testExtraCLIUsesOwnerRouteAndParticipatesInTerminalRules() throws {
-        let entry = AppProxyEntry(id: "app_00000000-0000-0000-0000-000000000001", title: "Test", path: "/bin/ls",
-                                  port: 17975, executablePaths: ["/usr/bin/curl"])
-        let discovered = try AIAppTargets(requireAll: false, applications: [entry])
-        let curl = try XCTUnwrap(discovered.targets.first { $0.path == "/usr/bin/curl" })
-        XCTAssertEqual(curl.category, entry.id)
-        XCTAssertTrue(discovered.rules.contains { $0.matchTools?.contains { $0.matchSigningIdentifier == curl.id } == true })
-        var builtin = AppProxyEntry.legacyDefaults[0]
-        builtin.executablePaths = ["/bin/ls"]
-        XCTAssertThrowsError(try AIAppTargets(requireAll: false, applications: [entry, builtin]))
-        for path in ["/etc/hosts", "/missing-cli", "/usr/bin"] {
-            var invalid = entry; invalid.executablePaths = [path]
-            XCTAssertThrowsError(try AIAppTargets(requireAll: false, applications: [invalid]))
-        }
-        var builtinOnly = builtin; builtinOnly.executablePaths = ["/usr/bin/curl"]
-        let builtinTargets = try AIAppTargets(requireAll: false, applications: [builtinOnly])
-        XCTAssertEqual(builtinTargets.targets.first { $0.path == "/usr/bin/curl" }?.category, "chatgpt")
-    }
-    func testAbsentConventionalCLILocationsAreNotExclusions() throws {
-        let home = FileManager.default.temporaryDirectory
-            .appendingPathComponent("mihomobox-cli-probe-\(UUID().uuidString)")
-        let bin = home.appendingPathComponent(".local/bin")
-        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: home) }
-        let empty = try AIAppTargets(requireAll: false, applications: AppProxyEntry.legacyDefaults,
-                                     homeDirectory: home, applicationDirectories: [home])
-        XCTAssertFalse(empty.issues.contains { $0.failure == .missingFile })
-        // A dangling link in a conventional location is still reported.
-        try FileManager.default.createSymbolicLink(atPath: bin.appendingPathComponent("claude").path,
-                                                   withDestinationPath: home.appendingPathComponent("gone").path)
-        let dangling = try AIAppTargets(requireAll: false, applications: AppProxyEntry.legacyDefaults,
-                                        homeDirectory: home, applicationDirectories: [home])
-        XCTAssertTrue(dangling.issues.contains { $0.category == "claude_cli" })
-    }
-    func testCustomSignedExecutableIncludesIdentityAndRejectsDuplicateOwnership() throws {
-        let entry = AppProxyEntry(id: "app_00000000-0000-0000-0000-000000000001", title: "List", path: "/bin/ls", port: 17975)
-        let discovered = try AIAppTargets(requireAll: false, applications: [entry])
-        let target = try XCTUnwrap(discovered.targets.first { $0.category == entry.id })
-        XCTAssertEqual(target.path, "/bin/ls")
-        XCTAssertFalse(target.id.isEmpty)
-        XCTAssertFalse(target.requirement.isEmpty)
-        var duplicate = entry
-        duplicate.id = "app_00000000-0000-0000-0000-000000000002"; duplicate.port = 17976
-        XCTAssertThrowsError(try AIAppTargets(requireAll: false, applications: [entry, duplicate]))
-        var unsigned = entry; unsigned.path = "/etc/hosts"
-        XCTAssertThrowsError(try AIAppTargets(requireAll: false, applications: [unsigned]))
-    }
-    func testDirectoryScopeAndOneOSRulePerSigningIdentifier() throws {
-        let fm = FileManager.default
-        // Temporary directories sit below the /var symlink, which no-follow checks reject by design.
+    private let fm = FileManager.default
+    /// A fixture folder below the repository: temporary directories sit behind the /var and /tmp links.
+    private func fixtureRoot(_ name: String) throws -> URL {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().appendingPathComponent(".build/scope-test-\(UUID().uuidString)")
-        defer { try? fm.removeItem(at: root) }
-        for name in ["a", "b"] {
-            try fm.createDirectory(at: root.appendingPathComponent(name), withIntermediateDirectories: true)
-            let copy = root.appendingPathComponent("\(name)/fixture")
-            try fm.copyItem(atPath: "/usr/bin/true", toPath: copy.path)
-            let sign = Process()
-            sign.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
-            sign.arguments = ["--force", "--sign", "-", "--identifier", "dev.linsheng.mihomo.scope-fixture", copy.path]
-            try sign.run(); sign.waitUntilExit()
-            XCTAssertEqual(sign.terminationStatus, 0)
-        }
-        // An unmodified copy of Apple's code would make its OS rule capture the system original.
-        try fm.createDirectory(at: root.appendingPathComponent("apple"), withIntermediateDirectories: true)
-        try fm.copyItem(atPath: "/usr/bin/curl", toPath: root.appendingPathComponent("apple/curl").path)
-        var entry = AppProxyEntry.legacyDefaults[1]
-        entry.directories = [root.path]
-        let discovered = try AIAppTargets(requireAll: false, applications: [entry])
-        let copies = discovered.targets.filter { $0.path.hasPrefix(root.path + "/") }
-        XCTAssertEqual(copies.map(\.path).sorted(), ["a", "b"].map { root.appendingPathComponent("\($0)/fixture").path })
-        XCTAssertFalse(discovered.rules.contains { $0.matchSigningIdentifier == "com.apple.curl" })
-        guard copies.count == 2 else { return }
-        XCTAssertEqual(Set(copies.map(\.category)), [entry.id])
-        XCTAssertEqual(Set(discovered.rules.map(\.matchSigningIdentifier)).count, discovered.rules.count,
-                       "NE keeps one app rule per signing identifier")
-        let shared = try XCTUnwrap(discovered.rules.first { $0.matchSigningIdentifier == copies[0].id })
-        XCTAssertNil(shared.matchPath, "a shared identifier leaves the exact path to the provider")
-        XCTAssertEqual(Set(shared.matchTools?.compactMap(\.matchPath) ?? []).isSuperset(of: copies.map(\.path)), true)
+            .deletingLastPathComponent().appendingPathComponent(".build/\(name)-\(UUID().uuidString)")
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        return root
+    }
+    /// An ad-hoc signed copy of a system tool: a signature without a Team ID.
+    private func signedTool(_ url: URL, identifier: String, source: String = "/usr/bin/true") throws {
+        try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fm.copyItem(atPath: source, toPath: url.path)
+        let sign = Process()
+        sign.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        sign.arguments = ["--force", "--sign", "-", "--identifier", identifier, url.path]
+        try sign.run(); sign.waitUntilExit()
+        XCTAssertEqual(sign.terminationStatus, 0)
+    }
+    /// A bundle with an Info.plist; with `executable`, also its main executable.
+    @discardableResult
+    private func bundle(_ url: URL, identifier: String, executable: String? = nil) throws -> URL {
+        let contents = url.appendingPathComponent("Contents")
+        try fm.createDirectory(at: contents, withIntermediateDirectories: true)
+        var info: [String: Any] = ["CFBundleIdentifier": identifier]
+        if let executable { info["CFBundleExecutable"] = executable }
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+            .write(to: contents.appendingPathComponent("Info.plist"))
+        if let executable { try signedTool(contents.appendingPathComponent("MacOS/" + executable), identifier: identifier) }
+        return url
+    }
+    private func policy(_ category: String, teams: [String], identifiers: [String], folders: [String] = [],
+                        path: String? = nil) -> AppProxyApplicationPolicy {
+        .init(category: category, teams: teams, identifiers: identifiers, folders: folders, existingFolders: folders, path: path)
+    }
 
-        // Two applications owning copies of one identifier still publish a single OS rule.
-        var first = AppProxyEntry.legacyDefaults[1]; first.directories = [root.appendingPathComponent("a").path]
-        var second = AppProxyEntry.legacyDefaults[3]; second.directories = [root.appendingPathComponent("b").path]
-        let one = try AIAppTargets(requireAll: false, applications: [first])
-        let two = try AIAppTargets(requireAll: false, applications: [second])
-        XCTAssertNotNil(one.rules.first { $0.matchSigningIdentifier == copies[0].id }?.matchPath)
-        let combined = try AIAppTargets(combining: [one, two])
-        XCTAssertEqual(Set(combined.rules.map(\.matchSigningIdentifier)).count, combined.rules.count)
-        let merged = try XCTUnwrap(combined.rules.first { $0.matchSigningIdentifier == copies[0].id })
-        XCTAssertNil(merged.matchPath)
+    func testLaunchHostsCarryOneSharedPathlessToolListAndCopiesShareOneRule() throws {
+        let root = try fixtureRoot("hosts")
+        let first = root.appendingPathComponent("one/host"), second = root.appendingPathComponent("two/host")
+        let other = root.appendingPathComponent("other")
+        try signedTool(first, identifier: "dev.linsheng.host")
+        try signedTool(second, identifier: "dev.linsheng.host", source: "/usr/bin/false")
+        try signedTool(other, identifier: "dev.linsheng.other-host")
+        var registered: [URL] = []
+        let policies = [policy("a", teams: ["AAAAAAAAA1"], identifiers: ["dev.a", "node"]),
+                        policy("b", teams: ["BBBBBBBBB2"], identifiers: ["dev.b", "node"])]
+        let targets = AIAppTargets(applications: policies, lookup: { _ in [] }, register: { registered.append($0) },
+                                   hostExecutables: [first.path, second.path, other.path])
+        // One version-independent entry per identifier; a shared identifier admits each publisher.
+        XCTAssertEqual(targets.tools.map(\.matchSigningIdentifier), ["dev.a", "dev.b", "node"])
+        XCTAssertTrue(targets.tools.allSatisfy { $0.matchPath == nil })
+        XCTAssertEqual(targets.tools.last?.matchDesignatedRequirement,
+                       AppProxyCode.requirement(identifier: "node", teams: ["AAAAAAAAA1", "BBBBBBBBB2"]))
+        XCTAssertEqual(targets.rules.map(\.matchSigningIdentifier), ["dev.linsheng.host", "dev.linsheng.other-host"])
+        let copies = targets.rules[0]
+        XCTAssertNil(copies.matchPath, "NetworkExtension keeps one rule per identifier: copies match through LaunchServices")
+        XCTAssertTrue(copies.matchDesignatedRequirement.hasPrefix("(") && copies.matchDesignatedRequirement.contains(") or ("))
+        XCTAssertEqual(targets.rules[1].matchPath, other.path)
+        for rule in targets.rules { XCTAssertEqual(rule.matchTools?.map(\.matchSigningIdentifier), ["dev.a", "dev.b", "node"]) }
+        XCTAssertTrue(targets.applications.allSatisfy { $0.category == nil }, "a launch host is never routed")
+        XCTAssertEqual(targets.routes, [.init(category: "a", teams: ["AAAAAAAAA1"], identifiers: ["dev.a", "node"]),
+                                        .init(category: "b", teams: ["BBBBBBBBB2"], identifiers: ["dev.b", "node"])])
+        XCTAssertEqual(targets.issues, ["a:notInstalled": 1, "b:notInstalled": 1])
+        XCTAssertEqual(targets.processRoutes, AppProxyProcessRoutes())
+        XCTAssertTrue(registered.isEmpty)
+        XCTAssertEqual(targets.codeStamp.count, 64)
+        // Without a requested application there is nothing to divert, not even launch hosts.
+        let none = AIAppTargets(applications: [], lookup: { _ in [] }, register: { _ in }, hostExecutables: [first.path])
+        XCTAssertTrue(none.rules.isEmpty && none.tools.isEmpty && none.applications.isEmpty)
+    }
+    func testFolderBundlesAreRegisteredAndUnreadableOrUnsignedCodeIsSkipped() throws {
+        let root = try fixtureRoot("folders")
+        let vendor = try bundle(root.appendingPathComponent("1.0/Vendor.app"), identifier: "dev.example.vendor", executable: "Vendor")
+        let tool = root.appendingPathComponent("outside/tool")
+        try signedTool(tool, identifier: "dev.example.tool")
+        var registered: [String] = []
+        let granted = policy("a", teams: ["AAAAAAAAA1"], identifiers: ["dev.example.vendor"], folders: [root.path])
+        let targets = AIAppTargets(applications: [granted], lookup: { _ in [] }, register: { registered.append($0.path) },
+                                   hostExecutables: [])
+        XCTAssertEqual(registered, [vendor.path], "LaunchServices learns about a version an updater did not register")
+        XCTAssertTrue(targets.applications.isEmpty, "ad-hoc code has no Team ID")
+        XCTAssertEqual(targets.processRoutes.prefixes["a"], [root.path], "Mihomo routes the whole granted folder")
+        XCTAssertEqual(targets.issues, [:])
+        // A chosen CLI the provider cannot read without a grant is reported, never diverted.
+        let unreadable = policy("b", teams: ["BBBBBBBBB2"], identifiers: ["dev.example.tool"], path: tool.path)
+        let skipped = AIAppTargets(applications: [unreadable], lookup: { _ in [] }, register: { _ in }, hostExecutables: [])
+        XCTAssertEqual(skipped.issues, ["b:unreadableCode": 1, "b:notInstalled": 1])
+        XCTAssertTrue(skipped.applications.isEmpty)
+        // Folders named Applications or bin hold other vendors' code: they are never routed whole.
+        let shared = policy("c", teams: ["CCCCCCCCC3"], identifiers: ["x"], folders: ["/Users/me/Applications", "/opt/tools/bin"])
+        XCTAssertNil(AIAppTargets(applications: [shared], lookup: { _ in [] }, register: { _ in }, hostExecutables: [])
+            .processRoutes.prefixes["c"])
+    }
+    func testBundlesAreFoundByIdentifierWithoutLinksOrNestedHelpers() throws {
+        let root = try fixtureRoot("bundles")
+        let top = try bundle(root.appendingPathComponent("Vendor.app"), identifier: "dev.example.vendor", executable: "Vendor")
+        let versioned = try bundle(root.appendingPathComponent("versions/1.2/Vendor.app"), identifier: "dev.example.vendor")
+        let helper = try bundle(top.appendingPathComponent("Contents/Helpers/Helper.app"), identifier: "dev.example.vendor")
+        try bundle(root.appendingPathComponent("a/b/c/Deep.app"), identifier: "dev.example.vendor")
+        try bundle(root.appendingPathComponent("Other.app"), identifier: "dev.example.other")
+        try fm.createSymbolicLink(at: root.appendingPathComponent("link"), withDestinationURL: root.appendingPathComponent("versions"))
+        XCTAssertEqual(AIAppTargets.bundles(in: root.path, identifiers: ["dev.example.vendor"]), [top.path, versioned.path])
+        XCTAssertEqual(AIAppTargets.bundles(in: root.path, identifiers: ["dev.example.vendor"], limit: 1), [])
+        XCTAssertTrue(AIAppTargets.isTopLevelBundle(top.path))
+        XCTAssertFalse(AIAppTargets.isTopLevelBundle(helper.path))
+        XCTAssertFalse(AIAppTargets.isTopLevelBundle(root.appendingPathComponent("Missing.app").path))
+        XCTAssertFalse(AIAppTargets.isTopLevelBundle("/Users/me/.Trash/Vendor.app"))
+        XCTAssertEqual(AIAppTargets.bundleIdentifier(top.path), "dev.example.vendor")
+        XCTAssertEqual(AIAppTargets.mainExecutable(of: top.path), top.path + "/Contents/MacOS/Vendor")
+        XCTAssertNil(AIAppTargets.mainExecutable(of: versioned.path))
+        let signature = try XCTUnwrap(AIAppTargets.signature(top.path + "/Contents/MacOS/Vendor"))
+        XCTAssertEqual(signature.identifier, "dev.example.vendor")
+        XCTAssertNil(signature.team)
+        XCTAssertThrowsError(try AIAppTargets.codeIdentity(of: top.path), "unsigned or ad-hoc code is unsupported")
+        XCTAssertThrowsError(try AIAppTargets.codeIdentity(of: "/bin/ls"), "platform code has no Team ID")
+    }
+    func testCodeFoldersReadableRootsAndUpdateRoots() {
+        let home = "/Users/me"
+        XCTAssertEqual(AIAppTargets.codeFolders(for: "/Applications/Tool.app", home: home), [])
+        XCTAssertEqual(AIAppTargets.codeFolders(for: "/usr/bin/curl", home: home), [])
+        XCTAssertEqual(AIAppTargets.codeFolders(for: "/opt/homebrew/Cellar/packer/1.15.3/bin/packer", home: home),
+                       ["/opt/homebrew/Cellar/packer"], "the formula folder survives an upgrade")
+        XCTAssertEqual(AIAppTargets.codeFolders(for: "/usr/local/Caskroom/codex/0.9/codex", home: home), ["/usr/local/Caskroom/codex"])
+        XCTAssertEqual(AIAppTargets.codeFolders(for: "/Users/me/Applications/Tool.app", home: home), ["~/Applications/Tool.app"])
+        XCTAssertEqual(AIAppTargets.codeFolders(for: "/Users/me/.local/bin/tool", home: home), ["~/.local/bin"])
+        XCTAssertTrue(AIAppTargets.providerCanRead("/Applications/Tool.app", folders: []))
+        XCTAssertTrue(AIAppTargets.providerCanRead("/Users/me/tools/Tool.app", folders: ["/Users/me/tools"]))
+        XCTAssertFalse(AIAppTargets.providerCanRead("/Users/me/tools2/Tool.app", folders: ["/Users/me/tools"]))
+        XCTAssertFalse(AIAppTargets.providerCanRead("/opt/homebrew/bin/tool", folders: []))
         XCTAssertEqual(AIAppTargets.requirement(["b", "a", "a"]), "(a) or (b)")
         XCTAssertEqual(AIAppTargets.requirement(["a", "a"]), "a")
+        let claude = policy("claude", teams: ["Q6L2SF6YDW"], identifiers: ["x"], folders: ["/Users/me/.local/share/claude/versions"])
+        XCTAssertEqual(AIAppTargets.updateRoots(applications: [claude], home: home),
+                       ["/Applications", "/Users/me/.local/share/claude/versions", "/Users/me/Applications"])
+        XCTAssertTrue(AIAppTargets.launchHostBundles.isSuperset(of: ["com.apple.Terminal", "com.microsoft.VSCode", "com.jetbrains.goland"]))
     }
-    func testResponsibleCodeListsOnlyWhatItCanStart() throws {
-        let fm = FileManager.default
-        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().appendingPathComponent(".build/responsible-rule-test-\(UUID().uuidString)")
-        defer { try? fm.removeItem(at: root) }
-        let prefix = "dev.linsheng.mihomo.responsible-"
-        func copyTrue(_ url: URL) throws {
-            try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try fm.copyItem(atPath: "/usr/bin/true", toPath: url.path)
-        }
-        func bundle(_ url: URL, executable: String) throws -> URL {
-            try fm.createDirectory(at: url.appendingPathComponent("Contents/MacOS"), withIntermediateDirectories: true)
-            try (["CFBundleExecutable": executable, "CFBundlePackageType": "APPL"] as NSDictionary)
-                .write(to: url.appendingPathComponent("Contents/Info.plist"))
-            let main = url.appendingPathComponent("Contents/MacOS").appendingPathComponent(executable)
-            try copyTrue(main)
-            return main
-        }
-        func sign(_ url: URL, _ name: String) throws {
-            let sign = Process()
-            sign.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
-            sign.arguments = ["--force", "--sign", "-", "--identifier", prefix + name, url.path]
-            try sign.run(); sign.waitUntilExit()
-            XCTAssertEqual(sign.terminationStatus, 0)
-        }
-        let app = root.appendingPathComponent("Tool.app")
-        let nestedApp = app.appendingPathComponent("Contents/Frameworks/Tool Helper.app")
-        let loginItem = app.appendingPathComponent("Contents/Library/LoginItems/Tool Login.app")
-        let main = try bundle(app, executable: "Tool")
-        let nested = try bundle(nestedApp, executable: "Tool Helper")
-        let login = try bundle(loginItem, executable: "Tool Login")
-        let other = try bundle(root.appendingPathComponent("Other.app"), executable: "Other")
-        let helper = app.appendingPathComponent("Contents/MacOS/tool-helper")
-        let cli = root.appendingPathComponent("cli")
-        try copyTrue(helper); try copyTrue(cli)
-        XCTAssertEqual([main, login, cli, helper, nested, other].map { AIAppTargets.startsResponsible($0.path) },
-                       [true, true, true, false, false, true])
-        try fm.removeItem(at: loginItem)
-        try sign(helper, "helper"); try sign(nestedApp, "nested"); try sign(app, "main"); try sign(cli, "cli")
-        try sign(root.appendingPathComponent("Other.app"), "other")
-        // An application category: a CLI category lists all of its code as launched CLIs.
-        var entry = AppProxyEntry.defaults.first { $0.id == "jetbrains" }!
-        entry.teamIdentifiers = []
-        entry.directories = [root.path]
-        let discovered = try AIAppTargets(requireAll: false, applications: [entry], applicationDirectories: [])
-        let combined = try AIAppTargets(combining: [discovered], toolsByIdentifier: false)
-        let application = Set([main, nested, helper].map(\.path))
-        for targets in [discovered, combined] {
-            func tools(_ name: String) -> Set<String> {
-                Set(targets.rules.first { $0.matchSigningIdentifier == prefix + name }?.matchTools?.compactMap(\.matchPath) ?? [])
-            }
-            // An application lists its own code and code outside any bundle, not another application.
-            XCTAssertTrue(tools("main").isSuperset(of: application.union([cli.path])))
-            XCTAssertFalse(tools("main").contains(other.path))
-            XCTAssertTrue(tools("other").isSuperset(of: [other.path, cli.path]))
-            XCTAssertTrue(tools("other").isDisjoint(with: application))
-            // A CLI starts other loose code, never an application's helpers.
-            XCTAssertTrue(tools("cli").contains(cli.path))
-            XCTAssertTrue(tools("cli").isDisjoint(with: application.union([other.path])))
-            XCTAssertEqual(tools("helper"), [helper.path])
-            XCTAssertEqual(tools("nested"), [nested.path])
-        }
+    func testCodeStampChangesOnlyWhenCodeIsReplaced() throws {
+        let root = try fixtureRoot("stamp")
+        let tool = root.appendingPathComponent("tool")
+        try Data("one".utf8).write(to: tool)
+        let stamp = AIAppTargets.stamp(paths: [tool.path, tool.path], folders: [root.path])
+        XCTAssertEqual(stamp, AIAppTargets.stamp(paths: [tool.path], folders: [root.path]))
+        XCTAssertNotEqual(stamp, AIAppTargets.stamp(paths: [], folders: [root.path]))
+        try Data("one".utf8).write(to: tool, options: .atomic)
+        XCTAssertNotEqual(stamp, AIAppTargets.stamp(paths: [tool.path], folders: [root.path]), "an update replaces the file")
+        let missing = AIAppTargets.stamp(paths: [root.appendingPathComponent("missing").path], folders: [])
+        XCTAssertEqual(missing.count, 64)
     }
-    func testMayStartOwnApplicationAndLooseCode() {
-        let app = "/Applications/Tool.app/Contents/MacOS/Tool"
-        XCTAssertEqual(AIAppTargets.topLevelApplication("/Applications/Tool.app/Contents/Frameworks/H.app/Contents/MacOS/H"),
-                       "/Applications/Tool.app")
-        XCTAssertNil(AIAppTargets.topLevelApplication("/opt/homebrew/bin/tool"))
-        XCTAssertTrue(AIAppTargets.mayStart(app, "/Applications/Tool.app/Contents/Frameworks/H.app/Contents/MacOS/H"))
-        XCTAssertTrue(AIAppTargets.mayStart(app, "/Users/u/.local/bin/uv"))
-        XCTAssertFalse(AIAppTargets.mayStart(app, "/Applications/Other.app/Contents/MacOS/Other"))
-        XCTAssertFalse(AIAppTargets.mayStart("/opt/homebrew/bin/tool", app))
-        XCTAssertTrue(AIAppTargets.mayStart("/opt/homebrew/bin/tool", "/Users/u/.local/bin/uv"))
-    }
-    func testToolsByIdentifierKeepsGenericIdentifiersExact() {
-        func tool(_ id: String, _ requirement: String, _ path: String) -> NEAppRule {
-            let rule = NEAppRule(signingIdentifier: id, designatedRequirement: requirement)
-            rule.matchPath = path
-            return rule
-        }
-        let team = "identifier \"com.vendor.cli\" and anchor apple generic and certificate leaf[subject.OU] = TEAM"
-        let collapsed = AIAppTargets.byIdentifier([
-            tool("com.vendor.cli", team, "/v/1/cli"), tool("com.vendor.cli", team, "/v/2/cli"),
-            tool("node", "identifier node and anchor apple generic and certificate leaf[subject.OU] = TEAM", "/v/node"),
-            tool("com.adhoc.cli", "cdhash H\"00\"", "/v/adhoc"),
-        ])
-        XCTAssertEqual(collapsed.count, 3)
-        let vendor = collapsed.first { $0.matchSigningIdentifier == "com.vendor.cli" }
-        XCTAssertNil(vendor?.matchPath)
-        XCTAssertEqual(vendor?.matchDesignatedRequirement, team)
-        XCTAssertEqual(collapsed.first { $0.matchSigningIdentifier == "node" }?.matchPath, "/v/node")
-        XCTAssertEqual(collapsed.first { $0.matchSigningIdentifier == "com.adhoc.cli" }?.matchPath, "/v/adhoc")
-    }
-    func testWithoutLaunchedCLIsKeepsOwnCodeAndHosts() {
-        func rule(_ id: String, path: String?, tools: [NEAppRule]) -> NEAppRule {
-            let rule = NEAppRule(signingIdentifier: id, designatedRequirement: "identifier \"\(id)\"")
-            rule.matchPath = path; rule.matchTools = tools
-            return rule
-        }
-        let own = rule("com.a.helper", path: "/A.app/h", tools: [])
-        let ownCLI = rule("com.a.cli", path: "/bin/a", tools: [])
-        let otherCLI = rule("com.b.cli", path: "/bin/b", tools: [])
-        let rules = [rule("com.a.app", path: "/A.app/a", tools: [own, ownCLI, otherCLI]),
-                     rule("com.apple.Terminal", path: "/T.app/t", tools: [ownCLI, otherCLI])]
-        let reduced = AIAppTargets.withoutLaunchedCLIs(rules,
-            pathCategories: ["/A.app/a": "a", "/A.app/h": "a", "/bin/a": "a", "/bin/b": "b"],
-            identifierCategories: ["com.a.app": ["a"], "com.a.helper": ["a"], "com.a.cli": ["a"], "com.b.cli": ["b"]])
-        XCTAssertEqual(reduced[0].matchTools?.compactMap(\.matchPath), ["/A.app/h", "/bin/a"])
-        XCTAssertEqual(reduced[1].matchTools?.compactMap(\.matchPath), ["/bin/a", "/bin/b"])
-        XCTAssertEqual(rules[0].matchTools?.count, 3, "the original rules are not mutated")
-    }
-    func testUpdateRootsFollowSelectedApplications() {
-        let home = URL(fileURLWithPath: "/Users/u")
-        var claude = AppProxyEntry.defaults.first { $0.id == "claude" }!
-        claude.directories = ["/opt/tools"]
-        let roots = AIAppTargets.updateRoots(applications: [claude], homeDirectory: home)
-        XCTAssertTrue(roots.contains("/Users/u/Library/Application Support/Claude/claude-code"))
-        XCTAssertTrue(roots.contains("/Users/u/.claude/remote/ccd-cli"))
-        XCTAssertTrue(roots.contains("/opt/tools"))
-        XCTAssertFalse(roots.contains("/Users/u/.codex/computer-use"))
-        let chatgpt = AIAppTargets.updateRoots(applications: AppProxyEntry.defaults.filter { $0.id == "chatgpt" }, homeDirectory: home)
-        XCTAssertTrue(chatgpt.contains("/Users/u/.codex/computer-use"))
-        XCTAssertFalse(chatgpt.contains("/Users/u/.claude/remote/ccd-cli"))
+    /// Uses installed vendor code when present; NetworkExtension validates real signatures only.
+    func testInstalledApplicationsGetTheirOwnRulesAndTeamFromTheirSignature() throws {
+        let path = "/Applications/Claude.app"
+        try XCTSkipUnless(fm.fileExists(atPath: path + "/Contents/Info.plist"), "Claude is not installed")
+        let identity = try AIAppTargets.codeIdentity(of: path)
+        XCTAssertEqual(identity.team, "Q6L2SF6YDW")
+        XCTAssertEqual(identity.identifiers.first, "com.anthropic.claudefordesktop")
+        XCTAssertTrue(identity.identifiers.contains("com.anthropic.claudefordesktop.helper"))
+        let claude = policy("claude", teams: ["Q6L2SF6YDW"], identifiers: ["com.anthropic.claudefordesktop", "com.anthropic.claude-code"])
+        let targets = AIAppTargets(applications: [claude], lookup: { $0 == "com.anthropic.claudefordesktop" ? [URL(fileURLWithPath: path)] : [] },
+                                   register: { _ in }, hostExecutables: [])
+        let rule = try XCTUnwrap(targets.rules.first { $0.matchSigningIdentifier == "com.anthropic.claudefordesktop" })
+        XCTAssertEqual(rule.matchPath, path + "/Contents/MacOS/Claude")
+        XCTAssertTrue(rule.matchDesignatedRequirement.contains("Q6L2SF6YDW"))
+        XCTAssertEqual(rule.matchTools?.map(\.matchSigningIdentifier), ["com.anthropic.claude-code", "com.anthropic.claudefordesktop"])
+        XCTAssertEqual(targets.applications.first?.category, "claude")
+        XCTAssertEqual(targets.processRoutes.prefixes["claude"], [path])
+        XCTAssertEqual(targets.issues, [:])
+        // Another publisher's identifier never yields a rule for this code.
+        let forged = policy("x", teams: ["AAAAAAAAA1"], identifiers: ["com.anthropic.claudefordesktop"])
+        let lookup: (String) -> [URL] = { $0 == "com.anthropic.claudefordesktop" ? [URL(fileURLWithPath: path)] : [] }
+        XCTAssertTrue(AIAppTargets(applications: [forged], lookup: lookup, register: { _ in },
+                                   hostExecutables: []).rules.isEmpty)
     }
     @MainActor func testConfigurationSizeCountsSharedToolsOncePerRule() {
         let tool = NEAppRule(signingIdentifier: "dev.linsheng.tool", designatedRequirement: "identifier \"dev.linsheng.tool\"")
@@ -237,68 +192,11 @@ final class AppProxyCoordinatorTests: XCTestCase {
         XCTAssertEqual(AppProxyCoordinator.configurationSize([:], rules: shared),
                        AppProxyCoordinator.configurationSize([:], rules: separate))
     }
-    func testScanReachesCodeBehindFrameworkVersionLinks() throws {
-        let fm = FileManager.default
-        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().appendingPathComponent(".build/link-test-\(UUID().uuidString)")
-        defer { try? fm.removeItem(at: root) }
-        // Same names as ChatGPT's Codex Framework: on APFS the link is listed before Versions.
-        let framework = root.appendingPathComponent("X.framework")
-        let helpers = framework.appendingPathComponent("Versions/1/Helpers")
-        try fm.createDirectory(at: helpers, withIntermediateDirectories: true)
-        try fm.createSymbolicLink(atPath: framework.appendingPathComponent("Codex Framework").path,
-                                  withDestinationPath: "Versions/Current/Codex Framework")
-        try fm.createSymbolicLink(atPath: framework.appendingPathComponent("Versions/Current").path, withDestinationPath: "1")
-        try fm.createSymbolicLink(atPath: root.appendingPathComponent("outside").path, withDestinationPath: "/usr/bin")
-        let tool = helpers.appendingPathComponent("tool")
-        try fm.copyItem(atPath: "/usr/bin/true", toPath: tool.path)
-        let sign = Process()
-        sign.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
-        sign.arguments = ["--force", "--sign", "-", "--identifier", "dev.linsheng.mihomo.link-fixture", tool.path]
-        try sign.run(); sign.waitUntilExit()
-        XCTAssertEqual(sign.terminationStatus, 0)
-        var entry = AppProxyEntry.legacyDefaults[1]
-        entry.directories = [root.path]
-        let discovered = try AIAppTargets(requireAll: false, applications: [entry])
-        XCTAssertTrue(discovered.targets.contains { $0.path == tool.path }, "code behind a version link is discovered")
-        XCTAssertEqual(discovered.issues.filter { $0.failure == .escapedPath }.count, 1, "only the link leaving the tree is reported")
-    }
     @MainActor func testNewManagerUsesAppProxyProviderAndPerApplicationRouting() {
         let manager: NETunnelProviderManager = AppProxyCoordinator.makeManager()
         XCTAssertTrue(manager is NEAppProxyProviderManager)
         XCTAssertEqual(manager.routingMethod, .sourceApplication)
         XCTAssertFalse(manager.isEnabled)
-    }
-}
-
-extension AppProxyCoordinatorTests {
-    func testClaudeCodeRootCoverageIsSeparateFromGenericRemoteServer() {
-        let roots = Dictionary(uniqueKeysWithValues: AIAppTargets.claudeCodeRoots)
-        XCTAssertEqual(roots["Library/Application Support/Claude/claude-code"], "claude")
-        XCTAssertEqual(roots[".claude/remote/ccd-cli"], "claude")
-        XCTAssertEqual(roots[".local/share/claude/versions"], "claude_cli")
-        XCTAssertNil(roots[".claude/remote/srv"])
-    }
-    func testOSRulesDoNotInheritUnregisteredChildren() throws {
-        let entry = AppProxyEntry(id: "app_00000000-0000-0000-0000-000000000001", title: "Tools", path: "/bin/ls", port: 17975, executablePaths: ["/usr/bin/curl"])
-        let discovery = try AIAppTargets(requireAll: false, applications: [entry])
-        for rule in discovery.rules {
-            let tools = try XCTUnwrap(rule.matchTools)
-            XCTAssertFalse(tools.isEmpty)
-            XCTAssertTrue(tools.allSatisfy { $0.matchPath != nil })
-        }
-        let paths = Set(discovery.targets.filter { $0.category == entry.id }.map(\.path))
-        XCTAssertEqual(paths, ["/bin/ls", "/usr/bin/curl"])
-    }
-    func testRootSymlinkIsReportedAndNotTraversed() throws {
-        let home = URL(fileURLWithPath: "/private/tmp").appendingPathComponent(UUID().uuidString)
-        let parent = home.appendingPathComponent("Library/Application Support/Claude")
-        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: home) }
-        try FileManager.default.createSymbolicLink(at: parent.appendingPathComponent("claude-code"), withDestinationURL: URL(fileURLWithPath: "/usr/bin"))
-        let discovered = try AIAppTargets(requireAll: false, applications: [AppProxyEntry.legacyDefaults.first { $0.id == "claude" }!], homeDirectory: home, applicationDirectories: [])
-        XCTAssertFalse(discovered.targets.contains { $0.category == "claude" })
-        XCTAssertTrue(discovered.issues.contains { $0.failure == .escapedPath })
     }
 }
 
@@ -341,7 +239,6 @@ extension AppProxyCoordinatorTests {
     }
 }
 
-
 extension AppProxyCoordinatorTests {
     @MainActor func testReadinessDistinguishesFailuresWithoutRelaxingChecks() {
         let generation = UUID()
@@ -371,63 +268,6 @@ extension AppProxyCoordinatorTests {
         }
     }
 }
-
-extension AppProxyCoordinatorTests {
-    func testLaunchHostRulesCarryPathsAndOnlyVerifiedToolsWithoutBecomingRecords() throws {
-        let entry = AppProxyEntry(id: "app_00000000-0000-0000-0000-000000000001", title: "Tools", path: "/bin/ls", port: 17975, executablePaths: ["/usr/bin/curl"])
-        let discovered = try AIAppTargets(requireAll: false, applications: [entry], applicationDirectories: [])
-        XCTAssertEqual(Set(discovered.targets.map(\.path)), ["/bin/ls", "/usr/bin/curl"], "hosts are not authorized records")
-        let hosts = AIAppTargets.launchHosts(applicationDirectories: [])
-        XCTAssertTrue(hosts.contains { $0.id == "com.apple.Terminal" })
-        if FileManager.default.fileExists(atPath: "/usr/libexec/sshd-session") {
-            XCTAssertEqual(hosts.first { $0.id == "com.apple.sshd-session" }?.path, "/usr/libexec/sshd-session")
-        }
-        for host in hosts {
-            // A path-less rule would never match sshd-session, which LaunchServices does not know.
-            let rule = try XCTUnwrap(discovered.rules.first { $0.matchSigningIdentifier == host.id })
-            XCTAssertEqual(rule.matchPath, host.path)
-            XCTAssertEqual(rule.matchDesignatedRequirement, host.requirement)
-            XCTAssertEqual(Set(rule.matchTools?.compactMap(\.matchPath) ?? []), ["/bin/ls", "/usr/bin/curl"])
-        }
-    }
-    func testLaunchHostsAreChosenByBundleIdentifier() throws {
-        let fm = FileManager.default
-        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().appendingPathComponent(".build/host-test-\(UUID().uuidString)")
-        defer { try? fm.removeItem(at: root) }
-        for (name, id) in [("IDE", "com.jetbrains.mihomo-fixture"), ("Other", "dev.linsheng.mihomo.other-fixture")] {
-            let contents = root.appendingPathComponent("\(name).app/Contents")
-            try fm.createDirectory(at: contents.appendingPathComponent("MacOS"), withIntermediateDirectories: true)
-            try fm.copyItem(atPath: "/usr/bin/true", toPath: contents.appendingPathComponent("MacOS/\(name)").path)
-            try (["CFBundleIdentifier": id, "CFBundleExecutable": name, "CFBundlePackageType": "APPL"] as NSDictionary)
-                .write(to: contents.appendingPathComponent("Info.plist"))
-            let sign = Process()
-            sign.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
-            sign.arguments = ["--force", "--sign", "-", root.appendingPathComponent("\(name).app").path]
-            try sign.run(); sign.waitUntilExit()
-            XCTAssertEqual(sign.terminationStatus, 0)
-        }
-        let hosts = AIAppTargets.launchHosts(applicationDirectories: [root])
-        XCTAssertEqual(hosts.first { $0.id == "com.jetbrains.mihomo-fixture" }?.path,
-                       root.appendingPathComponent("IDE.app/Contents/MacOS/IDE").path)
-        XCTAssertFalse(hosts.contains { $0.id == "dev.linsheng.mihomo.other-fixture" })
-    }
-    func testApplicationsRouteOtherApplicationsLaunchedCLIsUnlessDisabled() throws {
-        let launcher = AppProxyEntry(id: "app_00000000-0000-0000-0000-000000000001", title: "Launcher", path: "/bin/ls", port: 17975)
-        let cli = AppProxyEntry(id: "app_00000000-0000-0000-0000-000000000002", title: "CLI", path: "/usr/bin/curl", port: 17976)
-        func launcherTools(_ launcher: AppProxyEntry) throws -> Set<String> {
-            let combined = try AIAppTargets(combining: [
-                AIAppTargets(requireAll: false, applications: [launcher], applicationDirectories: []),
-                AIAppTargets(requireAll: false, applications: [cli], applicationDirectories: [])])
-            let rule = try XCTUnwrap(combined.rules.first { $0.matchPath == "/bin/ls" })
-            return Set(rule.matchTools?.compactMap(\.matchPath) ?? [])
-        }
-        XCTAssertEqual(try launcherTools(launcher), ["/bin/ls", "/usr/bin/curl"])
-        var direct = launcher; direct.capturesLaunchedCLIs = false
-        XCTAssertEqual(try launcherTools(direct), ["/bin/ls"])
-    }
-}
-
 
 extension AppProxyCoordinatorTests {
     @MainActor func testTransientEmptyReplyRecoversOnlyForIdempotentRequests() async throws {

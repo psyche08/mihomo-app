@@ -65,6 +65,7 @@ import MihomoControl
                 return 0
             case "targets":
                 let executables = try await coordinator.discoverExecutables(applications: [try entry()])
+                // Top-level code with rules of its own; everything it starts matches by identifier.
                 write(["application": try entry().id, "executables": executables.map {
                     ["path": $0.path, "signingIdentifier": $0.signingIdentifier,
                      "teamIdentifier": $0.teamIdentifier.map { $0 as Any } ?? NSNull()] as [String: Any]
@@ -94,7 +95,6 @@ import MihomoControl
             "identityReady": status.identityReady, "verifiedTargets": status.verifiedTargetCount,
             "identityIssue": status.identityIssue.map { $0 as Any } ?? NSNull(),
             "discoveryIssues": status.discoveryIssues,
-            "reducedCoverage": status.reducedCoverage.map { $0 as Any } ?? NSNull(),
             // The same process-validation receipts as the app's diagnostics: PIDs and stages, no paths or traffic.
             "diagnostics": status.diagnostics.map { live in
                 ["generation": live.generation?.uuidString as Any? ?? NSNull(), "counters": live.counters,

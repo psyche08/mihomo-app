@@ -31,8 +31,10 @@ if [[ "${2:-}" == --signed ]]; then
   cmp "$AUDIT_DIR/host/codesign0" "$AUDIT_DIR/access/codesign0"
   codesign -d --entitlements :- "$ACCESS" > "$AUDIT_DIR/access-entitlements.plist" 2>/dev/null
   test "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.app-sandbox' "$AUDIT_DIR/access-entitlements.plist")" = true
-  test "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.files.user-selected.read-only' "$AUDIT_DIR/access-entitlements.plist")" = true
-  test "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.files.bookmarks.app-scope' "$AUDIT_DIR/access-entitlements.plist")" = true
+  # Folder grants are implicit bookmarks minted under the read-only exceptions below:
+  # no Powerbox selection and no persisted app-scoped bookmarks.
+  ! /usr/libexec/PlistBuddy -c 'Print :com.apple.security.files.user-selected.read-only' "$AUDIT_DIR/access-entitlements.plist" >/dev/null 2>&1
+  ! /usr/libexec/PlistBuddy -c 'Print :com.apple.security.files.bookmarks.app-scope' "$AUDIT_DIR/access-entitlements.plist" >/dev/null 2>&1
   ! /usr/libexec/PlistBuddy -c 'Print :com.apple.security.network.server' "$AUDIT_DIR/access-entitlements.plist" >/dev/null 2>&1
   ! /usr/libexec/PlistBuddy -c 'Print :com.apple.security.network.client' "$AUDIT_DIR/access-entitlements.plist" >/dev/null 2>&1
   ! /usr/libexec/PlistBuddy -c 'Print :com.apple.security.files.user-selected.read-write' "$AUDIT_DIR/access-entitlements.plist" >/dev/null 2>&1

@@ -154,8 +154,9 @@ runs Swift and shell tests, builds the bundle through
 It never installs the LaunchDaemon and never changes the current network.
 
 The bundle also embeds `Contents/XPCServices/MihomoCodeAccess.xpc`. Its Cloud
-target uses the host signing leaf and read-only user-selected/app-scope bookmark
-entitlements, with App Sandbox and no network or temporary file exceptions.
+target uses the host signing leaf, App Sandbox, and read-only temporary exceptions
+for the home directory, `/opt/homebrew/` and `/usr/local/`; it has no network,
+user-selected, app-scoped bookmark or writable file entitlement.
 The signed bundle check verifies these boundaries as well as the App Proxy
 extension sandbox. Local sandbox fixture tests do not validate production XPC
 authentication or root NetworkExtension access; see the

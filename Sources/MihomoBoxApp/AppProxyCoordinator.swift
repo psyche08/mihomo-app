@@ -18,11 +18,12 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
     private let codeAccess = AppProxyCodeAccessClient()
     private let usesHeadlessActivation: Bool
     private var maintenance: Task<Void, Never>?
+    /// Periodic fallback for changes FSEvents does not report (a removed folder, a revoked
+    /// signature); application and CLI updates wake a pass through `updateWatcher` at once.
+    static let maintenanceInterval: Duration = .seconds(180)
     /// Wakes maintenance when an update changes a discovery root; nil for headless runs.
     private var updateWatcher: AppProxyUpdateWatcher?
     private var refreshRequested = false
-    /// Coverage given up to fit the configuration budget, for status; nil when complete.
-    private var reducedCoverage: String?
     private var leaseKeeper: Task<Void, Never>?
     private var leaseTarget: (manager: NEAppProxyProviderManager, generation: UUID)?
     private let leaseRenewer = AppProxyLeaseRenewer()
@@ -53,13 +54,19 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
     var requestedState: Bool? { UserDefaults.standard.object(forKey: masterKey) as? Bool }
     private func migrateSelection(_ manager: NEAppProxyProviderManager?) {
         guard UserDefaults.standard.object(forKey: selectionKey) == nil else { return }
+        let policy = Self.savedPolicy(manager)
+        requestedIDs = Set(policy?.routes.map(\.category) ?? [])
+        if requestedState == nil { requestedEnabled = manager?.isEnabled == true && policy != nil }
+    }
+    static let routing = "per-application-v5"
+    /// The policy of a saved current-version configuration; nil for an older one.
+    static func savedPolicy(_ manager: NEAppProxyProviderManager?) -> AppProxyPolicy? {
         let raw = (manager?.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration
-        let snapshot = (raw?["identitySnapshot"] as? Data).flatMap { try? AppProxyIdentitySnapshot.decode($0) }
-        requestedIDs = Set(snapshot?.records.map(\.category).filter { $0 != "cli_host" } ?? [])
-        if requestedState == nil { requestedEnabled = manager?.isEnabled == true && snapshot != nil }
+        guard raw?["routing"] as? String == routing else { return nil }
+        return (raw?["policy"] as? Data).flatMap { try? AppProxyPolicy.decode($0) }
     }
     override convenience init() { self.init(maintenance: true) }
-    /// A headless `--app-proxy` run performs one action and skips the 20-second maintenance loop.
+    /// A headless `--app-proxy` run performs one action and skips the maintenance loop.
     init(maintenance enabled: Bool) {
         usesHeadlessActivation = enabled
         super.init()
@@ -85,7 +92,7 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
             await self?.maintainIdentities()
             await self?.drainRefreshes()
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(20))
+                try? await Task.sleep(for: Self.maintenanceInterval)
                 guard !Task.isCancelled else { return }
                 await self?.maintainIdentities()
                 await self?.drainRefreshes()
@@ -97,7 +104,7 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         if let preferencesObserver { NotificationCenter.default.removeObserver(preferencesObserver) }
     }
 
-    /// An update changed a discovery root: run a pass now instead of at the next 20-second tick.
+    /// An update changed a discovery root: run a pass now instead of at the next periodic one.
     /// A pass already running is followed by another, so a burst costs at most one more pass.
     private func requestRefresh() {
         refreshRequested = true
@@ -123,11 +130,9 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
     private func rememberLease(_ manager: NEAppProxyProviderManager) {
         let raw = (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration
         guard manager.isEnabled, manager.connection.status == .connected,
-              raw?["routing"] as? String == "per-application-v4",
               Self.rulesDigest(manager.appRules) == raw?["rulesDigest"] as? String,
-              let data = raw?["identitySnapshot"] as? Data,
-              let snapshot = try? AppProxyIdentitySnapshot.decode(data), snapshot.ownerUID == getuid() else { leaseTarget = nil; return }
-        leaseTarget = (manager, snapshot.generation)
+              let policy = Self.savedPolicy(manager), policy.ownerUID == getuid() else { leaseTarget = nil; return }
+        leaseTarget = (manager, policy.generation)
     }
     private func renew(_ manager: NEAppProxyProviderManager, generation: UUID) async throws {
         try await leaseRenewer.run(generation: generation) {
@@ -178,13 +183,13 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         if let manager, manager.connection.status == .connected {
             live = try? await message(.init(.status), to: manager)
         }
-        let snapshot = (configuration?["identitySnapshot"] as? Data).flatMap { try? AppProxyIdentitySnapshot.decode($0) }
-        let current = configuration?["routing"] as? String == "per-application-v4" && snapshot != nil
-        let liveIssue = Self.readinessIssue(current: current, expectedGeneration: snapshot?.generation,
+        let policy = Self.savedPolicy(manager)
+        let current = policy != nil
+        let liveIssue = Self.readinessIssue(current: current, expectedGeneration: policy?.generation,
             rulesMatch: manager.map { Self.rulesDigest($0.appRules) == configuration?["rulesDigest"] as? String } == true,
             live: live)
         let ready = manager?.isEnabled == true && manager?.connection.status == .connected && liveIssue == nil
-        let activeIDs = ready ? Set(snapshot?.records.map(\.category) ?? []) : []
+        let activeIDs = ready ? Set(policy?.routes.map(\.category) ?? []) : []
         let states = Dictionary(uniqueKeysWithValues: settings.applications.map { app in
             (app.id, AppProxyApplicationStatus(requested: requestedIDs.contains(app.id),
                 active: activeIDs.contains(app.id), issue: applicationIssues[app.id],
@@ -195,18 +200,25 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
                      requiresReactivation: manager?.isEnabled == true && (!current || (configuration?["bypassCIDRs"] as? [String]) != settings.bypass.cidrs),
                      identityReady: ready, verifiedTargetCount: ready ? live?.verifiedTargets ?? 0 : 0,
                      identityIssue: identityIssue ?? live?.failure?.rawValue ?? (manager?.connection.status == .connected ? liveIssue : nil),
-                     diagnostics: live, discoveryIssues: discoveryIssues, applications: states, requestedEnabled: requestedEnabled,
-                     reducedCoverage: ready ? reducedCoverage : nil)
+                     diagnostics: live, discoveryIssues: discoveryIssues, applications: states, requestedEnabled: requestedEnabled)
     }
 
+    nonisolated private static var home: String { FileManager.default.homeDirectoryForCurrentUser.path }
+    /// The applications' policies; one that cannot be resolved is left out of display.
+    nonisolated static func policies(_ applications: [AppProxyEntry]) -> [AppProxyApplicationPolicy] {
+        applications.compactMap { try? AppProxyApplicationPolicy.resolve($0, home: home) }
+    }
+
+    /// The top-level code each application's rules name: LaunchServices and the configured
+    /// folders, read without validating code. Everything they start matches by identifier.
     func discoverExecutables(applications: [AppProxyEntry]) async throws -> [AppProxyExecutable] {
-        let found = try await Task.detached(priority: .utility) {
-            try AIAppTargets(requireAll: false, applications: applications)
-        }.value
-        discoveryIssues = Dictionary(grouping: found.issues, by: { $0.category + ":" + $0.failure.rawValue }).mapValues(\.count)
-        return found.targets.filter { $0.category != "cli_host" }.map {
-            AppProxyExecutable(applicationID: $0.category, path: $0.path, signingIdentifier: $0.id,
-                               teamIdentifier: $0.team, requirement: $0.requirement)
+        let found = await Task.detached(priority: .utility) { AIAppTargets(applications: Self.policies(applications)) }.value
+        discoveryIssues = found.issues
+        return found.applications.compactMap { code in
+            code.category.map {
+                AppProxyExecutable(applicationID: $0, path: code.path, signingIdentifier: code.identifier,
+                                   teamIdentifier: code.team, requirement: code.requirement)
+            }
         }
     }
 
@@ -223,38 +235,43 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
 
     func launchHosts() async -> [AppProxyLaunchHost] {
         await Task.detached(priority: .utility) {
-            let home = FileManager.default.homeDirectoryForCurrentUser
-            return AIAppTargets.launchHosts(applicationDirectories: [URL(fileURLWithPath: "/Applications"),
-                                                                     home.appendingPathComponent("Applications")])
-                .map { AppProxyLaunchHost(path: $0.path) }
+            AIAppTargets.launchHostLocations().map { AppProxyLaunchHost(path: $0.path) }
         }.value
     }
 
     func chooseApplication(port: UInt16) async throws -> AppProxyEntry? {
         let panel = NSOpenPanel()
         panel.title = "Add application or CLI executable"
-        panel.message = "Choose a signed .app or CLI executable. Signed helpers inside an app are included."
+        panel.message = "Choose a .app or CLI signed with a Developer ID. Its Team ID and signing identifiers are read once."
         panel.canChooseFiles = true; panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false; panel.treatsFilePackagesAsDirectories = false
         panel.directoryURL = URL(fileURLWithPath: "/Applications")
         guard await panel.begin() == .OK, let selected = panel.url else { return nil }
-        let url = selected.resolvingSymlinksInPath().standardizedFileURL
-        let title = selected.pathExtension == "app" ? selected.deletingPathExtension().lastPathComponent : selected.lastPathComponent
-        let entry = AppProxyEntry(id: "app_" + UUID().uuidString.lowercased(), title: title, path: url.path, port: port)
-        // The store validates the complete candidate list once, including duplicate ownership.
-        return entry
+        return try await application(at: selected.path, port: port)
     }
-    func chooseExecutable() async throws -> String? {
+    /// A custom application from its signature: Team ID, signing identifiers (with nested helpers)
+    /// and, outside the folders the provider reads, the code folder to grant.
+    func application(at path: String, port: UInt16) async throws -> AppProxyEntry {
+        let url = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL
+        let code = try await Task.detached(priority: .userInitiated) { try AIAppTargets.codeIdentity(of: url.path) }.value
+        let title = url.pathExtension == "app" ? url.deletingPathExtension().lastPathComponent : url.lastPathComponent
+        // The store validates the complete candidate list once, including duplicate ownership.
+        return AppProxyEntry(id: "app_" + UUID().uuidString.lowercased(), title: title, path: url.path, port: port,
+                             teamIdentifiers: [code.team], signingIdentifiers: code.identifiers,
+                             directories: AIAppTargets.codeFolders(for: url.path, home: Self.home))
+    }
+    func chooseFolder() async throws -> String? {
         let panel = NSOpenPanel()
-        panel.title = "Choose CLI executable"
-        panel.message = "Choose the signed executable itself, such as /usr/bin/curl. Use Command-Shift-G to enter a path."
-        panel.canChooseFiles = true; panel.canChooseDirectories = false
+        panel.title = "Choose code folder"
+        panel.message = "Choose a folder that holds this application's code, outside /Applications. It is granted read-only to the App Proxy extension."
+        panel.canChooseFiles = false; panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false; panel.treatsFilePackagesAsDirectories = true
-        panel.directoryURL = URL(fileURLWithPath: "/usr/bin")
+        panel.showsHiddenFiles = true
+        panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser
         guard await panel.begin() == .OK, let selected = panel.url else { return nil }
         return selected.resolvingSymlinksInPath().standardizedFileURL.path
     }
-    /// A user action waits for the 20-second maintenance pass (in this process or in the
+    /// A user action waits for a running maintenance pass (in this process or in the
     /// menu-bar app while a headless run is active) instead of failing while it runs.
     /// Returns holding the cross-process lock; no suspension separates the final checks
     /// from the caller claiming `busy`.
@@ -325,20 +342,21 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         var uid: uid_t = 0; var gid: gid_t = 0
         guard SCDynamicStoreCopyConsoleUser(nil, &uid, &gid) != nil, uid == getuid() else { throw AppProxyIdentityFailure.wrongUser }
         let previous = existing?.protocolConfiguration as? NETunnelProviderProtocol
-        let old = (previous?.providerConfiguration?["identitySnapshot"] as? Data).flatMap { try? AppProxyIdentitySnapshot.decode($0) }
+        let old = Self.savedPolicy(existing)
         if let old, old.ownerUID != getuid() { throw AppProxyIdentityFailure.wrongUser }
         if let existing, existing.isEnabled, old != nil,
            Self.rulesDigest(existing.appRules) != previous?.providerConfiguration?["rulesDigest"] as? String {
             try await disable(existing)
             throw PolicyCheckFailure.rulesReadbackMismatch
         }
+        let home = Self.home
         let prepare: () async throws -> AppProxyEnrollment = {
             try await AppProxyEnrollment.prepare(applications: settings.applications, requested: self.requestedIDs,
-            interactiveID: interactiveID, previous: old,
-            discover: { app in try await Task.detached { try AIAppTargets(requireAll: false, applications: [app]) }.value },
-            authorize: { records, scopes, interactive in
-                try await self.codeAccess.snapshot(records: records, scopes: scopes, interactive: interactive)
-            })
+                interactiveID: interactiveID, home: home,
+                build: { policies in await Task.detached(priority: .utility) { AIAppTargets(applications: policies) }.value },
+                authorize: { category, folders, interactive in
+                    try await self.codeAccess.grants(category: category, folders: folders, interactive: interactive)
+                })
         }
         let plan: AppProxyEnrollment
         if let existing, let old, existing.isEnabled, existing.connection.status == .connected {
@@ -349,58 +367,44 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
             } catch { try await disable(existing); throw error }
         } else { plan = try await prepare() }
         applicationIssues = plan.failures
-        discoveryIssues = Dictionary(grouping: plan.targets.issues, by: { $0.category + ":" + $0.failure.rawValue }).mapValues(\.count)
-        guard requestedEnabled, let snapshot = plan.snapshot else {
+        discoveryIssues = plan.targets.issues
+        guard requestedEnabled, let policy = plan.policy else {
             if let existing { try await disable(existing) }
-            identityIssue = nil; reducedCoverage = nil
+            identityIssue = nil
             await syncProcessRoutes(nil)
             return
         }
-        let targets = plan.targets
-        let (rules, reduced) = try fittingRules(settings: settings, targets: targets, snapshot: snapshot)
-        reducedCoverage = reduced
+        let targets = plan.targets, rules = targets.rules
+        let ports = Dictionary(uniqueKeysWithValues: settings.applications.map { ($0.id, Int($0.port)) })
+        // Unchanged publishers, folders, code and rules: keep the running generation.
         if let existing, let old, existing.isEnabled, existing.connection.status == .connected,
-           old.records == snapshot.records,
+           old.sameAuthority(as: policy),
            Self.rulesDigest(existing.appRules) == Self.rulesDigest(rules),
            previous?.providerConfiguration?["rulesDigest"] as? String == Self.rulesDigest(rules),
-           previous?.providerConfiguration?["ports"] as? [String: Int] == Dictionary(uniqueKeysWithValues: settings.applications.map { ($0.id, Int($0.port)) }),
+           previous?.providerConfiguration?["ports"] as? [String: Int] == ports,
            previous?.providerConfiguration?["bypassCIDRs"] as? [String] == settings.bypass.cidrs {
             do {
                 try await renew(existing, generation: old.generation)
                 rememberLease(existing)
                 identityIssue = nil
-                await syncProcessRoutes(snapshot)
+                await syncProcessRoutes(targets.processRoutes)
                 return
             } catch {
-                // A failed live lease is never presented as healthy. Rebuild from
-                // freshly checked per-application broker capabilities below.
+                // A failed live lease is never presented as healthy. Rebuild below.
                 try await disable(existing)
             }
         }
         // Mihomo's process rules first: they reload without a restart, so a new version's
         // TUN and system-proxy connections follow its route while the provider prepares.
-        await syncProcessRoutes(snapshot)
-        try await install(settings: settings, targets: targets, snapshot: snapshot, rules: rules, reduced: reduced)
+        await syncProcessRoutes(targets.processRoutes)
+        try await install(settings: settings, policy: policy, rules: rules)
     }
 
-    /// The most complete rules within the configuration budget. Other applications' CLIs under
-    /// application rules are given up first; past that, `install` fails closed with `capacity`.
-    private func fittingRules(settings: AppProxySettings, targets: AIAppTargets,
-                              snapshot: AppProxyIdentitySnapshot) throws -> (rules: [NEAppRule], reduced: String?) {
-        let complete = targets.rules
-        guard Self.configurationSize(try configuration(settings: settings, targets: targets, snapshot: snapshot, rules: complete),
-                                     rules: complete) > Self.configurationBudget,
-              !targets.launcherIdentifiers.isEmpty else { return (complete, nil) }
-        return (targets.withoutLaunchedCLIs(), "launchedCLIs")
-    }
-
-    /// Mirrors the active applications' verified executables into Mihomo's process rules, so
-    /// their system-proxy connections, which never reach the provider, follow the same route.
+    /// Mirrors the active applications' code locations into Mihomo's process rules, so their
+    /// system-proxy and TUN connections, which never reach the provider, follow the same route.
     /// Best effort: interception does not depend on it.
-    private func syncProcessRoutes(_ snapshot: AppProxyIdentitySnapshot?) async {
-        let routes = AppProxyProcessRoutes(Dictionary(grouping: snapshot?.records ?? [], by: \.category).mapValues {
-            Array(Set($0.map(\.path).filter(AppProxyProcessRoutes.isRoutable))).sorted()
-        })
+    private func syncProcessRoutes(_ routes: AppProxyProcessRoutes?) async {
+        let routes = routes ?? AppProxyProcessRoutes()
         guard routes != lastProcessRoutes else { return }
         do {
             try await ControlGateway().setAppProxyProcesses(routes)
@@ -408,8 +412,7 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         } catch { AppLog.error("event=app_proxy_process_routes result=failed") }
     }
 
-    private func install(settings: AppProxySettings, targets: AIAppTargets,
-                         snapshot: AppProxyIdentitySnapshot, rules: [NEAppRule], reduced: String?) async throws {
+    private func install(settings: AppProxySettings, policy: AppProxyPolicy, rules: [NEAppRule]) async throws {
         try await removeLegacyPacketConfigurations()
         // A cached manager can renew an existing lease, but cannot authorize a
         // policy mutation. Always read current preferences before prepare/save.
@@ -417,10 +420,10 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         guard manager.routingMethod == .sourceApplication else { throw failure("The saved VPN is not an application routing configuration.") }
         let previous = manager.protocolConfiguration as? NETunnelProviderProtocol
         let previousRules = manager.appRules
-        let old = (previous?.providerConfiguration?["identitySnapshot"] as? Data).flatMap { try? AppProxyIdentitySnapshot.decode($0) }
+        let old = Self.savedPolicy(manager)
         let liveUpdate = manager.isEnabled && manager.connection.status == .connected && old != nil
-        let raw = try configuration(settings: settings, targets: targets, snapshot: snapshot, rules: rules)
-        try Self.requireConfigurationBudget(raw, rules: rules, reduced: reduced)
+        let raw = try configuration(settings: settings, policy: policy, rules: rules)
+        try Self.requireConfigurationBudget(raw, rules: rules)
         if !liveUpdate { try await activate() }
         let config = NETunnelProviderProtocol()
         config.providerBundleIdentifier = extensionID; config.serverAddress = "MihomoBox"
@@ -428,7 +431,7 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         var prepared = false
         do {
             if liveUpdate, let old {
-                // Provider validates the complete new subset before interception changes.
+                // Provider validates the complete new policy before interception changes.
                 let wire = try PropertyListSerialization.data(fromPropertyList: raw, format: .binary, options: 0)
                 let reply = try await message(.init(.prepare, expected: old.generation, configuration: wire), to: manager)
                 if let failure = reply.failure { throw failure }
@@ -448,16 +451,16 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
             for _ in 0..<60 {
                 if manager.connection.status == .connected {
                     let status = try await message(.init(.status), to: manager)
-                    let committed = status.generation == snapshot.generation ? status
-                        : try await message(.init(.commit, expected: snapshot.generation), to: manager)
-                    try Self.requireProvider(committed, generation: snapshot.generation)
-                    leaseTarget = (manager, snapshot.generation)
+                    let committed = status.generation == policy.generation ? status
+                        : try await message(.init(.commit, expected: policy.generation), to: manager)
+                    try Self.requireProvider(committed, generation: policy.generation)
+                    leaseTarget = (manager, policy.generation)
                     if !liveUpdate {
                         manager.appRules = rules
                         try await save(manager); try await reload(manager)
                     }
                     try requireSameRules(manager.appRules, rules, phase: "enable")
-                    try Self.requireProvider(try await message(.init(.status), to: manager), generation: snapshot.generation)
+                    try Self.requireProvider(try await message(.init(.status), to: manager), generation: policy.generation)
                     liveManager = manager; rememberLease(manager)
                     identityIssue = nil; return
                 }
@@ -485,10 +488,8 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
             throw original
         }
     }
-    private func configuration(settings: AppProxySettings, targets: AIAppTargets, snapshot: AppProxyIdentitySnapshot,
-                               rules: [NEAppRule]) throws -> [String: Any] {
-        ["mode": "ai", "targets": targets.targets.map(\.record), "deadline": 0,
-         "routing": "per-application-v4", "identitySnapshot": try snapshot.encoded(), "rulesDigest": Self.rulesDigest(rules),
+    private func configuration(settings: AppProxySettings, policy: AppProxyPolicy, rules: [NEAppRule]) throws -> [String: Any] {
+        ["mode": "ai", "routing": Self.routing, "policy": try policy.encoded(), "rulesDigest": Self.rulesDigest(rules),
          "bypassCIDRs": settings.bypass.cidrs,
          "ports": Dictionary(uniqueKeysWithValues: settings.applications.map { ($0.id, Int($0.port)) })]
     }
@@ -529,9 +530,8 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
                     } catch { box.finish(.failure(error)) }
                 }
             } catch { box.finish(.failure(error)) }
-            // Full signed-package validation is substantially slower than a status read.
-            // Keep mutation deadlines bounded, but allow both selected publishers to be checked.
-            let timeout: Double = [.prepare, .commit, .renew].contains(request.action) ? 60 : 10
+            // Preparing opens the granted folders; nothing validates code files any more.
+            let timeout: Double = [.prepare, .commit].contains(request.action) ? 30 : 10
             DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { box.finish(.failure(AppProxyIdentityFailure.providerTimeout)) }
         }
     }
@@ -555,7 +555,8 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
                 return
             }
             let settings = try await ControlGateway().fetchAppProxyRouting().settings
-            updateWatcher?.watch(AIAppTargets.updateRoots(applications: settings.applications.filter { requestedIDs.contains($0.id) }))
+            updateWatcher?.watch(AIAppTargets.updateRoots(
+                applications: Self.policies(settings.applications.filter { requestedIDs.contains($0.id) }), home: Self.home))
             // After an update the bundled provider is newer than the running one, and only a
             // non-live install activates it. Do that here, in the background after launch,
             // rather than at the user's next enable, where it took minutes under load.
@@ -625,9 +626,8 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
     /// NetworkExtension rejects a saved configuration above 512 KiB. Unchecked, the rule-less
     /// first save succeeds and interception starts, then saving the rules fails.
     /// The configuration crosses XPC before it is measured, which drops object sharing: a tool
-    /// listed by several rules counts once per rule. Measure detached copies the same way. On
-    /// the test Mac this model read 729319 bytes where NetworkExtension reported 781915; the
-    /// budget leaves room for that difference.
+    /// listed by several rules counts once per rule. Measure detached copies the same way.
+    /// Identifier tools keep a policy far below this (a few dozen kilobytes).
     static let configurationBudget = 440 * 1024
     static func configurationSize(_ raw: [String: Any], rules: [NEAppRule]) -> Int {
         (try? NSKeyedArchiver.archivedData(withRootObject: [raw, rules.map(detached)] as NSArray,
@@ -639,9 +639,9 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         copy.matchTools = rule.matchTools?.map(detached)
         return copy
     }
-    static func requireConfigurationBudget(_ raw: [String: Any], rules: [NEAppRule], reduced: String? = nil) throws {
+    static func requireConfigurationBudget(_ raw: [String: Any], rules: [NEAppRule]) throws {
         let bytes = configurationSize(raw, rules: rules)
-        AppLog.info("event=app_proxy_configuration_size bytes=\(bytes) budget=\(configurationBudget) tools=\(rules.reduce(0) { $0 + ($1.matchTools?.count ?? 0) }) reduced=\(reduced ?? "none")")
+        AppLog.info("event=app_proxy_configuration_size bytes=\(bytes) budget=\(configurationBudget) rules=\(rules.count) tools=\(rules.reduce(0) { $0 + ($1.matchTools?.count ?? 0) })")
         guard bytes <= configurationBudget else { throw AppProxyIdentityFailure.capacity }
     }
     static func issueCode(_ error: Error) -> String {

@@ -1,76 +1,52 @@
 import Foundation
 import MihomoControl
 
-/// Authorization failures are isolated before any OS interception rules exist.
-/// An application is atomic: all of its discovered code and responsible hosts
-/// must pass. Other applications can still form a complete verified generation.
+/// One policy generation for the requested applications. Failures are isolated per
+/// application before any OS rules exist; the others still form a complete generation.
 struct AppProxyEnrollment {
     let targets: AIAppTargets
-    let snapshot: AppProxyIdentitySnapshot?
+    let policy: AppProxyPolicy?
+    /// Applications left out, and applications routed with some folders still awaiting approval.
     let failures: [String: String]
 
     @MainActor static func prepare(applications: [AppProxyEntry], requested: Set<String>,
-        interactiveID: String?, previous: AppProxyIdentitySnapshot?,
-        discover: (AppProxyEntry) async throws -> AIAppTargets,
-        authorize: ([AppProxyCodeIdentity], [AppProxyScope], Bool) async throws -> AppProxyIdentitySnapshot
+        interactiveID: String?, home: String,
+        build: ([AppProxyApplicationPolicy]) async -> AIAppTargets,
+        authorize: (_ category: String, _ folders: [String], _ interactive: Bool) async throws -> AppProxyFolderGrants
     ) async throws -> Self {
-        var groups: [AIAppTargets] = []
-        var grants: [String: (AppProxyCodeIdentity, Data)] = [:]
-        var scopes: [AppProxyScope] = [], scopeGrants: [AppProxyScope: Data] = [:]
+        var policies: [AppProxyApplicationPolicy] = [], folders: [String] = [], grants: [Data] = []
         var failures: [String: String] = [:]
         for app in applications where requested.contains(app.id) {
             do {
-                let targets = try await discover(app)
-                let records = targets.targets.map(\.identity)
-                guard records.contains(where: { $0.category == app.id }) else { throw AppProxyIdentityFailure.missingFile }
-                if interactiveID != app.id {
-                    // After loss of a prior generation, only durable broker consent
-                    // can restore files; never silently approve a changed publisher.
-                    if let previous { try previous.validateRefresh(records, scopes: app.scopes) }
-                }
-                let snapshot = try await authorize(records, app.scopes, interactiveID == app.id)
-                try snapshot.validate()
-                guard snapshot.ownerUID == getuid(), snapshot.records == records,
-                      snapshot.scopes == app.scopes else { throw AppProxyIdentityFailure.malformed }
-                for record in records {
-                    if let old = grants[record.path], old.0 != record { throw AIAppTargets.Failure.duplicateTarget }
-                }
-                let byRoot = Dictionary(try snapshot.rootGrants().map { ($0.root, $0.grant) }, uniquingKeysWith: { first, _ in first })
-                for record in records {
-                    guard let grant = byRoot[try AppProxyCodeIdentity.accessURL(for: record.path).path] else {
-                        throw AppProxyIdentityFailure.malformed
+                let policy = try AppProxyApplicationPolicy.resolve(app, home: home)
+                var granted: [(String, Data)] = []
+                if !policy.folders.isEmpty {
+                    let reply = try await authorize(app.id, policy.folders, interactiveID == app.id)
+                    granted = Array(zip(reply.folders, reply.grants))
+                    if policy.existingFolders.contains(where: { !reply.folders.contains($0) }) {
+                        failures[app.id] = AppProxyIdentityFailure.needsAuthorization.rawValue
                     }
-                    grants[record.path] = (record, grant)
                 }
-                for (scope, grant) in zip(snapshot.directoryScopes, snapshot.scopeGrants) { scopeGrants[scope] = grant }
-                scopes += app.scopes
-                groups.append(targets)
+                policies.append(policy)
+                for (folder, grant) in granted where !folders.contains(folder) { folders.append(folder); grants.append(grant) }
             } catch {
                 failures[app.id] = (error as? AppProxyIdentityFailure)?.rawValue
                     ?? ((error as? AIAppTargets.Failure) == nil ? "unavailable" : "discoveryFailed")
             }
         }
-        let targets = try AIAppTargets(combining: groups)
-        let records = targets.targets.map(\.identity)
-        let snapshot = records.isEmpty ? nil : AppProxyIdentitySnapshot(ownerUID: getuid(), records: records,
-            grants: try records.map { record in
-                guard let grant = grants[record.path], grant.0 == record else { throw AppProxyIdentityFailure.malformed }
-                return grant.1
-            },
-            scopes: scopes,
-            scopeGrants: try scopes.filter { $0.kind == .directory }.map { scope in
-                guard let grant = scopeGrants[scope] else { throw AppProxyIdentityFailure.malformed }
-                return grant
-            })
-        try snapshot?.validate()
-        return Self(targets: targets, snapshot: snapshot, failures: failures)
+        let targets = await build(policies)
+        guard !policies.isEmpty else { return Self(targets: targets, policy: nil, failures: failures) }
+        let policy = AppProxyPolicy(ownerUID: getuid(), routes: targets.routes, folders: folders, grants: grants,
+                                    codeStamp: targets.codeStamp)
+        try policy.validate()
+        return Self(targets: targets, policy: policy, failures: failures)
     }
 }
 
 
 /// A user may leave a consent panel open longer than the provider's lease.
-/// Keep only the existing, independently revalidated generation alive while
-/// preparing candidates. Stop and join renewal before publishing any new rules.
+/// Keep only the existing generation alive while preparing candidates. Stop and
+/// join renewal before publishing any new rules.
 @MainActor enum AppProxyAuthorizationLease {
     static func run<T>(interval: UInt64 = 20_000_000_000,
                        renew: @escaping @MainActor () async throws -> Void,
@@ -91,8 +67,8 @@ struct AppProxyEnrollment {
     }
 }
 
-/// Periodic maintenance and a long consent/prepare operation can request the
-/// same renewal concurrently. Share one provider validation per generation.
+/// Periodic maintenance and a long prepare operation can request the same
+/// renewal concurrently. Share one provider request per generation.
 @MainActor final class AppProxyLeaseRenewer {
     private var pending: (generation: UUID, ticket: UUID, task: Task<Void, Error>)?
     func run(generation: UUID, operation: @escaping @MainActor () async throws -> Void) async throws {

@@ -277,23 +277,23 @@ credentials or packet logs are added to the UI.
 The independent App Proxy page owns the editable application list. Default
 entries migrate from the original four-route settings without losing choices.
 Changing the list requires disabling the extension first; node-only changes
-retain stable ports. The App re-discovers signatures before enabling and every 20 seconds while
-enabled, refreshes provider-local code leases transactionally, and rejects
-executables assigned to more than one entry. Open an entry’s Signed executables panel to inspect paths,
-signing identifiers, Team IDs and designated requirements. LoadBalance groups
-have no current selection; route validation checks every member recursively.
+retain stable ports. Each entry's policy is Team IDs, signing identifiers and code
+folders (see `claude-app-proxy-identity.md`, Identifier and Team policy). The App
+looks the installed applications up through LaunchServices before enabling, again
+within seconds when FSEvents reports a change under a watched location, and every
+3 minutes as a fallback. It never hashes or enumerates executables. Path-less rules
+match each signing identifier anywhere; the provider then checks the running code
+against the Team IDs of the route that lists its identifier. A (Team ID, identifier)
+pair belongs to one entry. LoadBalance groups have no current selection; route
+validation checks every member recursively.
 
-Each entry may persist additional `executablePaths` through the same typed XPC
-settings transaction. These are discovery metadata, never root-executed paths.
-The host resolves and verifies each signed executable, assigns it to the entry's
-existing listener, and includes it in the restricted launch-host `matchTools` rules.
-The provider still requires the audit-token identity, canonical path and signing
-requirement to agree. There is no process-name matching or parent-process
-inheritance: explicitly selected tools use the assigned route from a listed
-terminal, editor or SSH login, a selected application, or when run on their own
-(see `claude-app-proxy-identity.md`, Launch context).
-Legacy entries decode with an empty list. Membership edits require the extension
-to be off and are rejected if a binary belongs to another entry.
+The policy fields persist through the same typed XPC settings transaction. They are
+match metadata, never root-executed paths. Code folders are granted read-only to the
+provider by the code-access broker, because macOS validates a diverted process's
+code inside the provider sandbox. There is no process-name matching or
+parent-process inheritance in the provider: a listed CLI uses its route when
+its own application, another selected application, or a listed terminal, editor or
+SSH login starts it. Legacy entries decode with the preset's identifiers.
 
 Network bypass defaults cover RFC1918, IPv4 link-local, IPv6 ULA and IPv6
 link-local. Users can replace or empty this list on the App Proxy page, including

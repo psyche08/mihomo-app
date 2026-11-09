@@ -72,12 +72,8 @@ public struct AppProxyExtensionStatus: Equatable, Sendable {
     public var targetCounts: [String: Int]
     public var executables: [AppProxyExecutable]
     public var launchHosts: [AppProxyLaunchHost] = []
-    /// Coverage given up to fit NetworkExtension's configuration limit, e.g. `launchedCLIs`; nil when complete.
-    public var reducedCoverage: String?
     public init(available: Bool, enabled: Bool = false, connected: Bool = false, requiresReactivation: Bool = false, targetCounts: [String: Int] = [:], executables: [AppProxyExecutable] = [], identityReady: Bool = false, verifiedTargetCount: Int = 0,
-                identityIssue: String? = nil, diagnostics: AppProxyRuntimeStatus? = nil, discoveryIssues: [String: Int] = [:], applications: [String: AppProxyApplicationStatus] = [:], requestedEnabled: Bool? = nil,
-                reducedCoverage: String? = nil) {
-        self.reducedCoverage = reducedCoverage
+                identityIssue: String? = nil, diagnostics: AppProxyRuntimeStatus? = nil, discoveryIssues: [String: Int] = [:], applications: [String: AppProxyApplicationStatus] = [:], requestedEnabled: Bool? = nil) {
         self.applications = applications
         self.requestedEnabled = requestedEnabled ?? enabled
         self.available = available; self.enabled = enabled; self.connected = connected; self.targetCounts = targetCounts
@@ -97,7 +93,9 @@ public protocol DashboardAppProxyService: AnyObject {
     func setEnabled(_ enabled: Bool, settings: AppProxySettings) async throws
     func setApplicationEnabled(_ id: String, enabled: Bool, settings: AppProxySettings) async throws
     func chooseApplication(port: UInt16) async throws -> AppProxyEntry?
-    func chooseExecutable() async throws -> String?
+    /// A custom application read from the signature of the .app or CLI at `path`.
+    func application(at path: String, port: UInt16) async throws -> AppProxyEntry
+    func chooseFolder() async throws -> String?
     func launchHosts() async -> [AppProxyLaunchHost]
     func flowOwners() async -> AppProxyFlowOwners?
 }
@@ -274,7 +272,7 @@ public final class AppProxyStore: ObservableObject {
         discoveryError = nil
     }
 
-    /// This cache is display-only. Activation always revalidates signatures.
+    /// This cache is display-only: the top-level code each application's rules name.
     public func refreshExecutables(force: Bool = false) async {
         guard !preview, !scanning, !busy, let service,
               force || !hasExecutableInventory || Date().timeIntervalSince(discoveredAt) > 30 else { return }
@@ -322,8 +320,8 @@ public final class AppProxyStore: ObservableObject {
             error = "\(url.path) is already in the list."
             return
         }
-        let title = url.pathExtension == "app" ? url.deletingPathExtension().lastPathComponent : url.lastPathComponent
-        await add { port in .init(id: "app_" + UUID().uuidString.lowercased(), title: title, path: url.path, port: port) }
+        guard let service else { return }
+        await add { port in try await service.application(at: url.path, port: port) }
     }
 
     /// The Team ID of a dropped app or executable, read from its code signature.
@@ -353,8 +351,8 @@ public final class AppProxyStore: ObservableObject {
             guard let entry = try await makeEntry(port) else { return }
             var candidate = draft
             candidate.applications.append(entry)
-            // Discover before accepting: overlapping signed executables cannot
-            // silently inherit one of two conflicting application routes.
+            // A Team ID belongs to one application route: validate before accepting.
+            try AppProxySettings(applications: candidate.applications).validate()
             let executables = try await service.discoverExecutables(applications: candidate.applications)
             discoveryGeneration += 1
             draft = candidate
@@ -368,38 +366,32 @@ public final class AppProxyStore: ObservableObject {
         draft.applications.removeAll { $0.id == id }; draft.routes.removeValue(forKey: id)
     }
 
-    public func chooseExecutable() async throws -> String? {
+    public func chooseFolder() async throws -> String? {
         guard !busy, !refreshing, !extensionStatus.requiresDisableBeforeEditing, let service else { throw AppProxySettingsError.staleState }
         editingApplications = true; defer { editingApplications = false }
-        return try await service.chooseExecutable()
+        guard let path = try await service.chooseFolder() else { return nil }
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return path.hasPrefix(home + "/") ? "~" + path.dropFirst(home.count) : path
     }
 
-    /// Edit membership in the draft; Apply persists it through authenticated XPC.
-    public func setExecutablePaths(_ paths: [String], for applicationID: String) async throws {
-        guard let entry = draft.applications.first(where: { $0.id == applicationID }) else { throw AppProxySettingsError.staleState }
-        try await setPolicy(executablePaths: paths, teamIdentifiers: entry.teamIdentifiers,
-                            directories: entry.directories, for: applicationID)
-    }
-
-    /// Exact CLIs, whole Team IDs and whole directories for one application; validated by a fresh scan.
-    /// `capturesLaunchedCLIs` is kept when nil.
-    public func setPolicy(executablePaths paths: [String], teamIdentifiers teams: [String], directories: [String],
-                          capturesLaunchedCLIs: Bool? = nil, for applicationID: String) async throws {
+    /// Team IDs, signing identifiers and code folders (absolute or `~/`) for one application.
+    /// Nothing is scanned: the OS rules divert the identifiers, and the provider checks the Team ID.
+    public func setPolicy(teamIdentifiers teams: [String], signingIdentifiers identifiers: [String], directories: [String],
+                          for applicationID: String) async throws {
         guard !busy, !refreshing, !extensionStatus.requiresDisableBeforeEditing, !hasConflict, routing != nil, let service,
               let index = draft.applications.firstIndex(where: { $0.id == applicationID }) else {
             throw AppProxySettingsError.staleState
         }
         editingApplications = true; defer { editingApplications = false }
         var candidate = draft
-        candidate.applications[index].executablePaths = paths
         candidate.applications[index].teamIdentifiers = teams.map { $0.trimmingCharacters(in: .whitespaces).uppercased() }
-        // A typed folder may carry a trailing slash or `..`; executables must already be exact.
-        candidate.applications[index].directories = directories.map { URL(fileURLWithPath: $0).standardizedFileURL.path }
-        if let capturesLaunchedCLIs { candidate.applications[index].capturesLaunchedCLIs = capturesLaunchedCLIs }
-        try AppProxySettings(applications: candidate.applications).validate()
-        func canonical(_ path: String) -> String { URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path }
-        candidate.applications[index].executablePaths = paths.map(canonical)
-        candidate.applications[index].directories = directories.map(canonical)
+        candidate.applications[index].signingIdentifiers = identifiers.map { $0.trimmingCharacters(in: .whitespaces) }
+        // A typed folder may carry a trailing slash or `..`.
+        candidate.applications[index].directories = directories.map { folder in
+            let trimmed = folder.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("~/") else { return URL(fileURLWithPath: trimmed).standardizedFileURL.path }
+            return "~" + URL(fileURLWithPath: String(trimmed.dropFirst())).standardizedFileURL.path
+        }
         try AppProxySettings(applications: candidate.applications).validate()
         let executables = try await service.discoverExecutables(applications: candidate.applications)
         discoveryGeneration += 1

@@ -22,29 +22,33 @@ final class AppProxyProfileTests: XCTestCase {
         var scoped = settings
         scoped.applications[0].teamIdentifiers = ["D38WU7D763"]
         scoped.applications[0].directories = ["/Users/example/tools"]
-        scoped.applications[0].executablePaths = ["/opt/homebrew/bin/packer"]
-        scoped.applications[0].capturesLaunchedCLIs = false
+        scoped.applications[0].signingIdentifiers = ["packer"]
         XCTAssertEqual(scoped.runtimeRouting, settings.runtimeRouting, "the daemon stores this change without a restart")
         XCTAssertEqual(try AppProxyProfile.applying(scoped, to: source), try AppProxyProfile.applying(settings, to: source))
         var rerouted = scoped; rerouted.applications[0].port += 1
         XCTAssertNotEqual(rerouted.runtimeRouting, settings.runtimeRouting)
     }
-    func testExecutableMembershipMigrationPersistenceAndBounds() throws {
-        let legacy = try JSONDecoder().decode(AppProxyEntry.self, from: Data(#"{"id":"chatgpt","title":"Codex","port":17971}"#.utf8))
-        XCTAssertEqual(legacy.executablePaths, [])
-        var settings = AppProxySettings(applications: [legacy])
-        settings.applications[0].executablePaths = ["/usr/bin/curl", "/usr/bin/git"]
-        XCTAssertNoThrow(try settings.validate())
-        XCTAssertEqual(try JSONDecoder().decode(AppProxySettings.self, from: JSONEncoder().encode(settings)), settings)
-        for paths in [["curl"], ["~/bin/curl"], ["/usr/../bin/curl"], ["/bin/curl\n"], ["/"],
-                      ["/bin/curl", "/bin/curl"], (0..<33).map { "/bin/tool\($0)" }] {
-            settings.applications[0].executablePaths = paths
-            XCTAssertThrowsError(try settings.validate())
-        }
-        settings.applications = AppProxyEntry.legacyDefaults
-        settings.applications[0].executablePaths = ["/usr/bin/curl"]
-        settings.applications[1].executablePaths = ["/usr/bin/curl"]
-        XCTAssertThrowsError(try settings.validate(), "Ownership must be unique across apps")
+    func testProcessRoutePrefixesBecomeAnchoredRegexes() throws {
+        let folder = "/Users/me/Library/Application Support/Claude/claude-code"
+        XCTAssertEqual(AppProxyProcessRoutes.pattern(prefix: folder), "^" + folder + "/")
+        XCTAssertEqual(AppProxyProcessRoutes.pattern(prefix: "/opt/a.b+c(1)"), #"^/opt/a\.b\+c\(1\)/"#)
+        XCTAssertEqual(try AppProxyProfile.processProviderContents(["/usr/bin/curl"],
+                                                                   prefixes: ["/Applications/ChatGPT.app", "/Applications/ChatGPT.app"]),
+                       #"payload:\#n  - "PROCESS-PATH,/usr/bin/curl"\#n  - "PROCESS-PATH-REGEX,^/Applications/ChatGPT\\.app/"\#n"#)
+        XCTAssertThrowsError(try AppProxyProfile.processProviderContents([], prefixes: ["/"]))
+        XCTAssertThrowsError(try AppProxyProfile.processProviderContents([], prefixes: ["relative"]))
+        // Older daemons stored exact paths only.
+        let old = try JSONDecoder().decode(AppProxyProcessRoutes.self, from: Data(#"{"paths":{"chatgpt":["/usr/bin/curl"]}}"#.utf8))
+        XCTAssertEqual(old, AppProxyProcessRoutes(["chatgpt": ["/usr/bin/curl"]]))
+        var routes = AppProxyProcessRoutes([:], prefixes: ["chatgpt": ["/Applications/ChatGPT.app"]])
+        XCTAssertNoThrow(try routes.validate(applications: AppProxyEntry.defaults))
+        XCTAssertEqual(try JSONDecoder().decode(AppProxyProcessRoutes.self, from: JSONEncoder().encode(routes)), routes)
+        routes.prefixes["chatgpt"] = ["/"]
+        XCTAssertThrowsError(try routes.validate(applications: AppProxyEntry.defaults))
+        routes.prefixes = ["unknown": ["/opt/x"]]
+        XCTAssertThrowsError(try routes.validate(applications: AppProxyEntry.defaults))
+        routes = AppProxyProcessRoutes([:], prefixes: ["chatgpt": (0...AppProxyProcessRoutes.maximumPaths).map { "/opt/f\($0)" }])
+        XCTAssertThrowsError(try routes.validate(applications: AppProxyEntry.defaults))
     }
     private var settings: AppProxySettings {
         .init(routes: Dictionary(uniqueKeysWithValues: AppProxyApplication.legacyPresets.map { ($0.rawValue, "node-" + $0.rawValue) }), applications: AppProxyEntry.legacyDefaults)

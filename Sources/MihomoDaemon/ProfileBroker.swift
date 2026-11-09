@@ -83,7 +83,7 @@ final class ProfileBroker: @unchecked Sendable {
         }
     }
 
-    /// Stores verified executable paths per App Proxy application and rewrites their rule
+    /// Stores the code locations of each App Proxy application and rewrites their rule
     /// provider files. Returns the providers whose content changed.
     func setAppProxyProcesses(_ routes: AppProxyProcessRoutes) throws -> [String] {
         try queue.sync {
@@ -109,7 +109,8 @@ final class ProfileBroker: @unchecked Sendable {
         var changed: [String] = []
         for app in settings.applications {
             let file = home.appendingPathComponent(AppProxyProfile.processProviderPath(app.id))
-            let contents = Data(try AppProxyProfile.processProviderContents(routes.paths[app.id] ?? []).utf8)
+            let contents = Data(try AppProxyProfile.processProviderContents(routes.paths[app.id] ?? [],
+                                                                            prefixes: routes.prefixes[app.id] ?? []).utf8)
             guard (try? Data(contentsOf: file)) != contents else { continue }
             try writePrivate(contents, to: file, permissions: 0o600)
             changed.append(AppProxyProfile.processProviderName(app.id))

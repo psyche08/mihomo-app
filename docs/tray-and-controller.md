@@ -406,10 +406,10 @@ controller mutation, privileged shell command, or GUI-owned core is introduced.
 Config now includes **App Proxy**, separate from the profile editor's TUN
 process rules. Four rows cover ChatGPT/Codex Desktop, Codex CLI, Claude Desktop,
 and Claude CLI. Each row can select a concrete node or follow an existing proxy
-group. Discovered signed helper executables inherit their application's route;
-Terminal, editor and SSH `matchTools` rules select only verified CLIs.
-A host-only identity that cannot identify the actual CLI is rejected, rather
-than assigned an arbitrary application's route.
+group. Helpers and CLIs route by signing identifier and Team ID; terminal, editor
+and SSH rules list only the selected applications' identifiers. A flow whose
+identifier or Team ID is not listed is rejected, rather than assigned an arbitrary
+application's route.
 
 **Apply Routes** sends `app-proxy.set-routing` over authenticated XPC. The root
 daemon checks a revision of the active raw profile and saved settings, validates

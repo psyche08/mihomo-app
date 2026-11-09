@@ -452,6 +452,10 @@ kept as a possible addition for unlisted launchers); hosts as authorized records
 (sealed-resource validation of IDEs and Xcode every 20 seconds, and a host failure
 would fail its application).
 
+Superseded on 2026-11-09 (App Proxy identifier and Team policy): launch-host rules
+now carry every listed identifier as a path-less tool entry, and
+`capturesLaunchedCLIs` is gone.
+
 ## 2026-11-09: Remove Local DoH; Global DNS is owned with TUN; App Proxy DNS goes through daemon XPC
 
 Decision: remove Local DoH (LocalHttpDns) and the DNS integration mode that
@@ -520,6 +524,9 @@ login item or launchd agent. Rejected: shortening tool requirements (weaker
 identity), and moving the duplicated `targets` list out of the provider
 configuration (a provider protocol change for about 60 KB).
 
+Superseded the same day by the identifier and Team policy below: there are no
+per-executable entries left to restrict.
+
 ## 2026-11-09: App Proxy rules scale per application; updates are event driven
 
 Each Team ID policy multiplied the configuration: every responsible rule of a
@@ -547,3 +554,38 @@ application starts have the same fallback. Rejected for now: moving CLIs to Miho
 over TUN only (reverses the 2026-10-26 launch-host decision), and a transparent
 proxy (captures all traffic and coexists poorly with the MTTA DNS proxy and content
 filter).
+
+Superseded the same day by the identifier and Team policy below, except FSEvents and
+the early Mihomo process-route push, which remain.
+
+## 2026-11-09: App Proxy identifier and Team policy, without binary scanning
+
+The per-executable policy stayed heavy after the scaling work: it scanned every signed
+Mach-O of the selected applications every 20 seconds, pinned cdhashes and file stamps,
+revalidated files on every renewal, and needed a size budget with a reduced tier.
+The owner asked for a simpler policy that does not scan binaries, and for maintenance
+every 3 minutes with FSEvents kept real time.
+
+Decision:
+- An entry is Team IDs, signing identifiers and code folders. Adding code reads its
+  Team ID and identifiers once; passes never enumerate or hash executables.
+- Each identifier is one path-less tool entry with an `identifier` + Team requirement.
+  Each installed top-level application and each launch host gets one rule carrying all
+  tool entries. The provider routes by the running code's identifier and Team ID after
+  `SecCodeCheckValidity`; anything else follows Mihomo's normal rules.
+- Folder grants stay: NetworkExtension validates diverted code inside the provider
+  sandbox, which cannot read the home directory or Homebrew without a grant. Folders,
+  not files, are granted, so new versions need no consent. A partly approved entry is
+  routed for what the provider can read.
+- LaunchServices locates applications; bundles found in granted folders are registered
+  with `LSRegisterURL`, because path-less rules resolve through LaunchServices.
+- Maintenance runs every 3 minutes as a fallback; FSEvents triggers it within seconds.
+  Lease renewal stays at 20 seconds and reads no files.
+
+Trade-off: trust is the publisher, not the file. Any valid code from a listed Team ID
+under a listed identifier is routed, including old and future versions. Unsigned and
+ad-hoc code cannot be routed. This reverses the 2026-10-26 decision against routing all
+children: launch hosts now carry every listed identifier, though never `nil`, so
+unlisted children still connect directly. Rejected: `matchTools == nil` (routes every
+child of a terminal), and dropping folder grants (code in the home directory would fail
+NetworkExtension validation).

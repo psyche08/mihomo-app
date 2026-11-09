@@ -9,15 +9,13 @@ private let appLog = Logger(subsystem: "dev.linsheng.mihomo-dns-probe", category
 
 final class AppProbeProvider: NEAppProxyProvider {
     private let queue = DispatchQueue(label: "app-probe.flows")
-    private let validationQueue = DispatchQueue(label: "app-probe.identity-validation", qos: .utility)
-    private var renewal: (generation: UUID, replies: [(Data?) -> Void])?
     private var closers: [UUID: () -> Void] = [:]
     private var counts: [String: Int] = [:]
     private var expiry: DispatchWorkItem?
     private var active = false
     private var aiConfiguration: AIProxyConfiguration?
-    private var accessLease: AppProxyAccessLease?
-    private var pendingAccess: (AIProxyConfiguration, AppProxyAccessLease)?
+    private var folderAccess: AppProxyFolderAccess?
+    private var pendingAccess: (AIProxyConfiguration, AppProxyFolderAccess)?
     private var generationGate: AppProxyGenerationGate?
     private var leaseTimer: DispatchSourceTimer?
     private var lastRenewal: TimeInterval = 0
@@ -33,15 +31,14 @@ final class AppProbeProvider: NEAppProxyProvider {
         }
         let deadline: TimeInterval?
         if raw["mode"] as? String == "ai" {
-            guard let config = try? AIProxyConfiguration(raw, now: Date().timeIntervalSince1970) else {
+            guard let config = try? AIProxyConfiguration(raw) else {
                 completionHandler(NSError(domain: "AppProbe", code: 1)); return
             }
             do {
                 #if MAIN_APP_PROXY
-                guard let snapshot = config.snapshot else { throw AppProxyIdentityFailure.needsAuthorization }
-                guard Self.consoleUID() == snapshot.ownerUID else { throw AppProxyIdentityFailure.wrongUser }
-                accessLease = try AppProxyAccessLease(snapshot)
-                generationGate = AppProxyGenerationGate(snapshot.generation)
+                guard Self.consoleUID() == config.policy.ownerUID else { throw AppProxyIdentityFailure.wrongUser }
+                folderAccess = try AppProxyFolderAccess(config.policy)
+                generationGate = AppProxyGenerationGate(config.policy.generation)
                 lastRenewal = ProcessInfo.processInfo.systemUptime
                 #endif
             } catch {
@@ -51,7 +48,7 @@ final class AppProbeProvider: NEAppProxyProvider {
                 completionHandler(NSError(domain: "MihomoBox.AppProxy.Authorization", code: 1,
                                           userInfo: [NSLocalizedDescriptionKey: reason.rawValue])); return
             }
-            aiConfiguration = config; deadline = config.deadline
+            aiConfiguration = config; deadline = nil
         } else {
             #if MAIN_APP_PROXY
             completionHandler(NSError(domain: "AppProxy", code: 1)); return
@@ -95,7 +92,7 @@ final class AppProbeProvider: NEAppProxyProvider {
     override func stopProxy(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         queue.async {
             self.active = false; self.expiry?.cancel(); self.leaseTimer?.cancel(); self.leaseTimer = nil
-            self.accessLease = nil; self.pendingAccess = nil; self.generationGate = nil
+            self.folderAccess = nil; self.pendingAccess = nil; self.generationGate = nil
             for close in Array(self.closers.values) { close() }
             self.closers.removeAll()
             for request in Array(self.dnsRequests.values) { request.cancel() }
@@ -111,10 +108,10 @@ final class AppProbeProvider: NEAppProxyProvider {
             let activeOwner = self.aiConfiguration?.identify(flow.metaData)
             let pendingOwner = activeOwner == nil ? self.pendingAccess?.0.identify(flow.metaData) : nil
             let activeIdentity = activeOwner?.category, pendingIdentity = pendingOwner?.category
-            let generation = pendingIdentity != nil ? self.pendingAccess?.1.snapshot.generation : self.accessLease?.snapshot.generation
+            let generation = pendingIdentity != nil ? self.pendingAccess?.1.policy.generation : self.folderAccess?.policy.generation
             let identity = activeIdentity ?? pendingIdentity ?? (self.aiConfiguration == nil ? classifyProbeIdentity(flow.metaData) : "unknown")
             self.record(receipt, flow.metaData.sourceAppAuditToken, "handleNewFlow", generation: generation)
-            if let snapshot = self.aiConfiguration?.snapshot, Self.consoleUID() != snapshot.ownerUID {
+            if let policy = self.aiConfiguration?.policy, Self.consoleUID() != policy.ownerUID {
                 self.lastFailure = .wrongUser
                 self.record(receipt, flow.metaData.sourceAppAuditToken, "identity_wrongUser", generation: generation)
                 self.record(receipt, flow.metaData.sourceAppAuditToken, "providerRejected", generation: generation)
@@ -122,7 +119,7 @@ final class AppProbeProvider: NEAppProxyProvider {
             }
             guard self.active, (self.aiConfiguration != nil ? identity != "unknown" : ["selected", "helper"].contains(identity)), self.closers.count < (self.aiConfiguration == nil ? 128 : 1024) else {
                 if let config = self.aiConfiguration {
-                    do { _ = try config.classifyValidated(flow.metaData) }
+                    do { _ = try config.identifyValidated(flow.metaData) }
                     catch { self.record(receipt, flow.metaData.sourceAppAuditToken, "identity_" + (error as? AppProxyIdentityFailure ?? .runtimeIdentity).rawValue, generation: generation) }
                 }
                 self.record(receipt, flow.metaData.sourceAppAuditToken, "providerRejected", generation: generation); self.count("rejected_identity_or_capacity")
@@ -238,14 +235,14 @@ final class AppProbeProvider: NEAppProxyProvider {
         return uid
     }
     private func startLeaseTimer() {
-        guard accessLease != nil else { return }
+        guard folderAccess != nil else { return }
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + 5, repeating: 5)
         timer.setEventHandler { [weak self] in
-            guard let self, self.active, let snapshot = self.accessLease?.snapshot else { return }
+            guard let self, self.active, let policy = self.folderAccess?.policy else { return }
             if self.generationGate?.expirePrepared(now: ProcessInfo.processInfo.systemUptime) == true { self.pendingAccess = nil }
-            if Self.consoleUID() != snapshot.ownerUID || ProcessInfo.processInfo.systemUptime - self.lastRenewal > 90 {
-                self.lastFailure = Self.consoleUID() != snapshot.ownerUID ? .wrongUser : .staleAuthorization
+            if Self.consoleUID() != policy.ownerUID || ProcessInfo.processInfo.systemUptime - self.lastRenewal > 90 {
+                self.lastFailure = Self.consoleUID() != policy.ownerUID ? .wrongUser : .staleAuthorization
                 self.active = false
                 appLog.error("app_authorization_expired reason=\(self.lastFailure!.rawValue, privacy: .public)")
                 self.cancelProxyWithError(NSError(domain: "MihomoBox.AppProxy.Authorization", code: 2))
@@ -258,81 +255,48 @@ final class AppProbeProvider: NEAppProxyProvider {
             var failure: AppProxyIdentityFailure?
             var owners: AppProxyFlowOwners?
             do {
-                guard messageData.count <= AppProxyIdentitySnapshot.maximumBytes + 65536,
-                      let lease = self.accessLease, self.generationGate != nil, Self.consoleUID() == lease.snapshot.ownerUID else { throw AppProxyIdentityFailure.wrongUser }
+                // A configuration carries the policy as plist data inside a JSON (base64) message.
+                guard messageData.count <= AppProxyPolicy.maximumBytes * 2,
+                      let access = self.folderAccess, self.generationGate != nil, Self.consoleUID() == access.policy.ownerUID else { throw AppProxyIdentityFailure.wrongUser }
                 let message = try JSONDecoder().decode(AppProxyRuntimeMessage.self, from: messageData)
                 switch message.action {
                 case .status: break
                 case .flowOwners: owners = AppProxyFlowOwners(Array(self.flowOwners.values))
                 case .prepare:
-                    guard let data = message.configuration, data.count <= AppProxyIdentitySnapshot.maximumBytes,
+                    guard let data = message.configuration, data.count <= AppProxyPolicy.maximumBytes + 65536,
                           let raw = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else { throw AppProxyIdentityFailure.malformed }
-                    let config = try AIProxyConfiguration(raw, now: Date().timeIntervalSince1970)
-                    guard let snapshot = config.snapshot, snapshot.ownerUID == lease.snapshot.ownerUID,
+                    let config = try AIProxyConfiguration(raw)
+                    guard config.policy.ownerUID == access.policy.ownerUID,
                           config.ports == self.aiConfiguration?.ports,
                           let expected = message.expected else { throw AppProxyIdentityFailure.malformed }
-                    let prepared = try AppProxyAccessLease(snapshot)
-                    try self.generationGate?.prepare(snapshot.generation, expected: expected, now: ProcessInfo.processInfo.systemUptime)
+                    let prepared = try AppProxyFolderAccess(config.policy)
+                    try self.generationGate?.prepare(config.policy.generation, expected: expected, now: ProcessInfo.processInfo.systemUptime)
                     self.pendingAccess = (config, prepared)
                 case .commit:
                     guard let expected = message.expected, let pending = self.pendingAccess,
-                          pending.1.snapshot.generation == expected else { throw AppProxyIdentityFailure.generationMismatch }
-                    try pending.1.revalidate()
+                          pending.1.policy.generation == expected else { throw AppProxyIdentityFailure.generationMismatch }
                     try self.generationGate?.commit(expected, now: ProcessInfo.processInfo.systemUptime)
-                    self.aiConfiguration = pending.0; self.accessLease = pending.1; self.pendingAccess = nil
+                    self.aiConfiguration = pending.0; self.folderAccess = pending.1; self.pendingAccess = nil
                     self.lastRenewal = ProcessInfo.processInfo.systemUptime; self.lastFailure = nil
                 case .abort: self.pendingAccess = nil; self.generationGate?.abort()
                 case .renew:
-                    guard message.expected == lease.snapshot.generation else { throw AppProxyIdentityFailure.generationMismatch }
-                    try self.generationGate?.validateRenewal(expected: lease.snapshot.generation, active: self.active,
+                    // The policy names publishers, not files: an update needs no revalidation.
+                    // Renewal proves that the same login session's host still holds this generation.
+                    guard message.expected == access.policy.generation else { throw AppProxyIdentityFailure.generationMismatch }
+                    try self.generationGate?.validateRenewal(expected: access.policy.generation, active: self.active,
                         lastRenewal: self.lastRenewal, now: ProcessInfo.processInfo.systemUptime)
-                    try self.renewLease(lease, reply: completionHandler)
-                    return
+                    self.lastRenewal = ProcessInfo.processInfo.systemUptime
+                    self.count("lease_renewed")
                 }
             } catch { failure = error as? AppProxyIdentityFailure ?? .malformed }
             completionHandler?(self.runtimeReply(failure: failure, owners: owners))
         }
     }
 
-    /// Full-package signature checks may be slow. Keep data forwarding, status
-    /// reads, and the hard lease deadline on the flow queue while validating.
-    private func renewLease(_ lease: AppProxyAccessLease, reply: ((Data?) -> Void)?) throws {
-        let generation = lease.snapshot.generation
-        if let pending = renewal {
-            guard pending.generation == generation else { throw AppProxyIdentityFailure.generationMismatch }
-            guard pending.replies.count < 8 else { throw AppProxyIdentityFailure.capacity }
-            if let reply { renewal?.replies.append(reply) }
-            return
-        }
-        renewal = (generation, reply.map { [$0] } ?? [])
-        let started = ProcessInfo.processInfo.systemUptime
-        validationQueue.async {
-            let result = Result { try lease.revalidate() }
-            self.queue.async {
-                let replies = self.renewal?.replies ?? []
-                self.renewal = nil
-                var failure: AppProxyIdentityFailure?
-                do {
-                    guard Self.consoleUID() == lease.snapshot.ownerUID else { throw AppProxyIdentityFailure.wrongUser }
-                    guard self.accessLease === lease else { throw AppProxyIdentityFailure.generationMismatch }
-                    guard let gate = self.generationGate else { throw AppProxyIdentityFailure.staleAuthorization }
-                    try gate.validateRenewal(expected: generation, active: self.active,
-                        lastRenewal: self.lastRenewal, now: ProcessInfo.processInfo.systemUptime)
-                    try result.get()
-                    self.lastRenewal = ProcessInfo.processInfo.systemUptime
-                    self.count("lease_renewed")
-                    let elapsed = Int((self.lastRenewal - started) * 1000)
-                    self.counts["lease_validation_ms_max"] = max(self.counts["lease_validation_ms_max"] ?? 0, elapsed)
-                } catch { failure = error as? AppProxyIdentityFailure ?? .malformed }
-                let data = self.runtimeReply(failure: failure)
-                replies.forEach { $0(data) }
-            }
-        }
-    }
     private func runtimeReply(failure: AppProxyIdentityFailure?, owners: AppProxyFlowOwners? = nil) -> Data? {
-        let status = AppProxyRuntimeStatus(generation: accessLease?.snapshot.generation,
+        let status = AppProxyRuntimeStatus(generation: folderAccess?.policy.generation,
             ready: active && failure == nil && lastFailure == nil,
-            verifiedTargets: accessLease?.snapshot.records.count ?? 0,
+            verifiedTargets: folderAccess?.policy.routes.count ?? 0,
             failure: failure ?? lastFailure,
             counters: owners == nil ? counts : [:], recentFlows: owners == nil ? flowEvidence : [],
             flowOwners: owners, providerVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)

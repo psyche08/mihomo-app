@@ -105,25 +105,18 @@ working TUN connection is not evidence that App Proxy captured it.
 
 ## App Proxy configuration size and updates
 
-Each install logs its measured size and whether the launched-CLI tier was dropped:
+The rules hold one shared, path-less tool entry per signing identifier and one rule
+per installed top-level application or launch host, so the configuration stays small.
+Each install logs its measured size and rule and tool counts:
 
 ```bash
 /usr/bin/log show --last 10m --info --predicate 'eventMessage CONTAINS "app_proxy_configuration_size"'
 ```
 
-`reduced=launchedCLIs` (also `reducedCoverage` in `mihomoboxctl app-proxy status`)
-means CLIs that another selected application starts are not captured by App Proxy;
-keep TUN on so Mihomo's process rules route them. An application or CLI update
-logs `event=app_proxy_refresh reason=update` within a few seconds.
-
-The path-less tool experiment is off by default. Enable it only for a test, then
-toggle App Proxy so the configuration is rebuilt, and verify with
-`mihomoboxctl app-proxy flows` that an updated CLI is still captured:
-
-```bash
-defaults write dev.linsheng.mihomo-app appProxy.toolsByIdentifier.experiment -bool YES
-defaults delete dev.linsheng.mihomo-app appProxy.toolsByIdentifier.experiment
-```
+An update that replaces a top-level application or a code folder logs
+`event=app_proxy_refresh reason=update` within a few seconds (FSEvents); the periodic
+pass runs every 3 minutes as a fallback. Helpers and CLIs match by identifier and
+Team ID, so their updates need no new rules.
 
 ## Verify App Proxy without system proxy or TUN
 
@@ -157,12 +150,10 @@ off. If reproducing this condition, finish or pause ongoing Claude operations
 before restarting the application or its verified Network Service; do not kill
 unrelated same-name helpers or automatically terminate user applications.
 
-Full-package identity checks for both publishers can outlast the former
-10-second provider or 20-second noninteractive broker deadline. Provider
-prepare/commit/renew and noninteractive broker checks now have a bounded
-60-second budget. Status/flow reads retain a 10-second deadline, interactive
-approval retains 300 seconds, and the provider's 90-second authorization lease
-and fail-closed behavior are unchanged. `codeAccessTimeout` and `providerTimeout`
+The provider checks each flow's running code against its route's Team ID; it reads no
+files on renewal. Prepare and commit have a 30-second deadline, status, flow reads and
+renewals 10 seconds, and broker grants 20 seconds. The provider's 90-second
+authorization lease and fail-closed behavior are unchanged. `codeAccessTimeout` and `providerTimeout`
 distinguish expiration from transport failure. A successful enable must remain
 healthy through subsequent renewals before being accepted.
 
@@ -221,15 +212,15 @@ unchanged for traffic outside App Proxy.
 
 Open **App Proxy** in the sidebar (Command-8). Drag a signed application bundle or
 executable onto the list, or use **Add App or CLI…** to paste its path (Choose…
-still opens a picker). Embedded signed helpers follow the
-application's route. Open **Signed executables** to inspect the discovered
-paths, Signing IDs, Team IDs and designated requirements in a separate panel.
-Refresh Nodes reads routing, available targets and extension status concurrently,
-without repeating the signature scan or replacing an edited draft. The signature
-inventory is cached for the displayed application list; use Rescan in the details
-panel (or Rescan Signed Executables in the actions menu) after installing or
-updating an app. Activation always performs a fresh signature verification.
-Unsigned files and duplicate executable ownership are rejected.
+still opens a picker). Adding reads the code's Team ID and signing identifiers once:
+the app's, its nested helper apps' and its same-team executables'. Code outside
+`/Applications`, `/System`, `/Library` and the system `bin` folders also records its
+folder (a Homebrew formula or cask folder, so it survives upgrades). Unsigned and
+ad-hoc code has no Team ID and is rejected. The details panel lists the installed
+top-level applications that get OS rules of their own; helpers and CLIs are not
+listed, because they match by identifier and Team ID. Refresh Nodes reads routing,
+available targets and extension status concurrently without replacing an edited
+draft; **Refresh Installed Applications** looks the applications up again.
 
 Search applications or search inside each node picker. The fixed bottom bar
 shows unsaved edits and keeps Apply, Discard and the extension switch visible.
@@ -237,33 +228,28 @@ An external settings change preserves the draft but blocks Apply until Discard
 loads the latest saved settings, preventing accidental overwrites.
 Choose a node or proxy group for every entry, then **Apply Changes**. Each row
 has **Authorize & Enable**, **Retry Authorization** and **Disable** actions.
-Authorize rescans that application's signed executables and lists them for one-click
-confirmation, grouped by what admits them (the app and its helpers, a Team ID, a
-folder, an exact CLI). The sheet also names the Team IDs and folders being approved,
-which admit signed code added there later, and whether other apps' CLIs started by
-this app keep their own nodes. No file picker is needed for code in the home directory,
-`/Applications`, `/opt/homebrew` or `/usr/local`. Other rows and their node
-choices remain saved; declining one application's consent does not discard or
-block other authorized applications. An application publishes rules only after
-all of its discovered code and responsible hosts pass read-only access and
-signature checks. Missing/new code requiring consent withdraws that application's
-rules and displays a pending state; it is not labeled connected. Unselected or
-pending applications follow the remaining macOS network configuration, including
-TUN when applicable. No direct fallback is added by App Proxy.
+Authorize shows the installed applications found for that row and the policy being
+approved: Team IDs, signing identifiers and the code folders granted read-only to the
+App Proxy extension. Approval covers later versions and folders that do not exist yet.
+No file picker is needed. Other rows and their node choices remain saved; declining
+one application's consent does not discard or block other authorized applications.
+An application whose folders are only partly approved is still routed for the code
+the extension can read, and its row asks for the rest (`needsAuthorization`).
+Unselected or pending applications follow the remaining macOS network configuration,
+including TUN when applicable. No direct fallback is added by App Proxy.
 
 **Turn Off** pauses the shared service while preserving row selections;
 **Resume Selected Apps** rechecks selected applications without opening consent
-panels. A fresh installation and legacy configurations without a verified
-identity snapshot start with no selected applications. Existing v4 identities
-seed selections; old bookmarks without durable publisher pins require one
-explicit per-row reauthorization. Preferences belong to the logged-in user;
-root profile settings still retain the complete application/node list.
-An open consent panel continues renewing only the previous verified generation;
-new rules are committed together after provider validation, with verified
-rollback or complete shutdown on an ambiguous system-wide failure. Shared
-terminal, editor and SSH rules contain only the admitted executables, never all
-child processes. A CLI launched elsewhere (cron, a launchd job running a script, an
-unlisted app) fails with `EPERM`; run it from a listed host.
+panels. A fresh installation starts with no selected applications; a saved policy
+from an earlier version seeds the selections, and folders approved then stay approved.
+Preferences belong to the logged-in user; root profile settings still retain the
+complete application/node list. An open consent panel continues renewing only the
+previous verified generation; new rules are committed together after provider
+validation, with verified rollback or complete shutdown on an ambiguous system-wide
+failure. Terminal, editor and SSH rules list the selected applications' identifiers,
+never all child processes. A CLI launched elsewhere (cron, a launchd job running a
+script, an unlisted app) connects without App Proxy; with TUN on, Mihomo's process
+rules for the application's folders still route it.
 
 A LoadBalance group is accepted only when every candidate
 resolves to a remote proxy. macOS may require Network Extension and VPN approval.
@@ -272,60 +258,53 @@ removes its proxy routing, never the installed application. Apply saves these
 changes; Restore Team ID Defaults restores the OpenAI, Anthropic and JetBrains
 presets.
 
-Each entry's **Policy** editor adds code that shares that entry's node, in three
-scopes, one entry per line (type, paste or drag in):
+Each entry's **Policy** editor holds what routes code to that entry's node, one entry
+per line (type, paste or drag in):
 
-- **Team IDs**: every signed app in `/Applications` and `~/Applications`, and every
-  CLI in `/opt/homebrew/bin`, `/usr/local/bin` and `~/.local/bin`, signed by the team.
-  Dropping an app fills in its Team ID.
-- **Directories**: every signed executable below the folder, including versions
-  installed later.
-- **CLI executables**: exactly these executables (or **Choose Executable…**).
+- **Team IDs**: the developers who sign the application. Dropping an app fills in its
+  Team ID. A Team ID belongs to one entry.
+- **Signing identifiers**: the app, its helpers and its CLIs (`com.openai.codex`,
+  `codex`). Dropping an app adds its bundle identifier.
+- **Code folders**: folders outside `/Applications` that hold the code, such as
+  `~/.local/share/claude/versions` or a Homebrew Caskroom folder (**Choose Folder…**).
+  They are granted read-only to the App Proxy extension so macOS can validate the
+  code there. A writable or linked folder, a whole home, Library, Application Support,
+  Documents, Desktop or Downloads folder, and a system or Homebrew prefix are refused.
 
 Below them, **Where CLIs are captured** lists the terminals, editors and SSH logins
-detected on this Mac and holds the **Route other selected apps' CLIs launched by
-APP** switch (on by default). The row's **Policy** link summarizes the scopes and
-notes when that switch is off.
+detected on this Mac. A listed CLI is captured when its own application, another
+selected application or one of these launchers starts it.
 
 Then **Update Draft**, **Apply Changes**, and authorize the app. Turn App Proxy off
-before editing a policy. A Team ID or directory belongs to one app. A scope selects code, not
-every descendant of an app; whether a launch is captured depends on its launcher, as
-listed in the editor.
-New tools under a scope are picked up by the next background scan (within about
-20 seconds).
+before editing a policy. A new version of listed code is captured without a new
+approval; a new identifier needs a policy edit.
 
 The same operations are available from a shell, run as the logged-in user:
 
 ```bash
 mihomoboxctl app-proxy policy show chatgpt
-mihomoboxctl app-proxy policy set chatgpt --team 2DC432GLL2 --directory ~/.codex
-mihomoboxctl app-proxy policy set claude --launched-clis off
+mihomoboxctl app-proxy policy set chatgpt --team 2DC432GLL2 --identifier com.openai.codex --identifier codex --directory ~/.codex/computer-use
 mihomoboxctl app-proxy targets chatgpt
 mihomoboxctl app-proxy enable chatgpt --approve
 mihomoboxctl app-proxy runtime
 ```
 
-`policy set` replaces all three scopes of one application in the daemon-owned
-settings. `--launched-clis on|off` decides whether other applications' CLIs that this
-application launches keep their own routes (default on) or connect directly; it is
-kept when omitted. `targets`, `runtime`, `enable`, `disable`, `on` and `off` run the signed
-MihomoBox host headlessly (`mihomo-app --app-proxy …`); the CLI first verifies that
-host against its own Developer ID leaf. `--approve` consents to the scanned code and
-scopes exactly as the confirmation sheet does; without it only earlier approvals
-apply. A headless run and the menu-bar app serialize their App Proxy changes with a
-per-user lock. `runtime` also prints the provider's recent process-validation stages
-and counters (PIDs only, no paths or traffic), the same receipts the app shows.
-`flows` lists the verified process behind each App Proxy connection to Mihomo, keyed by
-the connection's source port. Connections an app makes to the macOS system proxy on loopback never reach
-App Proxy; Mihomo routes them through the app's rules by the verified executable path
-instead, once the profile has been rendered by this version: after an upgrade, use
-**Reload Profiles** (or `mihomoboxctl profile reload`) once.
-For scripts, select the signed interpreter, which also covers its other uses.
-Limits are 32 additional executables per entry and 128 total. Duplicate ownership,
-missing files, unsigned programs and directories are rejected before accepting
-the draft. Symlinks resolve to their canonical executable path, signatures are
-verified again on activation, and the Signed executables panel includes these
-additional binaries. Existing configurations migrate with an empty explicit list.
+`policy set` replaces the Team IDs, identifiers and folders of one application in
+the daemon-owned settings. `targets`, `runtime`, `enable`, `disable`, `on` and `off`
+run the signed MihomoBox host headlessly (`mihomo-app --app-proxy …`); the CLI first
+verifies that host against its own Developer ID leaf. `--approve` approves the
+application's code folders exactly as the confirmation sheet does; without it only
+earlier approvals apply. A headless run and the menu-bar app serialize their App Proxy
+changes with a per-user lock. `runtime` also prints the provider's recent
+process-validation stages and counters (PIDs only, no paths or traffic), the same
+receipts the app shows. `flows` lists the verified process behind each App Proxy
+connection to Mihomo, keyed by the connection's source port. Connections an app makes
+to the macOS system proxy on loopback never reach App Proxy; Mihomo routes them through
+the app's rules by path instead (its code folders and installed bundles as anchored
+`PROCESS-PATH-REGEX` rules), once the profile has been rendered by this version: after
+an upgrade, use **Reload Profiles** (or `mihomoboxctl profile reload`) once.
+For scripts, list the signed interpreter's identifier, which also covers its other uses.
+Limits are 8 Team IDs, 64 identifiers and 16 folders per entry, 256 identifiers in all.
 
 For authenticated remote diagnosis, `mihomoboxctl app-proxy status` reads the
 saved list and `mihomoboxctl app-proxy set-all Proxy` transactionally assigns

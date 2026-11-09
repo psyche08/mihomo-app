@@ -2,8 +2,10 @@ import Foundation
 import MihomoControl
 
 final class AppProxyCodeAccessClient {
-    func snapshot(records: [AppProxyCodeIdentity], scopes: [AppProxyScope] = [], interactive: Bool) async throws -> AppProxyIdentitySnapshot {
-        let request = AppProxyAccessRequest(ownerUID: getuid(), records: records, scopes: scopes)
+    /// Read-only grants for one application's existing code folders; see `CodeAccessBroker`.
+    func grants(category: String, folders: [String], interactive: Bool) async throws -> AppProxyFolderGrants {
+        let request = AppProxyFolderRequest(ownerUID: getuid(), category: category, folders: folders)
+        try request.validate()
         let data = try JSONEncoder().encode(request)
         let requirement = try AppProxyPeerRequirement.sameLeaf(identifier: "dev.linsheng.mihomo-app.code-access")
         return try await withCheckedThrowingContinuation { continuation in
@@ -19,16 +21,14 @@ final class AppProxyCodeAccessClient {
             }
             service.authorize(data, interactive: interactive) { data, error in
                 do {
-                    guard let data else { throw AppProxyIdentityFailure(rawValue: error ?? "") ?? .permission }
-                    let snapshot = try AppProxyIdentitySnapshot.decode(data)
-                    guard snapshot.ownerUID == request.ownerUID, snapshot.records == request.records,
-                          snapshot.scopes == request.scopes else { throw AppProxyIdentityFailure.malformed }
-                    completion.finish(.success(snapshot))
+                    guard let data, data.count <= 1_048_576 else { throw AppProxyIdentityFailure(rawValue: error ?? "") ?? .permission }
+                    let grants = try JSONDecoder().decode(AppProxyFolderGrants.self, from: data)
+                    try grants.validate(for: request)
+                    completion.finish(.success(grants))
                 } catch { completion.finish(.failure(error)) }
             }
-            // A Team scope can include many separately sealed bundles. Keep complete
-            // verification bounded without cutting it off at the former 20-second limit.
-            DispatchQueue.global().asyncAfter(deadline: .now() + (interactive ? 300 : 60)) {
+            // The broker opens a few folders and mints bookmarks: seconds at most.
+            DispatchQueue.global().asyncAfter(deadline: .now() + 20) {
                 completion.finish(.failure(AppProxyIdentityFailure.codeAccessTimeout))
             }
         }
@@ -37,12 +37,12 @@ final class AppProxyCodeAccessClient {
 // NSXPCConnection supports invalidation from the completion threads; the continuation is locked.
 private final class CodeAccessCompletion: @unchecked Sendable {
     let lock = NSLock()
-    var continuation: CheckedContinuation<AppProxyIdentitySnapshot, Error>?
+    var continuation: CheckedContinuation<AppProxyFolderGrants, Error>?
     let connection: NSXPCConnection
-    init(connection: NSXPCConnection, continuation: CheckedContinuation<AppProxyIdentitySnapshot, Error>) {
+    init(connection: NSXPCConnection, continuation: CheckedContinuation<AppProxyFolderGrants, Error>) {
         self.connection = connection; self.continuation = continuation
     }
-    func finish(_ result: Result<AppProxyIdentitySnapshot, Error>) {
+    func finish(_ result: Result<AppProxyFolderGrants, Error>) {
         lock.lock(); let c = continuation; continuation = nil; lock.unlock()
         guard let c else { return }; connection.invalidate(); c.resume(with: result)
     }

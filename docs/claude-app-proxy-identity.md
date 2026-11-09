@@ -17,6 +17,9 @@ target CLI. SafeDNS requests from other Claude helpers are not evidence that
 `com.anthropic.claude-code` fell back to SafeDNS. Raw logs and private application
 paths from that investigation are not copied into the repository.
 
+The current design is described in *Identifier and Team policy (owner decision,
+2026-11-09)* at the end of this document; the dated sections before it are history.
+
 **Implementation and local evidence are not a production acceptance result.**
 The real Developer ID XPC service, Powerbox interaction, root NetworkExtension
 consumer inside NE, login/user-switch lifecycle and Claude API recovery remain deployment gates.
@@ -38,14 +41,14 @@ package-scope candidate, not NE framework acceptance or Claude API recovery.
 
 | Stage | Owner and check | What success establishes |
 |---|---|---|
-| Discovery | Unsandboxed per-user host; bounded code trees, explicit executable selections | A candidate path exists in a selected application's inventory |
-| Static identity | `AppProxyCodeIdentity.inspect`; strict/all-architecture signature, expected ID/team, Apple anchor, designated requirement, cdhash and before/after file stamp | The inspected on-disk executable satisfies the enrollment policy |
-| Durable consent | Host confirmation sheet listing the scanned signatures; per-user `MihomoCodeAccess.xpc` with read-only home and CLI-prefix exceptions (Powerbox only as fallback), broker-owned identity pins | Consent for one application's verified code set |
-| Ephemeral delegation | Broker exports implicit package/file bookmarks; snapshot v3 keeps one per distinct access root (a bundle's executables share it); host transports opaque data | A candidate process-local capability, not proof the provider can consume it |
-| Provider preparation | `AppProxyAccessLease` resolves/starts scope; reads and verifies every file; rejects writable access | Provider-local code access is established before interception rules are published |
-| OS rules | Exact executable paths + OS designated requirements; explicit `matchTools`; save/reload/readback + rules digest | Persisted policy matches the approved identity generation |
+| Discovery | Unsandboxed per-user host: LaunchServices lookup of the listed identifiers, `.app` bundles (Info.plist only) up to three levels below a granted folder, and known launch hosts; no executable enumeration | Which top-level applications and launch hosts get an OS rule of their own |
+| Static identity | When an application is added: Team ID and signing identifiers of the chosen code (`AIAppTargets.codeIdentity`). Each pass reads only the embedded signature of top-level main executables | The policy names its publishers and identifiers |
+| Durable consent | Host confirmation sheet listing Team IDs, identifiers and code folders; per-user `MihomoCodeAccess.xpc` stores the approved folders | Consent for one application's folders, including ones that do not exist yet |
+| Ephemeral delegation | Broker mints one read-only implicit bookmark per existing approved folder; policy v5 carries them; host transports opaque data | A candidate process-local capability, not proof the provider can consume it |
+| Provider preparation | `AppProxyFolderAccess` resolves each grant at its exact path, starts its scope and opens the folder read-only, without following links | Code in granted folders is readable inside the provider sandbox before rules are published |
+| OS rules | One path-less tool entry per identifier (`identifier` + Team requirement); one rule per top-level application or launch host carrying all tool entries; save/reload/readback + rules digest | Persisted rules match the approved policy |
 | NE framework | Apple's process/flow code validation, outside our callback | A correlated `handleNewFlow` receipt proves that flow reached the provider; host verification alone does not |
-| Provider runtime | Audit token including owner UID/PID version; `SecCodeCopyGuestWithAttributes`, runtime DR, canonical path, cdhash and current file stamp | The actual running source matches an authorized executable in the active/prepared generation |
+| Provider runtime | Audit token owner UID; `SecCodeCopyGuestWithAttributes` reports the flow's signing identifier; that identifier's route lists the code's Team ID; `SecCodeCheckValidity` with the route's Team requirement | The running source is valid code of a listed publisher under a listed identifier |
 | DNS | Bounded `AppProxyDNSRequest` to the root daemon's `dns.resolve` XPC operation (extension-only), which queries shared Mihomo DNS `127.0.0.1:1153`; fails closed | `dnsAnswered` means a response was obtained for this flow, not necessarily a successful DNS answer code or API request |
 | Proxy | Existing per-application listener, mode/rules and original-interface bypass | Upstream establishment is a transport stage; application/API success must be observed separately |
 
@@ -59,74 +62,48 @@ operation, shell command interface, controller secret, or second core is added.
 Chosen candidate: a no-network, per-user sandboxed XPC broker. Host and broker
 mutually require the same Developer ID leaf and exact peer bundle identifier;
 the broker also requires the same non-root effective UID. The host never mints
-implicit file grants. The broker stores its own app-scoped read-only consent and
-mints fresh **exact-package/file** implicit grants for a bounded snapshot. Only
-the nearest enclosing `.app` code package, or an explicit standalone executable,
-may be selected. Updater version trees (`Claude/claude-code`,
-`.claude/remote/ccd-cli`, `.local/share/claude/versions`) are discovery locations,
-never authorization roots. A new version is accepted without prompting only when
-its signing identifier, Team ID and designated requirement match a pinned identity.
-Since 2026-10-26 only the broker holds read-only temporary exceptions for the
-home directory, `/opt/homebrew/` and `/usr/local/` (see *Scan-and-confirm consent*).
-The provider holds no file exception; nothing is writable; no Full Disk Access or
-network entitlement is granted to production code.
-The provider has no arbitrary-path read RPC. Its snapshot accepts a package
-bookmark only when its path is the executable's exact nearest `.app`, with the
-executable under `Contents/`; standalone code still requires an exact-file grant.
-Snapshot v3 stores one grant per distinct access root in first-record order, so
-a bundle's executables share its bookmark; v2 (one grant per record) is still
-decoded. The provider still reads and verifies every recorded executable.
+implicit file grants. The broker stores its own read-only consent per application
+folder and mints fresh implicit **folder** grants for the policy. A folder is
+refused when it is writable by the user, reached through a link, or a whole home,
+Library, Application Support, Documents, Desktop or Downloads folder, `/Users`,
+`/opt`, `/opt/homebrew`, `/usr` or `/usr/local`. Since 2026-10-26 only the broker
+holds read-only temporary exceptions for the home directory, `/opt/homebrew/` and
+`/usr/local/` (see *Scan-and-confirm consent*). The provider holds no file
+exception; nothing is writable; no Full Disk Access or network entitlement is
+granted to production code. The provider has no arbitrary-path read RPC: it opens
+only the folders its policy names, each through its grant.
 
-NetworkExtension rejects a saved configuration above 512 KiB. Only code that can
-be a flow's responsible process lists its category's executables as `matchTools`:
-code outside any bundle and the main executable of a top-level application or a
-login item. Helpers, nested helper apps and framework code are started by their
-application, inherit it as responsible process, and match only themselves. When
-one of them is started as its own responsible process (for example through
-LaunchServices), its own flows are captured; the code it starts connects directly.
-Listing the category under every helper grew with the square of the category's size:
-ChatGPT, Claude and JetBrains (122 executables) needed 4642 entries, 781915 bytes.
-With the change: 580 entries. The configuration crosses XPC before
-NetworkExtension measures it, which drops object sharing, so the host measures the
-provider configuration plus detached rule copies before saving and refuses above
-440 KiB with `capacity`, logging `event=app_proxy_configuration_size`. That model
-read 729319 bytes for the 781915-byte configuration.
+Folder grants remain necessary under the identifier policy. NetworkExtension
+validates a diverted process's code inside the provider's sandbox; code the
+provider cannot read fails with `Failed to get a SecCodeRef` before the provider
+callback, and the flow is dropped. The provider's sandbox reads `/Applications`,
+`/System`, `/Library` and the system `bin`, `sbin` and `libexec` folders without a
+grant. Code under the home directory or Homebrew needs a folder grant.
 
-A responsible process lists only what it can start: its own top-level application's
-code, code outside any bundle, and (for launchers) the verified CLIs. Another
-application of the same category is reached through LaunchServices and is its own
-responsible process, so its code is not listed. This keeps entries linear in the
-category's size instead of applications × executables. When the complete rules
-still exceed the budget, the host drops the launched-CLI tier first: each
-application rule keeps only its own category's code, launch hosts (terminals,
-editors, SSH) keep every CLI, the size log reports `reduced=launchedCLIs`, and the
-status shows `reducedCoverage`. CLIs that another selected application starts then
-connect without App Proxy; with TUN on, Mihomo's process rules still route them.
-Only when this tier also exceeds the budget does the save fail with `capacity`.
+NetworkExtension rejects a saved configuration above 512 KiB. The rules hold one
+shared tool entry per signing identifier and one rule per top-level application or
+launch host, so they grow with identifiers plus applications, not with their
+product. ChatGPT, Claude and JetBrains with the known terminals, editors and SSH
+fit in a few tens of KiB. The host measures the provider configuration plus
+detached rule copies before saving, refuses above 440 KiB with `capacity`, and logs
+`event=app_proxy_configuration_size`.
 
-Updates are event driven. FSEvents watches the discovery roots of the selected
-applications (`/Applications`, `~/Applications`, the conventional CLI directories,
-Claude Code and Codex runtime roots, and each entry's directories) with a 3 s
-latency; a change wakes the maintenance pass instead of waiting up to 20 s, and the
-pass decides whether the verified snapshot changed. Before saving a new
-NetworkExtension configuration the coordinator pushes the Mihomo process routes, so
-a new version's TUN and system-proxy traffic is routed while NetworkExtension
-prepares. The defaults key `appProxy.toolsByIdentifier.experiment` (off) collapses
-tool entries of a reverse-DNS identifier with a Team ID requirement into one
-path-less entry, so a new version needs no new entry. `NEAppRule.h` documents tools
-matched by identifier; whether a CLI outside LaunchServices matches this way is
-unverified, so the key stays off until tested.
-Executable and metadata write access and writable package roots are rejected.
-The broker's v2 consent store does not reuse earlier broader code-root grants.
+Updates are event driven. FSEvents watches `/Applications`, `~/Applications` and the
+selected applications' existing code folders with a 3 s latency; a change wakes the
+maintenance pass at once, and the periodic pass runs every 3 minutes as a fallback.
+A pass looks applications up again and compares a metadata stamp of the top-level
+executables and granted folders; only a change re-mints grants and republishes.
+Before saving a new NetworkExtension configuration the coordinator pushes the Mihomo
+process routes, so a new version's TUN and system-proxy traffic is routed while
+NetworkExtension prepares.
 
 Apple describes implicit security-scoped bookmarks for cross-process delegation
 in [On File System Permissions](https://developer.apple.com/forums/thread/678819).
 The public `NSURL.h` documents that implicit security scope is ephemeral and
-expires no later than reboot. Durable consent stays in the creating broker;
-after restart the broker resolves its own app-scoped bookmark and issues fresh
-grants. Stale bookmarks never fall back to an unscoped path or silently broaden
-consent. A new approval may be needed after moved roots, consent loss, or app
-signing changes. Old app-scoped bookmarks are not transferred to root.
+expires no later than reboot. Durable consent stays in the creating broker as a
+list of approved folders; after restart the broker checks each folder again and
+mints fresh grants. A stale grant never falls back to an unscoped path or silently
+broadens consent. Approvals are not transferred to root.
 
 Alternatives investigated:
 
@@ -159,71 +136,53 @@ order. Never use a writable grant as a successful production authorization.
 
 ## Discovery and update trust
 
-Default Claude code discovery covers:
+The default Claude entry lists Team `Q6L2SF6YDW`, the identifiers of Claude Desktop,
+its helpers and `com.anthropic.claude-code`, and the folders
+`~/Library/Application Support/Claude/claude-code`, `~/.claude/remote/ccd-cli` and
+`~/.local/share/claude/versions`. A new version in one of them is covered without
+new consent: its identifier and publisher are already listed, and its folder is
+already granted. ChatGPT and JetBrains entries work the same way.
 
-* `/Applications/Claude.app` and `~/Applications/Claude.app`, including signed
-  helpers belonging to Team `Q6L2SF6YDW`;
-* `~/Library/Application Support/Claude/claude-code/` and
-  `~/.claude/remote/ccd-cli/` under the Claude Desktop application route;
-* `~/.local/share/claude/versions/` and conventional `claude` installer entries
-  under the standalone CLI route.
+Trust is the publisher: any valid code that carries a listed identifier and is signed
+by the route's Team ID through Apple's Developer ID or Mac App Store chain
+(`anchor apple generic and certificate leaf[subject.OU] = "TEAM"`). Ad-hoc and
+unsigned code has no Team ID and cannot be routed; `.claude/remote/srv` ad-hoc code
+is not captured. Platform binaries (`/usr/bin/curl`) carry no Team ID either.
+A (Team ID, identifier) pair belongs to one entry; an identifier several publishers
+use (`node`) belongs to each publisher's entry and admits each of them.
 
-Downloaded/standalone Claude CLI must have ID `com.anthropic.claude-code`, Team
-`Q6L2SF6YDW` and an Apple-anchored valid signature. All discovered versions retain
-separate exact paths; choosing a single "latest" version would lose live older
-sessions. `.claude/remote/srv` ad-hoc code is not automatically enrolled. Explicit
-user enrollment remains possible and pins its identity; changes to code without
-a Team ID require manual reauthorization.
-
-Scans do not follow symbolic links and reject roots reached through links. A
-conventional explicitly named installer link is resolved to one canonical file
-and then vendor-checked; a scanned tree cannot escape through links. Every
-security-sensitive open uses Darwin's public `O_NOFOLLOW_ANY` so all path
-components are protected, without requiring sandbox permission to open ancestor
-directories. Foundation's filesystem canonicalization can rewrite `/private/tmp`
-to `/tmp`; capability paths use lexical validation and exact resolved URLs.
-File stamps include device, inode, size, modification and change timestamps.
-Before/after static checks, provider-local rechecks and runtime code identity
-reduce replacement races; a path string alone is never authorization.
-
-Custom application helpers must match their selected main executable's publisher
-when it has a Team ID. Automatic refresh cannot change an existing path's signing
-identifier, publisher, designated requirement or ownership category. New custom
-helpers require an already approved publisher. Signature/certificate-policy
-changes request approval rather than silently widening update trust.
-
-Each scan is bounded (20,000 entries per tree, depth 16, 512 executable records,
-8,192 root-rule tool entries). Exclusions have bounded category/reason counts.
-The inventory is not proof of OS capture. `matchTools == nil` means all spawned
-helpers according to `NEAppRule.h`; every generated root rule explicitly lists
-verified tools. Terminal/editor rules likewise select exact verified tools and
-never route the entire terminal. Nil and empty tool lists have distinct digests.
-Apple's responsible-application matching and nested helper behavior must still
-be exercised with real Claude processes.
+Discovery never validates or hashes code; NetworkExtension and the provider validate
+the running process. Bundle searches skip links and hidden entries and read at most
+4,000 entries per folder. A bundle found in a granted folder but not yet known to
+LaunchServices is registered with `LSRegisterURL`, because NetworkExtension resolves
+a path-less rule through LaunchServices. Grant paths use lexical validation and
+`O_NOFOLLOW_ANY`; Foundation's canonicalization can rewrite `/private/tmp` to
+`/tmp`, so links in a folder path are refused rather than resolved.
 
 ## Generation, lease and recovery protocol
 
-The v4 provider configuration binds owner UID, generation UUID, paths/DR/hash/file
-stamps, snapshot-v2 package/file grants, route ports, bypass policy and a canonical digest of
-OS app rules. Both host readback and provider parsing validate the manifest.
+The v5 provider configuration binds owner UID, generation UUID, the routes (Team IDs
+and identifiers per category), folder grants, a code stamp, route ports, bypass
+policy and a canonical digest of OS app rules. Both host readback and provider parsing validate the manifest.
 There is no claim of a single atomic transaction across macOS preferences and
 the provider; explicit staging and verified disable contain ambiguous outcomes.
 
 Initial enable obtains consent, starts the provider with **empty app rules**,
 waits for provider-local validation, publishes rules, reads them back and checks
 the provider generation again. Empty-rule startup and live rule publication are
-mandatory signed-NE acceptance gates. Existing v1–v3 preferences require explicit
-reactivation; they are not silently treated as authorized v4 preferences.
+mandatory signed-NE acceptance gates. Preferences from earlier versions require
+explicit reactivation; they are not silently treated as authorized v5 preferences.
 
-While enabled, the host re-discovers every 20 seconds, independent of the open
-page or its 30-second display cache. An unchanged set renews only after provider
-file validation. A changed set obtains fresh broker grants and follows:
+While enabled, the host renews the lease every 20 seconds; renewal checks the
+generation and owner only and reads no files. The maintenance pass runs at launch,
+on FSEvents changes and every 3 minutes. An unchanged policy and code stamp keep the
+current generation. A changed one obtains fresh broker grants and follows:
 
 1. `prepare(expectedCurrent, next)`: validate fresh provider-local grants; keep
    both old and next sets available for flow validation during publication.
 2. Save next manifest and OS rules; reload and verify all fields and rule digest.
-3. `commit(next)`: revalidate files, compare-and-swap generation, then release
-   superseded grants. Prepared state expires after 30 seconds.
+3. `commit(next)`: compare-and-swap generation, then release superseded grants.
+   Prepared state expires after 30 seconds.
 4. On failure, restore previous persisted manifest/rules before abort. If any
    result is uncertain, disable interception and verify saved disabled state and
    tunnel disconnection. An unverifiable disable is shown as `rollbackUnverified`,
@@ -239,14 +198,11 @@ the authorized user's host/broker. Failed authorization disables the manager and
 requires explicit retry, rather than endlessly restarting with stale grants.
 
 Live already-accepted streams survive normal generation replacement; authorization
-is checked at new-flow admission. Multiple version files stay enrolled while
-present. If an updater **unlinks a still-running old executable**, runtime and
-framework validation of a *new* flow may fail; there is no supported claim that
-an obsolete pathname can be recreated or substituted safely. Existing streams
-can complete, and the UI should direct the user to restart that old Claude
-session. This is an explicit pending compatibility test, not a solved guarantee.
-New executable versions are not covered until the next successful refresh; during
-that interval they use normal OS routing if they do not match an existing rule.
+is checked at new-flow admission. Every version of listed code is covered by
+identifier, including an old one that is still running. A grant follows the folder
+it was minted for: a vendor that replaces a granted folder (rather than writing into
+it) leaves the grant on the old folder, the code stamp changes, and the next pass
+mints a fresh grant. Until then, code in the replaced folder uses normal OS routing.
 App Proxy is not a system-wide kill switch.
 
 Broker consent persists for selected roots; removed roots are pruned at the next
@@ -283,17 +239,17 @@ remains macOS 14. Results on older supported OS versions are not inferred.
 
 | Layer / case | Local evidence | Remaining acceptance |
 |---|---|---|
-| Manifest and rules | Swift tests: bounds, duplicate paths, zero owner UID, legacy/v4 binding, nil-vs-empty rule digest, stale generation/replay/abort/expiry | Real NE preference serialization and live rule mutation |
-| Files and signing | Real system signature inspection; wrong expected publisher/ID; unsigned file; leaf/ancestor symlink; atomic inode replacement; deletion | Vendor-signed hostile fixtures and process-replacement races in real NE |
-| Read-only capability | Two independent ad-hoc sandbox apps: initial read denied, grant read succeeds, write and sibling read denied; fresh receiver process; multiple versions; forged ID and replaced file denied; separate UID 0 receiver confirms read-only cross-UID access | Powerbox issuer, Developer ID peer authentication, actual root NE consumer and console-user switch |
+| Policy and rules | Swift tests: v5 bounds, unique (team, identifier) pairs, zero owner UID, older routings rejected, extra/missing keys, builtin and custom ports, path-less tool entries, one OR'd rule for copies, rules digest, stale generation/replay/abort/expiry | Real NE preference serialization and live rule mutation |
+| Folders and signing | Team/identifier/folder syntax; requirements compile; writable, linked, file and missing folders rejected; forged grant is stale; ad-hoc and platform code have no identity | Vendor-signed hostile fixtures in real NE |
+| Read-only capability | Two independent ad-hoc sandbox apps: initial read denied, folder grant reads and validates code, write, create and sibling read denied; fresh receiver process; relabelled and replaced folder stale, fresh grant works; separate UID 0 receiver confirms read-only cross-UID access | Powerbox issuer, Developer ID peer authentication, actual root NE consumer and console-user switch |
 | Over-broad grant | Writable implicit grant from unsandboxed issuer rejected | Assert production provider remains read-only on every supported OS |
-| Update trust | Existing identity/publisher changes rejected; ad-hoc hash change requires approval | Actual Claude automatic upgrade, coexistence and old live session |
+| Update trust | A new version under a listed identifier and Team ID needs no approval; a forged Team ID gets no rule | Actual Claude automatic upgrade, coexistence and old live session |
 | Restart/authorization | Invalid capability rejected; same-boot new receiver accepts a valid capability | Reboot, logout/login, stale/moved grant, app update, XPC interruption and consent loss |
 | DNS/transport | Existing shared-DNS and TCP/UDP/interface-binding regression tests | Actual target CLI's DNS callback, response and API recovery |
 | Bundle | Generated project/source membership, local compile and structural bundle validation | Cloud Developer ID signing, notarization and embedded service entitlements |
 
 `Tests/test_app_proxy_code_access.sh` uses a temporary directory, test-only
-ad-hoc signed sandbox applications and a harmless C fixture. It neither runs
+ad-hoc signed sandbox applications and a harmless C fixture in a granted folder. It neither runs
 Claude nor installs/starts a system extension. Optional `APP_PROXY_TEST_ROOT=1`
 adds the root receiver using `sudo -n`; it never prompts for a password. The full `scripts/validate.sh`
 also covers Swift, pinned Sparkle/MetaCubeXD, existing shell/transport tests,
@@ -583,6 +539,9 @@ are `AppProxyEnrollmentTests` and the independent-enable `AppProxyStoreTests`.
 
 ## Scan-and-confirm consent (owner decision, 2026-10-26)
 
+*Superseded in part by Identifier and Team policy (2026-11-09): executable scans,
+exact records, cdhash checks and the launched-CLI tier were removed.*
+
 The owner chose to remove the file picker from normal authorization. **Authorize &
 Enable** now rescans the application's signed executables and shows them (path,
 signing ID, Team ID, designated requirement) in a confirmation sheet; one click
@@ -609,6 +568,9 @@ dragging bundles or executables onto the list, typing or pasting a path, or the
 optional picker; the CLI executable editor also accepts drops and `file://` lines.
 
 ## Team, directory and exact-CLI scopes (owner decision, 2026-10-26)
+
+*Superseded in part by Identifier and Team policy (2026-11-09): executable scans,
+exact records, cdhash checks and the launched-CLI tier were removed.*
 
 **Cause.** On the test Mac, `event=app_proxy_rules_diff` reported `rules=27/21 missing=6`
 with every other field matching. The 27 generated targets held six signing
@@ -741,8 +703,56 @@ scanned tree is reported as `escapedPath`.
 so after an update the old provider kept running until the user next enabled App Proxy;
 on the test Mac under load that replacement then took about three minutes and looked like a
 failed start. The provider now reports its bundle version in every status reply. The
-App's maintenance pass (20 seconds after launch, then every 20 seconds) compares it with
+App's maintenance pass (at launch, then every 3 minutes) compares it with
 the bundled extension and, when App Proxy is enabled and connected and the versions
 differ (a provider without the field counts as older), disables the session and
 republishes, which activates the bundled extension and its rules in the background. It
 tries this once per bundled version per App launch.
+
+## Identifier and Team policy (owner decision, 2026-11-09)
+
+**Why.** Each new application multiplied the rules: exact executable records, one
+`matchTools` list per responsible process, a size budget with a reduced tier, cdhash
+and file-stamp checks on every renewal, and a scan of every signed Mach-O every
+20 seconds. The owner asked for a policy without binary scanning.
+
+**Policy.** An entry is Team IDs, signing identifiers and code folders. Adding an
+application reads its Team ID and identifiers once (its own, its nested helper
+apps', and its same-team executables in `MacOS` and `Helpers`); code outside the
+provider-readable locations also records its folder, a Homebrew formula or cask
+folder as a whole. Policy v5 (`per-application-v5`) carries only routes, folder
+grants and a code stamp. The provider admits a flow when its owner UID matches, its
+running code's identifier is listed, that identifier's route lists the code's Team ID,
+and `SecCodeCheckValidity` passes with the route's Team requirement. It never reads
+files on renewal.
+
+**OS rules.** Each identifier becomes one path-less tool entry with an
+`identifier` + Team requirement, which NetworkExtension matches wherever the code
+lives (verified on the test Mac in build 1123 for CLIs outside LaunchServices).
+Each installed top-level application and each launch host (SSH, terminals, editors)
+gets one rule carrying all tool entries, so a CLI keeps its own route whichever
+selected application or launcher starts it. Copies of one identifier share a
+path-less rule that ORs their requirements. This reverses the 2026-10-26 decision
+not to route all children: the tool list is now every listed identifier, but never
+`nil`, so unlisted children of a terminal still connect directly.
+
+**Consent.** The confirmation sheet approves the entry's folders, including ones
+that do not exist yet. A partly approved entry is still routed for the code the
+provider can read, and reports `needsAuthorization` for the rest. Unsigned and
+ad-hoc code is unsupported.
+
+**Updates.** FSEvents on `/Applications`, `~/Applications` and the granted folders
+triggers a pass within seconds; the periodic pass runs every 3 minutes. A pass looks
+applications up through LaunchServices, registers bundles found in granted folders,
+and compares a metadata stamp of top-level executables and granted folders (device,
+inode, size, modification time). New versions under listed identifiers need no new
+rule. Lease renewal stays at 20 seconds and reads no files.
+
+**Mihomo process routes.** The App sends each application's folders (except folders
+named `Applications` or `bin`) and found bundles as path prefixes, rendered as anchored
+`PROCESS-PATH-REGEX` rules; standalone executables stay `PROCESS-PATH`. They route,
+but do not authenticate, code at those paths.
+
+**Limits.** 8 Team IDs, 64 identifiers and 16 folders per entry; 256 identifiers in
+all; a Team ID or folder belongs to one entry. A CLI started by an unlisted launcher
+(cron, a launchd job) connects without App Proxy.

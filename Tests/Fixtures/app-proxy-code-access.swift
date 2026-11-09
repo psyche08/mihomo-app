@@ -1,44 +1,60 @@
 import Foundation
 import Darwin
+import Security
 
-// Development-only two-process test. Reads one caller-created fixture, never user app data.
+// Development-only two-process test. Reads caller-created fixtures, never user app data.
 let args = CommandLine.arguments
 func emit(_ value: [String: Bool]) {
     print(String(data: try! JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]), encoding: .utf8)!)
 }
+func failure(_ body: () throws -> Void) -> AppProxyIdentityFailure? {
+    do { try body(); return nil } catch { return error as? AppProxyIdentityFailure ?? .malformed }
+}
+func policy(folder: String, readOnly: Bool) throws -> Data {
+    // The broker's check: a grant never gives write access to code.
+    if readOnly { try AppProxyCode.requireReadOnlyFolder(folder) }
+    let grant = try URL(fileURLWithPath: folder, isDirectory: true)
+        .bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+    let route = AppProxyPolicy.Route(category: "claude", teams: ["Q6L2SF6YDW"], identifiers: ["dev.linsheng.mihomo.fixture"])
+    return try AppProxyPolicy(ownerUID: getuid(), routes: [route], folders: [folder], grants: [grant],
+                              codeStamp: String(repeating: "0", count: 64)).encoded()
+}
 do {
-    if args[1] == "issue" {
-        let path = args[2]
-        let identity = try AppProxyCodeIdentity.inspect(path: path, category: "claude")
-        let grant = try AppProxyCodeIdentity.accessURL(for: path).bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
-        let snapshot = AppProxyIdentitySnapshot(ownerUID: getuid(), records: [identity], grants: [grant])
-        FileHandle.standardOutput.write(try snapshot.encoded())
-    } else {
+    switch args[1] {
+    case "issue": FileHandle.standardOutput.write(try policy(folder: args[2], readOnly: true))
+    // A host outside the read-only broker could mint a writable grant; the provider must refuse it.
+    case "issueWritable": FileHandle.standardOutput.write(try policy(folder: args[2], readOnly: false))
+    case "refuseLink":
+        guard failure({ try AppProxyCode.requireReadOnlyFolder(args[2]) }) == .escapedPath else { exit(1) }
+        emit(["linkRefused": true])
+    default:
         if args[1] == "rootReceive" { guard getuid() == 0 else { exit(1) } }
-        let before = open(args[2], O_RDONLY | O_NOFOLLOW)
+        let folder = args[2], code = args[3], sibling = args[4]
+        let before = open(code, O_RDONLY | O_NOFOLLOW)
         if before >= 0 { close(before) }
-        let snapshot = try AppProxyIdentitySnapshot.decode(FileHandle.standardInput.readDataToEndOfFile())
-        if args[1] == "invalidIdentity" || args[1] == "replaced" {
-            do { _ = try AppProxyAccessLease(snapshot); exit(1) }
-            catch let failure as AppProxyIdentityFailure {
-                let allowed: [AppProxyIdentityFailure] = args[1] == "invalidIdentity" ? [.signature] : [.signature, .changedFile, .staleAuthorization]
-                guard allowed.contains(failure) else { throw failure }
-                emit(["invalidIdentityRejected": true]); exit(0)
-            }
+        let policy = try AppProxyPolicy.decode(FileHandle.standardInput.readDataToEndOfFile())
+        precondition(policy.folders == [folder])
+        if args[1] == "deny" || args[1] == "stale" {
+            let expected: AppProxyIdentityFailure = args[1] == "deny" ? .permission : .staleAuthorization
+            let result = failure { _ = try AppProxyFolderAccess(policy) }
+            emit([args[1] == "deny" ? "writableGrantRejected" : "staleGrantRejected": result == expected])
+            exit(result == expected ? 0 : 1)
         }
-        if args[1] == "deny" {
-            do { _ = try AppProxyAccessLease(snapshot); emit(["writableGrantRejected": false]); exit(1) }
-            catch AppProxyIdentityFailure.permission { emit(["writableGrantRejected": true]); exit(0) }
-        }
-        let lease = try AppProxyAccessLease(snapshot)
-        try lease.revalidate()
-        let writeFD = open(args[2], O_WRONLY | O_NOFOLLOW)
+        let access = try AppProxyFolderAccess(policy)
+        // What NetworkExtension does inside the provider: open and validate the code.
+        var staticCode: SecStaticCode?
+        let validated = SecStaticCodeCreateWithPath(URL(fileURLWithPath: code) as CFURL, [], &staticCode) == errSecSuccess
+            && staticCode.map { SecStaticCodeCheckValidity($0, [], nil) == errSecSuccess } == true
+        let writeFD = open(code, O_WRONLY | O_NOFOLLOW)
         if writeFD >= 0 { close(writeFD) }
-        let sibling = open(args[3], O_RDONLY | O_NOFOLLOW)
-        if sibling >= 0 { close(sibling) }
-        emit(["initiallyDenied": before < 0, "readValidated": true, "writeDenied": writeFD < 0, "siblingDenied": sibling < 0, "rootReceiver": getuid() == 0])
-        guard before < 0, writeFD < 0, sibling < 0 else { exit(1) }
-        withExtendedLifetime(lease) {}
+        let created = open(folder + "/created", O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
+        if created >= 0 { close(created); unlink(folder + "/created") }
+        let siblingFD = open(sibling, O_RDONLY | O_NOFOLLOW)
+        if siblingFD >= 0 { close(siblingFD) }
+        emit(["initiallyDenied": before < 0, "codeValidated": validated, "writeDenied": writeFD < 0, "createDenied": created < 0,
+              "siblingDenied": siblingFD < 0, "rootReceiver": getuid() == 0])
+        guard before < 0, validated, writeFD < 0, created < 0, siblingFD < 0 else { exit(1) }
+        withExtendedLifetime(access) {}
     }
 } catch {
     // No path, bookmark bytes, private certificate or arbitrary localized error is printed.

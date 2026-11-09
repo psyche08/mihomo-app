@@ -256,24 +256,24 @@ bytes to the daemon through XPC.
 ## App Proxy code access
 
 [Claude CLI identity and authorization](claude-app-proxy-identity.md) documents
-the v4 trust boundary and its unverified deployment gates. A per-user sandboxed
-XPC broker receives read-only Powerbox consent, stores its own app-scoped
-bookmarks and delegates ephemeral exact-code-package or standalone-file capabilities.
-Updater parent directories are never granted; new version paths may need consent.
-Both XPC peers check
-the exact signing leaf and bundle ID; the broker also checks the caller UID.
-The root provider validates actual file access before rule publication and
-retains OS designated requirements, audit-token runtime checks, code hashes,
-file stamps and console-owner leases. No arbitrary root read API or broad
-sandbox exception is introduced. New publishers and ad-hoc code replacements
-need explicit approval. Same-UID and separate root sandbox fixture success are not evidence that real
-NetworkExtension or Claude end-to-end behavior has been validated.
+the v5 trust boundary and its unverified deployment gates. A per-user sandboxed
+XPC broker, with read-only exceptions for the home directory, `/opt/homebrew/` and
+`/usr/local/`, stores the folders the user approved and delegates ephemeral
+read-only folder capabilities. Writable, linked and broad folders (a whole home,
+Library, Documents, Desktop, Downloads or system prefix) are refused. Both XPC peers
+check the exact signing leaf and bundle ID; the broker also checks the caller UID.
+The root provider opens every granted folder read-only before rule publication and
+admits a flow only when its running code carries a listed signing identifier, is
+signed by that identifier's listed Team ID and passes `SecCodeCheckValidity`; it
+holds no file exception and keeps console-owner leases. Trust is the publisher:
+later versions need no approval, unsigned and ad-hoc code is never routed, and a new
+Team ID or identifier needs a policy edit. Same-UID and separate root sandbox fixture
+success are not evidence that real NetworkExtension or Claude end-to-end behavior
+has been validated.
 
 In 1.1.2, renewal of a previously loaded generation is independent of preference
 I/O. This cannot publish new rules: policy changes still require fresh stored
-configuration readback, and every renewal verifies the approved files/scopes,
-console owner, current generation, active session and unchanged 90-second lease.
-Slow signature verification runs outside the socket relay queue; its completion
-rechecks generation, lease identity and expiry before extending authorization.
+configuration readback, and every renewal verifies the console owner, current
+generation, active session and unchanged 90-second lease.
 A configuration-read timeout cannot itself authorize a new generation. An OS
 request that has timed out remains single-flight until its actual completion.

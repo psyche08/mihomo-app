@@ -2,7 +2,7 @@ import CoreServices
 import Foundation
 
 /// Wakes App Proxy maintenance when an application or CLI update changes a discovery root,
-/// instead of leaving the new code to the next 20-second pass. FSEvents coalesces a burst
+/// instead of leaving the new code to the next periodic pass. FSEvents coalesces a burst
 /// (an updater replacing a bundle) into one callback; the pass decides whether anything changed.
 /// Owned by the coordinator for the process lifetime.
 final class AppProxyUpdateWatcher {
