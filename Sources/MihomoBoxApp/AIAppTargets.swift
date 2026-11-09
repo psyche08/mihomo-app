@@ -13,10 +13,16 @@ struct AIAppTargets {
         var path: String { identity.path }
         var category: String { identity.category }
         var team: String? { identity.team }
-        var rule: NEAppRule {
-            let rule = NEAppRule(signingIdentifier: id, designatedRequirement: requirement)
-            rule.matchPath = path
-            return rule
+        /// The executable's tool rule, one shared instance. Each application rule lists every
+        /// executable of its category, so tool entries grow with the square of a category's
+        /// size; sharing lets the archived configuration store each tool once and reference
+        /// it elsewhere (NetworkExtension caps the saved configuration at 512 KiB).
+        /// Never mutate it.
+        let rule: NEAppRule
+        init(identity: AppProxyCodeIdentity) {
+            self.identity = identity
+            rule = NEAppRule(signingIdentifier: identity.id, designatedRequirement: identity.requirement)
+            rule.matchPath = identity.path
         }
         var record: [String: String] {
             ["id": id, "requirement": requirement, "path": path, "category": category]

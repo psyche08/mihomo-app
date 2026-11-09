@@ -378,8 +378,9 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
         let previousRules = manager.appRules
         let old = (previous?.providerConfiguration?["identitySnapshot"] as? Data).flatMap { try? AppProxyIdentitySnapshot.decode($0) }
         let liveUpdate = manager.isEnabled && manager.connection.status == .connected && old != nil
-        if !liveUpdate { try await activate() }
         let raw = try configuration(settings: settings, targets: targets, snapshot: snapshot)
+        try Self.requireConfigurationBudget(raw, rules: targets.rules)
+        if !liveUpdate { try await activate() }
         let config = NETunnelProviderProtocol()
         config.providerBundleIdentifier = extensionID; config.serverAddress = "MihomoBox"
         config.providerConfiguration = raw
@@ -576,6 +577,17 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
     enum PolicyCheckFailure: String, Error, LocalizedError {
         case rulesReadbackMismatch, configurationReadbackMismatch, providerGenerationMismatch, providerNotReady
         var errorDescription: String? { "App Proxy policy verification failed: " + rawValue }
+    }
+    /// NetworkExtension rejects a saved configuration above 512 KiB. Unchecked, the rule-less
+    /// first save succeeds and interception starts, then saving the rules fails.
+    static let configurationBudget = 480 * 1024
+    static func configurationSize(_ raw: [String: Any], rules: [NEAppRule]) -> Int {
+        (try? NSKeyedArchiver.archivedData(withRootObject: [raw, rules] as NSArray, requiringSecureCoding: false).count) ?? Int.max
+    }
+    static func requireConfigurationBudget(_ raw: [String: Any], rules: [NEAppRule]) throws {
+        let bytes = configurationSize(raw, rules: rules)
+        AppLog.info("event=app_proxy_configuration_size bytes=\(bytes) budget=\(configurationBudget)")
+        guard bytes <= configurationBudget else { throw AppProxyIdentityFailure.capacity }
     }
     static func issueCode(_ error: Error) -> String {
         (error as? ProviderTransportFailure)?.rawValue ?? (error as? PolicyCheckFailure)?.rawValue ?? (error as? AppProxyIdentityFailure ?? .unavailable).rawValue

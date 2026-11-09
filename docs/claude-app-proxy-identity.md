@@ -41,7 +41,7 @@ package-scope candidate, not NE framework acceptance or Claude API recovery.
 | Discovery | Unsandboxed per-user host; bounded code trees, explicit executable selections | A candidate path exists in a selected application's inventory |
 | Static identity | `AppProxyCodeIdentity.inspect`; strict/all-architecture signature, expected ID/team, Apple anchor, designated requirement, cdhash and before/after file stamp | The inspected on-disk executable satisfies the enrollment policy |
 | Durable consent | Host confirmation sheet listing the scanned signatures; per-user `MihomoCodeAccess.xpc` with read-only home and CLI-prefix exceptions (Powerbox only as fallback), broker-owned identity pins | Consent for one application's verified code set |
-| Ephemeral delegation | Broker exports one implicit package/file bookmark per executable; host transports opaque data | A candidate process-local capability, not proof the provider can consume it |
+| Ephemeral delegation | Broker exports implicit package/file bookmarks; snapshot v3 keeps one per distinct access root (a bundle's executables share it); host transports opaque data | A candidate process-local capability, not proof the provider can consume it |
 | Provider preparation | `AppProxyAccessLease` resolves/starts scope; reads and verifies every file; rejects writable access | Provider-local code access is established before interception rules are published |
 | OS rules | Exact executable paths + OS designated requirements; explicit `matchTools`; save/reload/readback + rules digest | Persisted policy matches the approved identity generation |
 | NE framework | Apple's process/flow code validation, outside our callback | A correlated `handleNewFlow` receipt proves that flow reached the provider; host verification alone does not |
@@ -70,9 +70,19 @@ Since 2026-10-26 only the broker holds read-only temporary exceptions for the
 home directory, `/opt/homebrew/` and `/usr/local/` (see *Scan-and-confirm consent*).
 The provider holds no file exception; nothing is writable; no Full Disk Access or
 network entitlement is granted to production code.
-The provider has no arbitrary-path read RPC. Its snapshot v2 accepts a package
+The provider has no arbitrary-path read RPC. Its snapshot accepts a package
 bookmark only when its path is the executable's exact nearest `.app`, with the
 executable under `Contents/`; standalone code still requires an exact-file grant.
+Snapshot v3 stores one grant per distinct access root in first-record order, so
+a bundle's executables share its bookmark; v2 (one grant per record) is still
+decoded. The provider still reads and verifies every recorded executable.
+
+NetworkExtension rejects a saved configuration above 512 KiB, and every
+application rule lists every executable of its category as a `matchTools` entry,
+so entries grow with the square of a category's size. Each executable's tool rule
+is one shared object, which the archived configuration stores once. The host
+measures the archived provider configuration plus rules before saving and refuses
+above 480 KiB with `capacity`, logging `event=app_proxy_configuration_size`.
 Executable and metadata write access and writable package roots are rejected.
 The broker's v2 consent store does not reuse earlier broader code-root grants.
 

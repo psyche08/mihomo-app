@@ -35,7 +35,13 @@ struct AppProxyEnrollment {
                 for record in records {
                     if let old = grants[record.path], old.0 != record { throw AIAppTargets.Failure.duplicateTarget }
                 }
-                for (record, grant) in zip(records, snapshot.grants) { grants[record.path] = (record, grant) }
+                let byRoot = Dictionary(try snapshot.rootGrants().map { ($0.root, $0.grant) }, uniquingKeysWith: { first, _ in first })
+                for record in records {
+                    guard let grant = byRoot[try AppProxyCodeIdentity.accessURL(for: record.path).path] else {
+                        throw AppProxyIdentityFailure.malformed
+                    }
+                    grants[record.path] = (record, grant)
+                }
                 for (scope, grant) in zip(snapshot.directoryScopes, snapshot.scopeGrants) { scopeGrants[scope] = grant }
                 scopes += app.scopes
                 groups.append(targets)

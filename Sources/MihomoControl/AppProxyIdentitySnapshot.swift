@@ -166,14 +166,43 @@ public struct AppProxyIdentitySnapshot: Codable, Equatable, Sendable {
     public let generation: UUID
     public let ownerUID: UInt32
     public let records: [AppProxyCodeIdentity]
+    /// Version 3: one grant per distinct access root, in first-record order. A bundle's
+    /// executables share its root, so per-record copies would repeat the same bookmark;
+    /// NetworkExtension caps the whole saved configuration at 512 KiB. Version 2 carried
+    /// one grant per record and is still decoded.
     public let grants: [Data]
     /// Approved team/directory scopes; `scopeGrants` holds one read-only grant per directory scope, in order.
     public let scopes: [AppProxyScope]
     public let scopeGrants: [Data]
+    /// `grants` may be per record (they collapse to the first grant of each root) or per root.
     public init(ownerUID: UInt32, records: [AppProxyCodeIdentity], grants: [Data],
                 scopes: [AppProxyScope] = [], scopeGrants: [Data] = [], generation: UUID = UUID()) {
-        version = 2; self.generation = generation; self.ownerUID = ownerUID; self.records = records; self.grants = grants
+        version = 3; self.generation = generation; self.ownerUID = ownerUID; self.records = records
+        self.grants = Self.collapsedGrants(records: records, grants: grants)
         self.scopes = scopes; self.scopeGrants = scopeGrants
+    }
+    /// Distinct access roots of `records` in first-record order; nil for a path no root admits.
+    public static func accessRoots(_ records: [AppProxyCodeIdentity]) -> [String]? {
+        var seen = Set<String>(), roots: [String] = []
+        for record in records {
+            guard let root = try? AppProxyCodeIdentity.accessURL(for: record.path).path else { return nil }
+            if seen.insert(root).inserted { roots.append(root) }
+        }
+        return roots
+    }
+    private static func collapsedGrants(records: [AppProxyCodeIdentity], grants: [Data]) -> [Data] {
+        guard grants.count == records.count,
+              let paths = try? records.map({ try AppProxyCodeIdentity.accessURL(for: $0.path).path }) else { return grants }
+        var seen = Set<String>(), collapsed: [Data] = []
+        for (root, grant) in zip(paths, grants) where seen.insert(root).inserted { collapsed.append(grant) }
+        return collapsed
+    }
+    /// Each access root paired with its grant; version 2 may repeat a root.
+    public func rootGrants() throws -> [(root: String, grant: Data)] {
+        let roots = version == 2 ? try records.map { try AppProxyCodeIdentity.accessURL(for: $0.path).path }
+            : Self.accessRoots(records)
+        guard let roots, roots.count == grants.count else { throw AppProxyIdentityFailure.malformed }
+        return zip(roots, grants).map { (root: $0, grant: $1) }
     }
     private enum CodingKeys: String, CodingKey { case version, generation, ownerUID, records, grants, scopes, scopeGrants }
     public init(from decoder: Decoder) throws {
@@ -188,8 +217,9 @@ public struct AppProxyIdentitySnapshot: Codable, Equatable, Sendable {
     }
     public var directoryScopes: [AppProxyScope] { scopes.filter { $0.kind == .directory } }
     public func validate() throws {
-        guard version == 2, ownerUID > 0, !records.isEmpty, records.count <= 512,
-              records.count == grants.count, Set(records.map(\.path)).count == records.count,
+        guard version == 2 || version == 3, ownerUID > 0, !records.isEmpty, records.count <= 512,
+              version == 2 ? records.count == grants.count : Self.accessRoots(records)?.count == grants.count,
+              Set(records.map(\.path)).count == records.count,
               grants.allSatisfy({ !$0.isEmpty && $0.count <= 65536 }),
               scopes.count <= 64, Set(scopes).count == scopes.count, scopes.allSatisfy(\.isValid),
               scopeGrants.count == directoryScopes.count,
@@ -241,7 +271,7 @@ public final class AppProxyAccessLease {
     public init(_ snapshot: AppProxyIdentitySnapshot) throws {
         try snapshot.validate(); self.snapshot = snapshot
         do {
-            for (record, data) in zip(snapshot.records, snapshot.grants) {
+            for (root, data) in try snapshot.rootGrants() {
                 var stale = false
                 let url: URL
                 do {
@@ -249,10 +279,10 @@ public final class AppProxyAccessLease {
                                   options: [.withoutUI, .withoutMounting, .withoutImplicitStartAccessing],
                                   bookmarkDataIsStale: &stale)
                 } catch { throw AppProxyIdentityFailure.staleAuthorization }
-                guard !stale, url.path == (try AppProxyCodeIdentity.accessURL(for: record.path)).path else {
-                    throw AppProxyIdentityFailure.staleAuthorization
-                }
+                guard !stale, url.path == root else { throw AppProxyIdentityFailure.staleAuthorization }
                 if url.startAccessingSecurityScopedResource() { urls.append(url) }
+            }
+            for record in snapshot.records {
                 // Static sandbox access may require no dynamic scope; actual file validation is authoritative.
                 try record.validateFile()
                 try record.validateAccessScope()

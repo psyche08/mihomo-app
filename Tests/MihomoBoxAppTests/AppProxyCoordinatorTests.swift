@@ -97,6 +97,38 @@ final class AppProxyCoordinatorTests: XCTestCase {
         XCTAssertEqual(AIAppTargets.requirement(["b", "a", "a"]), "(a) or (b)")
         XCTAssertEqual(AIAppTargets.requirement(["a", "a"]), "a")
     }
+    func testRulesShareOneToolInstancePerExecutable() throws {
+        let fm = FileManager.default
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent(".build/shared-rule-test-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: root) }
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        for name in ["one", "two", "three"] {
+            let copy = root.appendingPathComponent(name)
+            try fm.copyItem(atPath: "/usr/bin/true", toPath: copy.path)
+            let sign = Process()
+            sign.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+            sign.arguments = ["--force", "--sign", "-", "--identifier", "dev.linsheng.mihomo.shared-\(name)", copy.path]
+            try sign.run(); sign.waitUntilExit()
+            XCTAssertEqual(sign.terminationStatus, 0)
+        }
+        var entry = AppProxyEntry.legacyDefaults[1]
+        entry.directories = [root.path]
+        let discovered = try AIAppTargets(requireAll: false, applications: [entry], applicationDirectories: [])
+        let combined = try AIAppTargets(combining: [discovered])
+        for targets in [discovered, combined] {
+            let rules = targets.rules.filter { $0.matchSigningIdentifier.hasPrefix("dev.linsheng.mihomo.shared-") }
+            XCTAssertEqual(rules.count, 3)
+            // Every rule lists every executable; each executable must be one object, so the
+            // archived configuration stores it once instead of once per rule.
+            var instances: [String: Set<ObjectIdentifier>] = [:]
+            for tool in rules.flatMap({ $0.matchTools ?? [] }) {
+                instances[tool.matchPath ?? "", default: []].insert(ObjectIdentifier(tool))
+            }
+            XCTAssertEqual(instances.keys.filter { $0.hasPrefix(root.path + "/") }.count, 3)
+            XCTAssertTrue(instances.values.allSatisfy { $0.count == 1 })
+        }
+    }
     func testScanReachesCodeBehindFrameworkVersionLinks() throws {
         let fm = FileManager.default
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()

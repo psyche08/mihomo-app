@@ -76,6 +76,46 @@ final class AppProxyIdentityTests: XCTestCase {
         XCTAssertThrowsError(try AppProxyIdentitySnapshot.decode(JSONSerialization.data(withJSONObject: legacy)))
         XCTAssertThrowsError(try AppProxyAccessLease(snapshot)) // malformed/stale capability is not a path fallback
     }
+    func testSnapshotKeepsOneGrantPerAccessRootAndDecodesVersionTwo() throws {
+        let fm = FileManager.default
+        // Temporary directories sit below the /var symlink, which no-follow checks reject by design.
+        let base = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent(".build/grant-root-test-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: base) }
+        let bundle = base.appendingPathComponent("Fixture.app")
+        let paths = [bundle.appendingPathComponent("Contents/MacOS/main"), bundle.appendingPathComponent("Contents/Helpers/helper"),
+                     base.appendingPathComponent("tool")]
+        for path in paths {
+            try fm.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try fm.copyItem(atPath: "/usr/bin/true", toPath: path.path)
+            let sign = Process()
+            sign.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+            sign.arguments = ["--force", "--sign", "-", "--identifier", "dev.linsheng.mihomo.grant-\(path.lastPathComponent)", path.path]
+            try sign.run(); sign.waitUntilExit()
+            XCTAssertEqual(sign.terminationStatus, 0)
+        }
+        let records = try paths.map { try AppProxyCodeIdentity.inspect(path: $0.path, category: "cli") }
+        let perRecord = [Data([1]), Data([2]), Data([3])]
+        let snapshot = AppProxyIdentitySnapshot(ownerUID: getuid(), records: records, grants: perRecord)
+        XCTAssertEqual(snapshot.version, 3)
+        XCTAssertEqual(snapshot.grants, [Data([1]), Data([3])], "a bundle's executables share its grant")
+        XCTAssertEqual(try snapshot.rootGrants().map(\.root), [bundle.path, paths[2].path])
+        XCTAssertEqual(try AppProxyIdentitySnapshot.decode(snapshot.encoded()), snapshot)
+        // Already per-root grants are kept as given.
+        XCTAssertEqual(AppProxyIdentitySnapshot(ownerUID: getuid(), records: records, grants: [Data([4]), Data([5])]).grants,
+                       [Data([4]), Data([5])])
+
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: snapshot.encoded()) as? [String: Any])
+        json["grants"] = perRecord.map { $0.base64EncodedString() }
+        XCTAssertThrowsError(try AppProxyIdentitySnapshot.decode(JSONSerialization.data(withJSONObject: json)),
+                             "version 3 needs exactly one grant per root")
+        json["version"] = 2
+        let legacy = try AppProxyIdentitySnapshot.decode(JSONSerialization.data(withJSONObject: json))
+        XCTAssertEqual(try legacy.rootGrants().map(\.root), [bundle.path, bundle.path, paths[2].path])
+        json["grants"] = [Data([1]).base64EncodedString()]
+        XCTAssertThrowsError(try AppProxyIdentitySnapshot.decode(JSONSerialization.data(withJSONObject: json)),
+                             "version 2 needs one grant per record")
+    }
     func testNoFollowAndSamePathReplacement() throws {
         let temporary = URL(fileURLWithPath: "/private/tmp").appendingPathComponent(UUID().uuidString)
         let root = temporary

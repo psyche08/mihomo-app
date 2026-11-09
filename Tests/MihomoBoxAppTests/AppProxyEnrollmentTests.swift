@@ -46,7 +46,7 @@ final class AppProxyEnrollmentTests: XCTestCase {
             })
         let snapshot = try XCTUnwrap(plan.snapshot)
         XCTAssertEqual(Set(snapshot.records.map(\.path)).count, snapshot.records.count)
-        XCTAssertEqual(snapshot.records.count, snapshot.grants.count)
+        XCTAssertEqual(AppProxyIdentitySnapshot.accessRoots(snapshot.records)?.count, snapshot.grants.count)
         let terminal = try XCTUnwrap(plan.targets.rules.first { $0.matchSigningIdentifier == "com.apple.Terminal" })
         XCTAssertEqual(Set(terminal.matchTools!.compactMap(\.matchPath)), [a.path!,b.path!])
         let withoutB = try await AppProxyEnrollment.prepare(applications: [a,b], requested: [a.id], interactiveID: nil, previous: snapshot,
