@@ -77,12 +77,20 @@ Snapshot v3 stores one grant per distinct access root in first-record order, so
 a bundle's executables share its bookmark; v2 (one grant per record) is still
 decoded. The provider still reads and verifies every recorded executable.
 
-NetworkExtension rejects a saved configuration above 512 KiB, and every
-application rule lists every executable of its category as a `matchTools` entry,
-so entries grow with the square of a category's size. Each executable's tool rule
-is one shared object, which the archived configuration stores once. The host
-measures the archived provider configuration plus rules before saving and refuses
-above 480 KiB with `capacity`, logging `event=app_proxy_configuration_size`.
+NetworkExtension rejects a saved configuration above 512 KiB. Only code that can
+be a flow's responsible process lists its category's executables as `matchTools`:
+code outside any bundle and the main executable of a top-level application or a
+login item. Helpers, nested helper apps and framework code are started by their
+application, inherit it as responsible process, and match only themselves. When
+one of them is started as its own responsible process (for example through
+LaunchServices), its own flows are captured; the code it starts connects directly.
+Listing the category under every helper grew with the square of the category's size:
+ChatGPT, Claude and JetBrains (122 executables) needed 4642 entries, 781915 bytes.
+With the change: 580 entries. The configuration crosses XPC before
+NetworkExtension measures it, which drops object sharing, so the host measures the
+provider configuration plus detached rule copies before saving and refuses above
+440 KiB with `capacity`, logging `event=app_proxy_configuration_size`. That model
+read 729319 bytes for the 781915-byte configuration.
 Executable and metadata write access and writable package roots are rejected.
 The broker's v2 consent store does not reuse earlier broader code-root grants.
 

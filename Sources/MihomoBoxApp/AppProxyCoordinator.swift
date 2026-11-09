@@ -580,9 +580,20 @@ final class AppProxyCoordinator: NSObject, DashboardAppProxyService, @preconcurr
     }
     /// NetworkExtension rejects a saved configuration above 512 KiB. Unchecked, the rule-less
     /// first save succeeds and interception starts, then saving the rules fails.
-    static let configurationBudget = 480 * 1024
+    /// The configuration crosses XPC before it is measured, which drops object sharing: a tool
+    /// listed by several rules counts once per rule. Measure detached copies the same way. On
+    /// the test Mac this model read 729319 bytes where NetworkExtension reported 781915; the
+    /// budget leaves room for that difference.
+    static let configurationBudget = 440 * 1024
     static func configurationSize(_ raw: [String: Any], rules: [NEAppRule]) -> Int {
-        (try? NSKeyedArchiver.archivedData(withRootObject: [raw, rules] as NSArray, requiringSecureCoding: false).count) ?? Int.max
+        (try? NSKeyedArchiver.archivedData(withRootObject: [raw, rules.map(detached)] as NSArray,
+                                           requiringSecureCoding: false).count) ?? Int.max
+    }
+    private static func detached(_ rule: NEAppRule) -> NEAppRule {
+        let copy = NEAppRule(signingIdentifier: rule.matchSigningIdentifier, designatedRequirement: rule.matchDesignatedRequirement)
+        copy.matchPath = rule.matchPath
+        copy.matchTools = rule.matchTools?.map(detached)
+        return copy
     }
     static func requireConfigurationBudget(_ raw: [String: Any], rules: [NEAppRule]) throws {
         let bytes = configurationSize(raw, rules: rules)

@@ -97,37 +97,74 @@ final class AppProxyCoordinatorTests: XCTestCase {
         XCTAssertEqual(AIAppTargets.requirement(["b", "a", "a"]), "(a) or (b)")
         XCTAssertEqual(AIAppTargets.requirement(["a", "a"]), "a")
     }
-    func testRulesShareOneToolInstancePerExecutable() throws {
+    func testOnlyResponsibleCodeListsItsCategory() throws {
         let fm = FileManager.default
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().appendingPathComponent(".build/shared-rule-test-\(UUID().uuidString)")
+            .deletingLastPathComponent().appendingPathComponent(".build/responsible-rule-test-\(UUID().uuidString)")
         defer { try? fm.removeItem(at: root) }
-        try fm.createDirectory(at: root, withIntermediateDirectories: true)
-        for name in ["one", "two", "three"] {
-            let copy = root.appendingPathComponent(name)
-            try fm.copyItem(atPath: "/usr/bin/true", toPath: copy.path)
+        let prefix = "dev.linsheng.mihomo.responsible-"
+        func copyTrue(_ url: URL) throws {
+            try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try fm.copyItem(atPath: "/usr/bin/true", toPath: url.path)
+        }
+        func bundle(_ url: URL, executable: String) throws -> URL {
+            try fm.createDirectory(at: url.appendingPathComponent("Contents/MacOS"), withIntermediateDirectories: true)
+            try (["CFBundleExecutable": executable, "CFBundlePackageType": "APPL"] as NSDictionary)
+                .write(to: url.appendingPathComponent("Contents/Info.plist"))
+            let main = url.appendingPathComponent("Contents/MacOS").appendingPathComponent(executable)
+            try copyTrue(main)
+            return main
+        }
+        func sign(_ url: URL, _ name: String) throws {
             let sign = Process()
             sign.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
-            sign.arguments = ["--force", "--sign", "-", "--identifier", "dev.linsheng.mihomo.shared-\(name)", copy.path]
+            sign.arguments = ["--force", "--sign", "-", "--identifier", prefix + name, url.path]
             try sign.run(); sign.waitUntilExit()
             XCTAssertEqual(sign.terminationStatus, 0)
         }
+        let app = root.appendingPathComponent("Tool.app")
+        let nestedApp = app.appendingPathComponent("Contents/Frameworks/Tool Helper.app")
+        let loginItem = app.appendingPathComponent("Contents/Library/LoginItems/Tool Login.app")
+        let main = try bundle(app, executable: "Tool")
+        let nested = try bundle(nestedApp, executable: "Tool Helper")
+        let login = try bundle(loginItem, executable: "Tool Login")
+        let helper = app.appendingPathComponent("Contents/MacOS/tool-helper")
+        let cli = root.appendingPathComponent("cli")
+        try copyTrue(helper); try copyTrue(cli)
+        XCTAssertEqual([main, login, cli, helper, nested].map { AIAppTargets.startsResponsible($0.path) },
+                       [true, true, true, false, false])
+        try fm.removeItem(at: loginItem)
+        try sign(helper, "helper"); try sign(nestedApp, "nested"); try sign(app, "main"); try sign(cli, "cli")
         var entry = AppProxyEntry.legacyDefaults[1]
         entry.directories = [root.path]
         let discovered = try AIAppTargets(requireAll: false, applications: [entry], applicationDirectories: [])
         let combined = try AIAppTargets(combining: [discovered])
+        let all = Set([main, nested, helper, cli].map(\.path))
         for targets in [discovered, combined] {
-            let rules = targets.rules.filter { $0.matchSigningIdentifier.hasPrefix("dev.linsheng.mihomo.shared-") }
-            XCTAssertEqual(rules.count, 3)
-            // Every rule lists every executable; each executable must be one object, so the
-            // archived configuration stores it once instead of once per rule.
-            var instances: [String: Set<ObjectIdentifier>] = [:]
-            for tool in rules.flatMap({ $0.matchTools ?? [] }) {
-                instances[tool.matchPath ?? "", default: []].insert(ObjectIdentifier(tool))
+            func tools(_ name: String) -> Set<String> {
+                Set(targets.rules.first { $0.matchSigningIdentifier == prefix + name }?.matchTools?.compactMap(\.matchPath) ?? [])
             }
-            XCTAssertEqual(instances.keys.filter { $0.hasPrefix(root.path + "/") }.count, 3)
-            XCTAssertTrue(instances.values.allSatisfy { $0.count == 1 })
+            XCTAssertTrue(tools("main").isSuperset(of: all))
+            XCTAssertTrue(tools("cli").isSuperset(of: all))
+            XCTAssertEqual(tools("helper"), [helper.path])
+            XCTAssertEqual(tools("nested"), [nested.path])
         }
+    }
+    @MainActor func testConfigurationSizeCountsSharedToolsOncePerRule() {
+        let tool = NEAppRule(signingIdentifier: "dev.linsheng.tool", designatedRequirement: "identifier \"dev.linsheng.tool\"")
+        tool.matchPath = "/opt/tool"
+        func rules(_ make: () -> NEAppRule) -> [NEAppRule] {
+            (0..<4).map { index in
+                let rule = NEAppRule(signingIdentifier: "dev.linsheng.app\(index)", designatedRequirement: "identifier \"dev.linsheng.app\(index)\"")
+                rule.matchTools = [make()]
+                return rule
+            }
+        }
+        let shared = rules { tool }
+        let separate = rules { tool.copy() as! NEAppRule }
+        // NetworkExtension measures the configuration after XPC, which does not keep sharing.
+        XCTAssertEqual(AppProxyCoordinator.configurationSize([:], rules: shared),
+                       AppProxyCoordinator.configurationSize([:], rules: separate))
     }
     func testScanReachesCodeBehindFrameworkVersionLinks() throws {
         let fm = FileManager.default

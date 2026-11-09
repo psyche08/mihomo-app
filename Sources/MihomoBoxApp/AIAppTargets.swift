@@ -13,16 +13,15 @@ struct AIAppTargets {
         var path: String { identity.path }
         var category: String { identity.category }
         var team: String? { identity.team }
-        /// The executable's tool rule, one shared instance. Each application rule lists every
-        /// executable of its category, so tool entries grow with the square of a category's
-        /// size; sharing lets the archived configuration store each tool once and reference
-        /// it elsewhere (NetworkExtension caps the saved configuration at 512 KiB).
-        /// Never mutate it.
+        /// The executable's tool rule, built once. Never mutate it: rules share it.
         let rule: NEAppRule
+        /// Whether macOS can make this executable a flow's responsible process (`startsResponsible`).
+        let responsible: Bool
         init(identity: AppProxyCodeIdentity) {
             self.identity = identity
             rule = NEAppRule(signingIdentifier: identity.id, designatedRequirement: identity.requirement)
             rule.matchPath = identity.path
+            responsible = AIAppTargets.startsResponsible(identity.path)
         }
         var record: [String: String] {
             ["id": id, "requirement": requirement, "path": path, "category": category]
@@ -210,6 +209,14 @@ struct AIAppTargets {
             let rule = NEAppRule(signingIdentifier: id, designatedRequirement: Self.requirement(members.map(\.requirement)))
             if members.count == 1 { rule.matchPath = members[0].path }
             let categories = Set(members.map(\.category))
+            // Only a responsible process needs its category's code: macOS attributes the
+            // processes it starts to it. Other bundled code is started by its application and
+            // matches only itself. Listing the category under every helper grew with the square
+            // of the category's size, past NetworkExtension's 512 KiB configuration limit.
+            guard members.contains(where: \.responsible) else {
+                rule.matchTools = Self.uniqueByPath(members.map(\.rule))
+                return rule
+            }
             var matched = roots.filter { categories.contains($0.category) }.map(\.rule)
             // An application may launch another application's CLI (Claude Code running codex).
             // macOS attributes it to the launching application; the provider routes the CLI by
@@ -351,6 +358,21 @@ struct AIAppTargets {
             hosts[path] = LaunchHost(id: id, requirement: text as String, path: path)
         }
         return hosts.values.sorted { $0.path < $1.path }
+    }
+
+    /// Code that can be a flow's responsible process: code outside any bundle, and the main
+    /// executable of a top-level application or of a login item, which launchd starts.
+    /// Helpers, nested helper apps and framework code inherit the process that started them.
+    static func startsResponsible(_ path: String) -> Bool {
+        guard let root = try? AppProxyCodeIdentity.accessURL(for: path) else { return false }
+        guard root.path != path else { return true }
+        // Read Info.plist directly: Bundle(url:) returns Bundle.main for the running app.
+        guard let name = NSDictionary(contentsOf: root.appendingPathComponent("Contents/Info.plist"))?["CFBundleExecutable"] as? String,
+              !name.contains("/"),
+              root.appendingPathComponent("Contents/MacOS").appendingPathComponent(name)
+                .standardizedFileURL.resolvingSymlinksInPath().path == path else { return false }
+        let container = root.deletingLastPathComponent().path
+        return !container.contains(".app/") || container.hasSuffix(".app/Contents/Library/LoginItems")
     }
 
     /// One OS rule may stand for several approved copies of an identifier: match any of their requirements.

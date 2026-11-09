@@ -499,3 +499,23 @@ Consequences:
   reaches the App Proxy while MTTA's DNS Proxy is active; whether the
   `mach-lookup` temporary exception is honored for the sandboxed system
   extension; the TCP-retry limitation above.
+
+## 2026-11-09: App Proxy `matchTools` only on responsible code
+
+ChatGPT, Claude and the JetBrains Team ID default (122 executables) produced a
+781915-byte configuration; NetworkExtension refuses above 512 KiB. Every rule
+listed its whole category, 4642 entries in 94 rules. Sharing tool objects did not
+help: the configuration crosses XPC before it is measured.
+
+Decision: a rule lists its category (and, for launchers, the verified CLIs) only
+when one of its executables can be a responsible process: code outside any bundle,
+or the main executable of a top-level application or a login item. Other bundled
+code matches only itself (580 entries). The host's size check measures detached
+rule copies and refuses above 440 KiB.
+
+Trade-off: a helper that LaunchServices or launchd starts as its own responsible
+process keeps its own flows, but code it starts connects directly instead of
+through its application's route. None of the current targets ships an embedded
+login item or launchd agent. Rejected: shortening tool requirements (weaker
+identity), and moving the duplicated `targets` list out of the provider
+configuration (a provider protocol change for about 60 KB).
