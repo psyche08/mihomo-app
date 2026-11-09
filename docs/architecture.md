@@ -237,8 +237,9 @@ not create another Mihomo process. Preference callbacks have 60-second deadlines
 The extension reuses the audited experiment's flow handling and signature
 inspection, but `MAIN_APP_PROXY` requires the per-application routing schema
 and rejects legacy test sessions. Proxied destinations use the
-validated root-core loopback listeners: 17971–17974 for the default applications,
-and 17975–18002 for user-selected signed apps and CLI executables. The root
+validated root-core loopback listeners: 17970–17974 for the built-in applications
+(17970 JetBrains, 17971 OpenAI, 17973 Anthropic, 17972 and 17974 the legacy CLI
+presets), and 17975–18002 for user-selected signed apps and CLI executables. The root
 overlay assigns each listener a named sub-rule rather than an unconditional
 `proxy` override. Mihomo evaluates Global/Direct before these Rule-mode app
 rules. Each app gets a copy of the original ordered rule list and its sub-rules;

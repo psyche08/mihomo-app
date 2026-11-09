@@ -22,6 +22,22 @@ final class AppProxyCoordinatorTests: XCTestCase {
         let builtinTargets = try AIAppTargets(requireAll: false, applications: [builtinOnly])
         XCTAssertEqual(builtinTargets.targets.first { $0.path == "/usr/bin/curl" }?.category, "chatgpt")
     }
+    func testAbsentConventionalCLILocationsAreNotExclusions() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mihomobox-cli-probe-\(UUID().uuidString)")
+        let bin = home.appendingPathComponent(".local/bin")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let empty = try AIAppTargets(requireAll: false, applications: AppProxyEntry.legacyDefaults,
+                                     homeDirectory: home, applicationDirectories: [home])
+        XCTAssertFalse(empty.issues.contains { $0.failure == .missingFile })
+        // A dangling link in a conventional location is still reported.
+        try FileManager.default.createSymbolicLink(atPath: bin.appendingPathComponent("claude").path,
+                                                   withDestinationPath: home.appendingPathComponent("gone").path)
+        let dangling = try AIAppTargets(requireAll: false, applications: AppProxyEntry.legacyDefaults,
+                                        homeDirectory: home, applicationDirectories: [home])
+        XCTAssertTrue(dangling.issues.contains { $0.category == "claude_cli" })
+    }
     func testCustomSignedExecutableIncludesIdentityAndRejectsDuplicateOwnership() throws {
         let entry = AppProxyEntry(id: "app_00000000-0000-0000-0000-000000000001", title: "List", path: "/bin/ls", port: 17975)
         let discovered = try AIAppTargets(requireAll: false, applications: [entry])

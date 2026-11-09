@@ -1,7 +1,7 @@
 import Foundation
 
 public enum AppProxyApplication: String, Codable, CaseIterable, Sendable, Identifiable {
-    case chatgpt, codexCLI = "codex_cli", claude, claudeCLI = "claude_cli"
+    case chatgpt, codexCLI = "codex_cli", claude, claudeCLI = "claude_cli", jetbrains
     public var id: String { rawValue }
     public var title: String {
         switch self {
@@ -9,16 +9,21 @@ public enum AppProxyApplication: String, Codable, CaseIterable, Sendable, Identi
         case .codexCLI: "Codex CLI"
         case .claude: "Claude Desktop"
         case .claudeCLI: "Claude CLI"
+        case .jetbrains: "JetBrains IDEs"
         }
     }
+    /// Fixed listener ports. Custom applications use 17975...18002.
     public var port: UInt16 {
         switch self {
+        case .jetbrains: 17970
         case .chatgpt: 17971
         case .codexCLI: 17972
         case .claude: 17973
         case .claudeCLI: 17974
         }
     }
+    /// The four per-binary presets of releases before 1.1.0.
+    public static let legacyPresets: [Self] = [.chatgpt, .codexCLI, .claude, .claudeCLI]
 }
 
 public struct AppProxyEntry: Codable, Equatable, Sendable, Identifiable {
@@ -58,10 +63,17 @@ public struct AppProxyEntry: Codable, Equatable, Sendable, Identifiable {
     }
     public static var defaults: [Self] {
         [.init(id: "chatgpt", title: "OpenAI (ChatGPT / Codex)", port: 17971, teamIdentifiers: ["2DC432GLL2"]),
-         .init(id: "claude", title: "Anthropic (Claude)", port: 17973, teamIdentifiers: ["Q6L2SF6YDW"])]
+         .init(id: "claude", title: "Anthropic (Claude)", port: 17973, teamIdentifiers: ["Q6L2SF6YDW"]),
+         .init(id: "jetbrains", title: "JetBrains (IntelliJ IDEA / Toolbox)", port: 17970,
+               teamIdentifiers: ["2ZEFAR8TH3"])]
+    }
+    /// The Team ID policies that replace the four legacy presets. Their routes
+    /// carry over; a default without a legacy predecessor needs its own node.
+    public static var teamPresetReplacements: [Self] {
+        defaults.filter { ["chatgpt", "claude"].contains($0.id) }
     }
     public static var legacyDefaults: [Self] {
-        AppProxyApplication.allCases.map { .init(id: $0.rawValue, title: $0.title, port: $0.port) }
+        AppProxyApplication.legacyPresets.map { .init(id: $0.rawValue, title: $0.title, port: $0.port) }
     }
 }
 
@@ -86,7 +98,7 @@ public struct AppProxySettings: Codable, Equatable, Sendable {
         }
         var result = self
         let oldIDs = Set(old.map(\.id))
-        result.applications = AppProxyEntry.defaults + applications.filter { !oldIDs.contains($0.id) }
+        result.applications = AppProxyEntry.teamPresetReplacements + applications.filter { !oldIDs.contains($0.id) }
         result.routes.removeValue(forKey: "codex_cli")
         result.routes.removeValue(forKey: "claude_cli")
         guard (try? result.validate()) != nil else { return nil }

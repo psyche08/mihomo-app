@@ -924,7 +924,7 @@ private func printProfiles(json: Bool) throws {
 
 private let appProxyUsage = """
     usage: mihomoboxctl app-proxy status | set-all PROXY
-           mihomoboxctl app-proxy policy show [APP]
+           mihomoboxctl app-proxy policy show [APP] | migrate-defaults | add-defaults PROXY
            mihomoboxctl app-proxy policy set APP [--team ID]... [--directory PATH]... [--executable PATH]...
                                              [--launched-clis on|off]
            mihomoboxctl app-proxy targets APP | runtime | flows | enable APP [--approve] | disable APP | on | off
@@ -965,6 +965,36 @@ private func appProxyPolicy(_ arguments: [String]) throws -> Int32 {
         guard let reply = try sendControl(.setAppProxyRouting, payload: JSONEncoder().encode(update)),
               try JSONDecoder().decode(AppProxyRoutingState.self, from: reply).settings == settings else {
             throw CLIError(message: "Could not verify Team ID preset migration")
+        }
+        try printJSON(settings.applications.map(policy))
+        return 0
+    case "add-defaults" where arguments.count == 2:
+        // Adds built-in Team ID policies that configured settings predate (JetBrains, for
+        // example), each routed to PROXY. Existing applications, scopes and routes are kept.
+        var settings = state.settings
+        let missing = AppProxyEntry.defaults.filter { entry in
+            !settings.applications.contains { $0.id == entry.id }
+        }
+        guard !missing.isEmpty else {
+            try printJSON(settings.applications.map(policy))
+            return 0
+        }
+        guard !settings.routes.isEmpty else {
+            throw CLIError(message: "App Proxy routes are not configured yet; fresh settings already include the defaults. Use app-proxy set-all PROXY.")
+        }
+        settings.applications += missing
+        for entry in missing { settings.routes[entry.id] = arguments[1] }
+        try settings.validate()
+        // A new application changes the listener and rule topology: stop interception
+        // first, exactly like migrate-defaults. New Team scopes need the ordinary approval.
+        let host = try appProxyHostExecutable()
+        guard try runInteractive(host.path, ["--app-proxy", "off"]) == 0 else {
+            throw CLIError(message: "Could not verify App Proxy was disabled")
+        }
+        let update = AppProxyRoutingUpdate(settings: settings, expectedRevision: state.revision)
+        guard let reply = try sendControl(.setAppProxyRouting, payload: JSONEncoder().encode(update)),
+              try JSONDecoder().decode(AppProxyRoutingState.self, from: reply).settings == settings else {
+            throw CLIError(message: "Could not verify the added Team ID defaults")
         }
         try printJSON(settings.applications.map(policy))
         return 0
@@ -1038,6 +1068,9 @@ private func usage() {
       app-proxy status               Show saved applications and routes
       app-proxy set-all PROXY         Route all saved apps through one node/group
       app-proxy policy migrate-defaults Merge unchanged legacy presets; leaves interception off
+      app-proxy policy add-defaults PROXY
+                                      Add missing built-in Team ID policies (e.g. JetBrains)
+                                      routed to PROXY; leaves interception off
       app-proxy policy show [APP]     Show Team ID, directory and executable scopes
       app-proxy policy set APP [--team ID]... [--directory PATH]... [--executable PATH]...
                                [--launched-clis on|off]

@@ -23,6 +23,24 @@ and CLI nodes or customized preset scopes block migration instead of discarding
 settings; reconcile those choices explicitly first. No root settings file is
 edited directly, and code-access consent is never inferred from old presets.
 
+## Adding the JetBrains Team ID default
+
+Fresh settings also route JetBrains (`2ZEFAR8TH3`, IntelliJ IDEA, other
+JetBrains IDEs and Toolbox) on the fixed listener 17970. Migration replaces
+legacy presets with the OpenAI and Anthropic entries only. Configured settings
+never gain an entry implicitly, because a configured route set must name every
+application. Add the missing built-in entries explicitly:
+
+```bash
+mihomoboxctl app-proxy policy add-defaults PROXY
+mihomoboxctl app-proxy targets jetbrains
+```
+
+The command routes each added entry to the named proxy, disables interception
+through the signed host, writes with revision checking and verifies readback.
+In the App, **Restore Team ID Defaults** adds the same entries; choose a node,
+Apply, then re-enable through the normal code-scope review.
+
 ## Menu-bar proxy switches
 
 Starting with 1.1.1, **System Proxy** controls the managed HTTP/HTTPS/SOCKS
@@ -229,7 +247,8 @@ A LoadBalance group is accepted only when every candidate
 resolves to a remote proxy. macOS may require Network Extension and VPN approval.
 Disable App Proxy before adding or removing entries. Removing an entry only
 removes its proxy routing, never the installed application. Apply saves these
-changes; Restore Team ID Defaults restores the OpenAI and Anthropic presets.
+changes; Restore Team ID Defaults restores the OpenAI, Anthropic and JetBrains
+presets.
 
 Each entry's **Policy** editor adds code that shares that entry's node, in three
 scopes, one entry per line (type, paste or drag in):

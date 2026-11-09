@@ -120,7 +120,11 @@ struct AIAppTargets {
             let category = teamOwners[team] ?? category
             guard selected.contains(category) else { continue }
             for base in ["/opt/homebrew/bin", "/usr/local/bin", home.appendingPathComponent(".local/bin").path] {
-                add(URL(fileURLWithPath: base).appendingPathComponent(name), category: category, team: team,
+                // These are probes of conventional install locations, not selections: a
+                // location without the CLI is not an exclusion. A dangling link still is.
+                let url = URL(fileURLWithPath: base).appendingPathComponent(name)
+                guard (try? fm.attributesOfItem(atPath: url.path)) != nil else { continue }
+                add(url, category: category, team: team,
                     identifier: name == "claude" ? "com.anthropic.claude-code" : nil)
             }
         }

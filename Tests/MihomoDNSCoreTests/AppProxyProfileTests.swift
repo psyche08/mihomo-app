@@ -11,7 +11,7 @@ final class AppProxyProfileTests: XCTestCase {
         let generated = try AppProxyProfile.applying(settings, to: source)
         let reloaded = try JSONDecoder().decode(AppProxySettings.self, from: JSONEncoder().encode(settings))
         XCTAssertEqual(try AppProxyProfile.applying(reloaded, to: source), generated)
-        for app in AppProxyApplication.allCases {
+        for app in AppProxyApplication.legacyPresets {
             XCTAssertTrue(generated.contains("proxies: [\"node-\(app.rawValue)\"]"))
         }
         var disabled = settings; disabled.bypass = .init(cidrs: [])
@@ -47,7 +47,7 @@ final class AppProxyProfileTests: XCTestCase {
         XCTAssertThrowsError(try settings.validate(), "Ownership must be unique across apps")
     }
     private var settings: AppProxySettings {
-        .init(routes: Dictionary(uniqueKeysWithValues: AppProxyApplication.allCases.map { ($0.rawValue, "node-" + $0.rawValue) }), applications: AppProxyEntry.legacyDefaults)
+        .init(routes: Dictionary(uniqueKeysWithValues: AppProxyApplication.legacyPresets.map { ($0.rawValue, "node-" + $0.rawValue) }), applications: AppProxyEntry.legacyDefaults)
     }
     func testFourIndependentLoopbackListenersPreserveRawProfile() throws {
         let source = "mixed-port: 7897\ntun:\n  enable: false\nrules:\n  - MATCH,REJECT\n"
@@ -57,7 +57,7 @@ final class AppProxyProfileTests: XCTestCase {
             "  - SUB-RULE,(AND,((RULE-SET,mihomobox-app-\($0.id)-processes))),mihomobox-app-\($0.id)\n"
         }.joined()
         XCTAssertTrue(rendered.hasPrefix("mixed-port: 7897\ntun:\n  enable: false\nrules:\n" + processRules + "  - MATCH,REJECT\n"))
-        for app in AppProxyApplication.allCases {
+        for app in AppProxyApplication.legacyPresets {
             XCTAssertTrue(rendered.contains("port: \(app.port)\n    udp: true\n    rule: mihomobox-app-\(app.rawValue)"))
             XCTAssertTrue(rendered.contains("\"MATCH,REJECT\""))
         }
@@ -136,7 +136,7 @@ final class AppProxyProfileTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: directory) }
         var source = "mode: rule\nrules:\n  - MATCH,REJECT\nproxies:\n"
-        for app in AppProxyApplication.allCases {
+        for app in AppProxyApplication.legacyPresets {
             source += "  - name: node-\(app.rawValue)\n    type: socks5\n    server: 127.0.0.1\n    port: 9\n"
         }
         func validate(_ settings: AppProxySettings) throws -> Int32 {
@@ -154,7 +154,7 @@ final class AppProxyProfileTests: XCTestCase {
         // The private selector also makes unknown targets fail core validation.
         XCTAssertNotEqual(try validate(invalid), 0)
         let snapshot = ControllerRouteSnapshot(mode: "rule", proxies: Dictionary(uniqueKeysWithValues:
-            AppProxyApplication.allCases.map { ("node-" + $0.rawValue, .init(name: "node-" + $0.rawValue, type: "Socks5")) }))
+            AppProxyApplication.legacyPresets.map { ("node-" + $0.rawValue, .init(name: "node-" + $0.rawValue, type: "Socks5")) }))
         XCTAssertNoThrow(try settings.validateRoutes(in: snapshot))
         XCTAssertThrowsError(try invalid.validateRoutes(in: snapshot))
     }
@@ -325,7 +325,7 @@ final class AppProxyProfileTests: XCTestCase {
             """#.utf8)
         )
         let routes = AppProxySettings(routes: Dictionary(uniqueKeysWithValues:
-            AppProxyApplication.allCases.map { ($0.rawValue, "Proxy") }), applications: AppProxyEntry.legacyDefaults)
+            AppProxyApplication.legacyPresets.map { ($0.rawValue, "Proxy") }), applications: AppProxyEntry.legacyDefaults)
         XCTAssertNoThrow(try routes.validateRoutes(in: snapshot))
     }
 

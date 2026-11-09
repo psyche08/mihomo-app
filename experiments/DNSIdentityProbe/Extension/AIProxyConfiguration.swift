@@ -50,7 +50,7 @@ struct AIProxyConfiguration {
         let value = number.doubleValue
         guard value == 0 || (value > now && value <= now + 330) else { throw Invalid.configuration }
         deadline = value == 0 ? nil : value
-        let builtin: [String: UInt16] = ["chatgpt": 17971, "codex_cli": 17972, "claude": 17973, "claude_cli": 17974]
+        let builtin: [String: UInt16] = ["jetbrains": 17970, "chatgpt": 17971, "codex_cli": 17972, "claude": 17973, "claude_cli": 17974]
         if dynamic {
             guard let values = raw["ports"] as? [String: NSNumber], !values.isEmpty, values.count <= 32 else { throw Invalid.configuration }
             var decoded: [String: UInt16] = [:]

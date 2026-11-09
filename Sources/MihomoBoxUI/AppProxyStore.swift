@@ -201,7 +201,7 @@ public final class AppProxyStore: ObservableObject {
         routing = .init(settings: .init(routes: routes), profile: "Preview.yaml", revision: "preview")
         draft = routing!.settings
         discoveredApplications = draft.applications
-        let counts = ["chatgpt": 45, "claude": 24, "codex_cli": 1, "claude_cli": 1]
+        let counts = ["chatgpt": 45, "claude": 24, "jetbrains": 37, "codex_cli": 1, "claude_cli": 1]
         let executables = draft.applications.flatMap { app in
             (0..<counts[app.id, default: 0]).map { index in
                 AppProxyExecutable(applicationID: app.id,

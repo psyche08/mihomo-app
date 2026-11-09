@@ -343,7 +343,7 @@ final class AppProxyStoreTests: XCTestCase {
         XCTAssertTrue(model.busy)
         model.selectTarget("two", for: "claude"); model.removeApplication("chatgpt")
         XCTAssertEqual(model.draft.routes["claude"], "one")
-        XCTAssertEqual(model.draft.applications.count, 2)
+        XCTAssertEqual(model.draft.applications.count, AppProxyEntry.defaults.count)
         do { try await model.apply(); XCTFail("Concurrent write must fail") } catch {}
         service.enableContinuation?.resume()
         try await enable.value

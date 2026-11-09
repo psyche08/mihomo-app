@@ -422,7 +422,7 @@ or ambiguous reply requires refresh before another apply/enable.
 
 Settings live in the root-owned `app-proxy.json`, alongside the active-profile
 state. Subscription bytes and the user's profile mirror are preserved. The
-runtime overlay adds loopback mixed listeners on ports 17971–18002, each
+runtime overlay adds loopback mixed listeners on ports 17970–18002, each
 with a private rule list derived from the profile. Rule mode retains direct,
 reject and pass actions and replaces proxy targets with the app's saved target.
 Global and Direct follow the shared core mode. TCP and UDP connections use the

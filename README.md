@@ -80,10 +80,13 @@ projects; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ### 1.1.0 defaults and local releases
 
-Fresh App Proxy settings route OpenAI (`2DC432GLL2`, ChatGPT/Codex) and Anthropic
-(`Q6L2SF6YDW`, Claude) by verified Team ID. Choose a proxy node and approve the
+Fresh App Proxy settings route OpenAI (`2DC432GLL2`, ChatGPT/Codex), Anthropic
+(`Q6L2SF6YDW`, Claude) and JetBrains (`2ZEFAR8TH3`, IntelliJ IDEA/Toolbox) by
+verified Team ID. Choose a proxy node and approve the
 code scope before activation. Existing customized routes and approvals are preserved. Untouched four-entry presets
 can be migrated with “Use Team ID Defaults” or `mihomoboxctl app-proxy policy migrate-defaults`.
+Configured settings gain missing built-in entries, such as JetBrains, through
+“Restore Team ID Defaults” or `mihomoboxctl app-proxy policy add-defaults <node>`.
 Team discovery covers Applications, conventional CLI locations and the known
 vendor runtime locations; code elsewhere needs an explicit directory scope.
 

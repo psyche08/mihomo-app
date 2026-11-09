@@ -7,8 +7,12 @@ final class AppProxyIdentityTests: XCTestCase {
     func testLegacyTeamMigrationPreservesRoutesAndRejectsCustomization() throws {
         var old = AppProxySettings(routes: ["chatgpt":"A", "codex_cli":"A", "claude":"B", "claude_cli":"B"], applications: AppProxyEntry.legacyDefaults)
         let migrated = try XCTUnwrap(old.teamPresetMigration)
-        XCTAssertEqual(migrated.applications, AppProxyEntry.defaults)
+        // Only OpenAI and Anthropic replace legacy presets; a new default such as
+        // JetBrains has no predecessor route and is added explicitly.
+        XCTAssertEqual(migrated.applications, AppProxyEntry.teamPresetReplacements)
+        XCTAssertEqual(migrated.applications.map(\.id), ["chatgpt", "claude"])
         XCTAssertEqual(migrated.routes, ["chatgpt":"A", "claude":"B"])
+        XCTAssertNoThrow(try migrated.validate())
         XCTAssertEqual(migrated.bypass, old.bypass)
         XCTAssertNil(migrated.teamPresetMigration)
         old.routes["codex_cli"] = "Other"
@@ -24,10 +28,17 @@ final class AppProxyIdentityTests: XCTestCase {
     }
     func testTeamDefaultsAndLegacyRouteMigration() throws {
         let defaults = AppProxySettings()
-        XCTAssertEqual(defaults.applications.map(\.id), ["chatgpt", "claude"])
-        XCTAssertEqual(defaults.applications.flatMap(\.teamIdentifiers), ["2DC432GLL2", "Q6L2SF6YDW"])
+        XCTAssertEqual(defaults.applications.map(\.id), ["chatgpt", "claude", "jetbrains"])
+        XCTAssertEqual(defaults.applications.flatMap(\.teamIdentifiers), ["2DC432GLL2", "Q6L2SF6YDW", "2ZEFAR8TH3"])
+        XCTAssertEqual(defaults.applications.last?.port, 17970)
+        XCTAssertEqual(AppProxyApplication.jetbrains.port, 17970)
         XCTAssertNoThrow(try defaults.validate())
-        let oldRoutes = Dictionary(uniqueKeysWithValues: AppProxyApplication.allCases.map { ($0.rawValue, "Proxy") })
+        XCTAssertNoThrow(try AppProxySettings(routes: ["chatgpt": "A", "claude": "B", "jetbrains": "C"]).validate())
+        // Built-in ports never fall inside the custom range.
+        XCTAssertTrue(AppProxyApplication.allCases.allSatisfy { !(17975...18002).contains($0.port) })
+        XCTAssertEqual(Set(AppProxyApplication.allCases.map(\.port)).count, AppProxyApplication.allCases.count)
+        XCTAssertEqual(AppProxyEntry.legacyDefaults.map(\.id), ["chatgpt", "codex_cli", "claude", "claude_cli"])
+        let oldRoutes = Dictionary(uniqueKeysWithValues: AppProxyApplication.legacyPresets.map { ($0.rawValue, "Proxy") })
         let data = try JSONSerialization.data(withJSONObject: ["routes": oldRoutes])
         let legacy = try JSONDecoder().decode(AppProxySettings.self, from: data)
         XCTAssertEqual(legacy.applications, AppProxyEntry.legacyDefaults)
