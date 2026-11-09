@@ -12,10 +12,10 @@ An open-source native macOS menu-bar controller for Mihomo.
   recovery, daemon installation, and exit.
 - The App bundle contains architecture-matched `mihomo`, `mihomo-daemon`,
   `mihomo-agent`, and `mihomoboxctl` executables under `Contents/MacOS`.
-- The root daemon supervises Mihomo and keeps the LocalHttpDns HTTPS endpoint
-  available independently of Enhanced TUN. Its approved split-domain profile
-  sends proxy domains to localhost; nonmatching domains keep the current macOS
-  default resolver, and MihomoBox does not replace the system DNS server list.
+- The root daemon supervises Mihomo. Turning on Enhanced TUN also takes over
+  macOS Global DNS, sending system DNS through a loopback bridge to Mihomo's
+  Fake-IP resolver; with TUN off, Mihomo stays up in standby for App Proxy and
+  system DNS is left untouched.
 - Sparkle verifies and atomically installs signed App updates; desktop control
   goes directly from Swift to authenticated Mach XPC.
 
@@ -39,8 +39,8 @@ first:
 scripts/install-daemon.sh --app-bundle ./build/MihomoBox.app --dry-run
 ```
 
-Remove the helper, LocalHttpDns profile/certificate state, and any legacy
-system-DNS residue through the signed bundled CLI:
+Remove the helper, any profile/certificate left by the retired Local DoH
+feature, and any legacy system-DNS residue through the signed bundled CLI:
 
 ```bash
 /Applications/MihomoBox.app/Contents/MacOS/mihomoboxctl uninstall

@@ -154,7 +154,7 @@ tray XPC-backed TUN, profile, mode, and proxy controls are disabled, while
 an emphasized `Upgrade Daemon…` action and `Tools > Install / Repair Daemon…
 (Required)` remain available. The App stays hidden and never opens an
 administrator prompt automatically. Selecting the action first explains that
-Mihomo and Enhanced TUN will restart briefly while LocalHttpDns stays available, then enters the
+Mihomo and Enhanced TUN will restart briefly, then enters the
 existing exact-signature verified installer. A newer daemon is shown as
 requiring an App update and cannot be repaired by the older App.
 
@@ -176,18 +176,18 @@ network restoration cannot be proved, the daemon stops the agent and restores
 DNS. The App sends one typed XPC request and renders the returned snapshot; it
 does not repeat rollback or stop decisions outside the privilege boundary.
 
-In Local DoH mode, LocalHttpDns is the service prerequisite for Enhanced TUN.
-Explicit Global DNS mode instead requires the verified TUN DNS path and no
-remaining MihomoBox DoH profile. Without a selected
+**Enhanced TUN** always owns macOS Global DNS together with TUN; there is no
+separate DNS mode. Without a selected
 profile the item first tells the user to add one. When the daemon is absent it
-opens the signed installer with administrator authorization and supplies the
-selected profile for the first standby start. It then prepares the fixed
-certificate/profile and opens Device Management. Until macOS reports that
-profile installed, enabling TUN is rejected. Once approved, the same item
-persists `tun.enable: true`; turning it off persists `false` and returns to a
-healthy controller/DNS standby. Neither action stops LocalHttpDns or writes the
-macOS system DNS server list in Local DoH mode. Global DNS mode restores the
-original system DNS when Enhanced TUN is stopped.
+opens the signed installer with administrator authorization, supplies the
+selected profile for the first standby start, and waits for the controller.
+The same item then persists `tun.enable: true` and routes macOS PrimaryService
+DNS through the `127.0.0.53` bridge to Mihomo's Fake-IP DNS; turning it off persists
+`false`, restores the original system DNS and returns to a healthy
+controller/DNS standby that App Proxy keeps using. No certificate, trust or
+configuration-profile step is involved. If the daemon could not confirm at
+boot that the retired Local DoH profile is gone, enabling TUN repeats that
+cleanup first.
 
 On first installed App launch, the native App enables a current-user macOS login
 item independently of helper, network, or Enhanced TUN readiness. This is a
@@ -232,12 +232,26 @@ activation transaction.
 | Reload active profile | `profile.reload` |
 | Import/switch profile | `profile.import` / `profile.switch` |
 | Start/stop/restart proxy runtime | `agent.start` / `agent.stop` / `agent.restart` |
-| Read fixed Local DoH server/profile state | `local-doh.status` |
-| Prepare identity/runtime and root-owned Local DoH profile | `local-doh.install` |
-| Explicitly install/trust the fixed CA for SSL | `local-doh.trust-certificate` |
-| Select Global DNS or ready Local DoH | `runtime.set-dns-mode` |
+| Read service health (`mihomoboxctl status`) | `service.status` |
 | SwiftUI controller reads/mutations | typed operations or validated `dashboard.controller-request` |
 | SwiftUI live streams | `dashboard.controller-stream-open/next/close` |
+| App Proxy extension DNS answers (extension only) | `dns.resolve` |
+
+`service.status` (shown by `mihomoboxctl status --json` under `health`) includes
+`legacy_local_doh_profile_removed`: `true` once the daemon has confirmed the
+retired Local DoH profile absent. The `local-doh.status`, `local-doh.install`,
+`local-doh.trust-certificate`, `local-doh.prepare-certificate-trust` and
+`runtime.set-dns-mode` operations no longer exist.
+
+`dns.resolve` is not available to the App or CLI. The daemon serves it only to
+the App Proxy system extension (`dev.linsheng.mihomo-app.app-proxy`, release
+certificate family), and that extension may call nothing else; any other
+combination is refused and logged as `result=peer_not_permitted role=<role>`.
+It was added within protocol 3: the query and answer travel as DNS wire
+format in the XPC `payload` field. Errors are `dns_invalidQuery`, `dns_busy`,
+`dns_invalidResponse` and `dns_unavailable`; an older daemon rejects the
+operation and the extension fails closed. See
+[Security Model](security.md) for its bounds.
 
 The native `ControlGateway` covers config, proxy/group selection and latency,
 proxy and rule providers, rules, connection close, cache flush, GEO refresh,
@@ -270,31 +284,12 @@ disabled. An automatically downloaded update uses Sparkle's no-UI immediate
 install/relaunch path; the daemon-owned active tunnel does not depend on the App
 process remaining alive.
 
-Config's **DNS Integration** panel exposes Global DNS / Local DoH selection,
-separate certificate-trust and installed-profile readiness, explicit SSL trust
-approval, and links to Device Management and Keychain Access. The App confirms
-trust and Global DNS profile-removal actions before authenticated XPC. Busy
-state prevents duplicate clicks; failed or cancelled authorization cannot
-optimistically mark SSL trust ready. Mode selection is read back from the
-daemon, including confirmed DoH profile removal for Global DNS. Re-entering
-Local DoH after Global DNS requires user-approved profile installation again.
-
-The legacy split-DNS planner reads the current
-authenticated `/rules` and `/proxies` snapshot, recognizes both YAML
-`DOMAIN-SUFFIX` and controller `DomainSuffix` spellings, follows each current
-selector chain to a concrete remote proxy, and expands selected `GEOSITE`
-selectors from the managed root-owned database. Attribute filters are
-intersected; plain/regex entries and whole-list inversions are counted rather
-than widening scope. The complete suffix set is deduplicated without a silent
-cap. Global/Direct modes, DIRECT selections, unknown leaves and selector cycles
-fail closed. The Config panel shows expanded-GeoSite, omitted,
-unrepresentable-entry, inversion, and exact-to-suffix counts and polls the fixed
-`local-doh.status` projection while visible. Domain names never leave the root
-daemon. After the signed helper is installed, authenticated XPC prepares the
-fixed root TLS endpoint and `.mobileconfig`; the App opens that profile and the
-exact Device Management pane for mandatory macOS review. Only full helper
-uninstall removes the LocalHttpDns state. The busy state disables repeat clicks
-throughout the administrator and profile-generation steps.
+Config shows DNS as a read-only row: **Global DNS** while Enhanced TUN is on,
+**System DNS** while it is off, with a note that Enhanced TUN points macOS
+Global DNS at MihomoBox's loopback bridge and leaves system DNS untouched when
+off. There is no DNS mode selector, certificate-trust action, profile
+readiness, Device Management or Keychain Access link, and no split-DNS
+planner; those belonged to the retired Local DoH feature.
 
 There is no loopback HTTP server, browser token, WebView, or `mihomoboxctl`
 child process in the desktop data path. The daemon still validates every
@@ -341,7 +336,8 @@ root-owned; Desktop and CLI receive typed state/results rather than the secret.
 - Startup: hidden.
 - Login startup: after the one-time default above has been applied, macOS starts
   the current-user App hidden. The root LaunchDaemon separately restores the
-  always-on LocalHttpDns service and the persisted standby/Enhanced state.
+  persisted standby/Enhanced state, including Global DNS when Enhanced TUN is
+  on.
 - `Show Main Window`: create or reuse the single SwiftUI `NSWindow`, unminimize,
   show, and focus it. The store immediately loads an authenticated XPC snapshot
   and starts four independent bounded streams. If the daemon/controller is
@@ -371,8 +367,8 @@ profile transaction, including runtime health verification and rollback.
   Config dashboard displays actual controller ports and uses the mixed listener
   as both protocol endpoints. Missing/disabled ports display **Off**.
 - **TUN stack** supports `mixed`, `system`, and `gvisor`. Mixed uses system TCP
-  and gVisor UDP. Editing the stack does not enable Enhanced TUN or change its
-  Local DoH approval prerequisites.
+  and gVisor UDP. Editing the stack does not enable Enhanced TUN or change DNS
+  ownership.
 - **Per-app VPN routing** is process-based routing inside Mihomo's TUN, not
   Apple's MDM Per-App VPN. Choose application bundles and either proxy only the
   selected apps or bypass them. Bundle-prefix matching includes nested helpers;
@@ -430,7 +426,9 @@ runtime overlay adds loopback mixed listeners on ports 17971–18002, each
 with a private rule list derived from the profile. Rule mode retains direct,
 reject and pass actions and replaces proxy targets with the app's saved target.
 Global and Direct follow the shared core mode. TCP and UDP connections use the
-application's listener; captured DNS uses the shared Mihomo resolver on TCP 1153.
+application's listener; captured DNS is sent to the root daemon over XPC
+(`dns.resolve`), which answers from the shared Mihomo resolver at
+`127.0.0.1:1153`.
 Switching a node restarts the
 managed runtime and can interrupt existing connections. Settings also apply to
 subsequent profiles; missing targets cause activation to roll back. Custom

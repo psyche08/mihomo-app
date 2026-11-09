@@ -60,7 +60,6 @@ final class TrayStateCoordinator: TrayService {
   private let appProxyControl: AppProxyCoordinator
   private let profiles: ProfileCoordinator
   private let installer: InstallerCoordinator
-  private let localDoH: LocalDoHCoordinator
   private let login: LoginAutostartController
   private let updates: SparkleUpdateController
   private let mutationGate: AppMutationGate
@@ -91,7 +90,6 @@ final class TrayStateCoordinator: TrayService {
     self.appProxyControl = appProxyControl ?? AppProxyCoordinator(maintenance: false)
     self.profiles = profiles
     self.installer = installer
-    self.localDoH = LocalDoHCoordinator(control: control)
     self.login = login
     self.updates = updates
     self.mutationGate = mutationGate
@@ -174,8 +172,7 @@ final class TrayStateCoordinator: TrayService {
           !self.currentSnapshot.daemonCompatibility.blocksControlActions,
           self.currentSnapshot.activeProfile != nil {
           self.didAttemptEnhancedStartup = true
-          let startup = try await self.control.localDoHStatus()
-          let restoreTUN = startup.resumeEnhancedTUN.map { $0 != self.currentSnapshot.enhancedTUN } ?? false
+          let restoreTUN = self.currentSnapshot.enhancedTUNRequested.map { $0 != self.currentSnapshot.enhancedTUN } ?? false
           let restoreSystemProxy = self.currentSnapshot.systemProxyRequested.map { $0 != self.currentSnapshot.systemProxyEnabled } ?? false
           if !self.currentSnapshot.agentRunning || restoreTUN || restoreSystemProxy {
             do {
@@ -333,8 +330,7 @@ final class TrayStateCoordinator: TrayService {
         let ready = try await waitForControllerReadiness()
         apply(ready, retainDelays: false)
       }
-      // The daemon chooses verified Global DNS when Local DoH is not ready.
-      // TUN enable must never initiate a profile or certificate authorization.
+      // Enhanced TUN always pairs with daemon-owned macOS Global DNS.
       apply(try await control.enableEnhancedTUN(), retainDelays: false)
       await applyLoginDefaultIfNeeded()
       clearError()
@@ -787,7 +783,7 @@ final class TrayStateCoordinator: TrayService {
     let alert = NSAlert()
     alert.messageText = "Upgrade the MihomoBox daemon?"
     alert.informativeText =
-      "The signed installer will briefly restart Mihomo and Enhanced TUN; LocalHttpDns stays independent."
+      "The signed installer will briefly restart Mihomo and Enhanced TUN."
     alert.alertStyle = .warning
     alert.addButton(withTitle: "Upgrade Daemon")
     alert.addButton(withTitle: "Cancel")
@@ -865,25 +861,21 @@ private final class LiveAppShellCoordinator: AppShellCoordinating {
   let trayService: any TrayService
   private let components: ComponentSynchronizer
   private let updates: SparkleUpdateController
-  private let localDoH: LocalDoHCoordinator
 
   init(
     trayService: any TrayService,
     components: ComponentSynchronizer,
-    updates: SparkleUpdateController,
-    localDoH: LocalDoHCoordinator
+    updates: SparkleUpdateController
   ) {
     self.trayService = trayService
     self.components = components
     self.updates = updates
-    self.localDoH = localDoH
   }
 
   func startBackgroundServices() {
     Task { await components.start() }
     updates.start()
     DashboardStore.shared.configureUpdatePreference(updates)
-    DashboardStore.shared.configureLocalDoHService(localDoH)
   }
 
   func stopBackgroundServices() {
@@ -897,9 +889,7 @@ enum AppComposition {
   static func live() -> any AppShellCoordinating {
     let control = TrayControlClient()
     let updates = SparkleUpdateController()
-    let localDoH = LocalDoHCoordinator()
     DashboardStore.shared.configureUpdatePreference(updates)
-    DashboardStore.shared.configureLocalDoHService(localDoH)
     let appProxy = AppProxyCoordinator()
     DashboardStore.shared.appProxy.configure(appProxy)
     let mutationGate = AppMutationGate()
@@ -915,8 +905,7 @@ enum AppComposition {
     return LiveAppShellCoordinator(
       trayService: tray,
       components: ComponentSynchronizer(control: control, mutationGate: mutationGate),
-      updates: updates,
-      localDoH: localDoH
+      updates: updates
     )
   }
 }

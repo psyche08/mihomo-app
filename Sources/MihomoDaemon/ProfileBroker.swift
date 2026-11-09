@@ -134,27 +134,25 @@ final class ProfileBroker: @unchecked Sendable {
         return AppProxyRoutingState(settings: settings, profile: name, revision: revision)
     }
 
-    /// Upgrades legacy helper state before the first managed process starts.
-    /// The migration always lands in controller/DNS standby: LocalHttpDns is
-    /// configured, macOS DNS preferences are left alone, and TUN is disabled
-    /// until the certificate/profile prerequisite is approved.
-    func ensureLocalHttpDNSBaseConfiguration(allowEnhancedTUN: Bool) throws {
+    /// Upgrades runtime files written while LocalHttpDns existed, before the
+    /// first managed process starts. daemon.json loses the removed key and
+    /// takes the DNS owner implied by its TUN state (Global DNS + TUN, or
+    /// standby); the rendered core profile loses the DoH/unix-socket side
+    /// doors. Already-current files are left untouched.
+    func migrateLegacyDNSConfiguration() throws {
         try queue.sync {
             let configurationPath = root.appendingPathComponent("daemon.json")
-            let current = try ProxyConfiguration.load(path: configurationPath.path)
-            let stored = try JSONDecoder().decode(
-                ProxyConfiguration.self, from: Data(contentsOf: configurationPath)
+            let runtimeProfile = root.appendingPathComponent("mihomo-data/config.yaml")
+            let configurationChanged = try DNSOwnershipStore.requiresRewrite(
+                configurationPath: configurationPath.path
             )
-            if stored.localDoH == LocalDoHConfiguration(),
-               !current.manageSystemDNS,
-               current.enhancedTUNEnabled != nil,
-               (!current.expectsEnhancedTUN || allowEnhancedTUN),
-               MihomoConfigurator.hasLocalDoHIPC(configPath: root.appendingPathComponent("mihomo-data/config.yaml").path) {
-                return
-            }
+            let profileChanged = MihomoConfigurator.hasLegacyControllerSurface(
+                configPath: runtimeProfile.path
+            )
+            guard configurationChanged || profileChanged else { return }
 
             let transaction = root.appendingPathComponent(
-                ".local-http-dns-migration-\(UUID().uuidString)",
+                ".legacy-dns-migration-\(UUID().uuidString)",
                 isDirectory: true
             )
             try FileManager.default.createDirectory(
@@ -185,9 +183,7 @@ final class ProfileBroker: @unchecked Sendable {
             }
 
             do {
-                try LocalDoHConfigurationStore.ensureBaseService(
-                    configurationPath: configurationPath.path
-                )
+                try DNSOwnershipStore.rewriteNormalized(configurationPath: configurationPath.path)
                 let activeMarker = root.appendingPathComponent("active-profile")
                 if FileManager.default.fileExists(atPath: activeMarker.path) {
                     let active = try activeProfileName()
@@ -201,84 +197,11 @@ final class ProfileBroker: @unchecked Sendable {
                         )
                     }
                     try validateMihomo(path: configured)
-                    try replace(
-                        configured,
-                        root.appendingPathComponent("mihomo-data/config.yaml"),
-                        permissions: 0o600
-                    )
+                    try replace(configured, runtimeProfile, permissions: 0o600)
                 }
-            } catch {
-                try restoreProtected(
-                    protected,
-                    transaction: transaction,
-                    backupDigests: backupDigests
-                )
-                throw profileError(
-                    "LocalHttpDns base migration failed; the previous configuration was restored"
-                )
-            }
-        }
-    }
-
-    /// Replaces the LocalHttpDns ownership model with the compatibility path
-    /// while the agent is stopped. The raw user profile remains untouched;
-    /// only root-owned runtime files participate in the rollback transaction.
-    func configureGlobalDNSFallback() throws {
-        try queue.sync {
-            guard !agent.isRunning else {
-                throw profileError("Mihomo agent must be stopped before DNS fallback")
-            }
-            let active = try activeProfileName()
-            let source = root.appendingPathComponent("profiles").appendingPathComponent(active)
-            let data = try readStoredProfile(source)
-            try validate(name: active, data: data)
-
-            let transaction = root.appendingPathComponent(
-                ".global-dns-fallback-\(UUID().uuidString)",
-                isDirectory: true
-            )
-            try FileManager.default.createDirectory(
-                at: transaction,
-                withIntermediateDirectories: false,
-                attributes: [.posixPermissions: 0o700]
-            )
-            defer { try? FileManager.default.removeItem(at: transaction) }
-
-            let protected = [
-                "daemon.json", "controller.json", "controller-secret",
-                "mihomo-data/config.yaml",
-            ]
-            var backupDigests: [String: String] = [:]
-            for relative in protected {
-                let current = root.appendingPathComponent(relative)
-                guard FileManager.default.fileExists(atPath: current.path) else { continue }
-                let backup = transaction.appendingPathComponent("backup")
-                    .appendingPathComponent(relative)
-                try FileManager.default.createDirectory(
-                    at: backup.deletingLastPathComponent(),
-                    withIntermediateDirectories: true
-                )
-                try FileManager.default.copyItem(at: current, to: backup)
-                backupDigests[relative] = ComponentUpdatePackage.digest(
-                    try Data(contentsOf: backup, options: [.mappedIfSafe])
-                )
-            }
-
-            do {
-                try LocalDoHConfigurationStore.useGlobalDNSFallback(
-                    configurationPath: root.appendingPathComponent("daemon.json").path
-                )
-                let configured = try preparedProfile(data: data, publishController: true)
-                defer {
-                    try? FileManager.default.removeItem(
-                        at: configured.deletingLastPathComponent()
-                    )
-                }
-                try validateMihomo(path: configured)
-                try replace(
-                    configured,
-                    root.appendingPathComponent("mihomo-data/config.yaml"),
-                    permissions: 0o600
+                ServiceLog.info(
+                    "event=legacy_dns_migration result=success " +
+                    "configuration=\(configurationChanged) profile=\(profileChanged)"
                 )
             } catch {
                 try restoreProtected(
@@ -287,7 +210,7 @@ final class ProfileBroker: @unchecked Sendable {
                     backupDigests: backupDigests
                 )
                 throw profileError(
-                    "Global DNS fallback failed; the previous configuration was restored"
+                    "the legacy DNS configuration migration failed; the previous configuration was restored"
                 )
             }
         }
@@ -296,11 +219,11 @@ final class ProfileBroker: @unchecked Sendable {
     /// Persists the desired TUN state and regenerates the managed profile as
     /// one root-only transaction. A running core applies the configuration in
     /// place; only an unprovable failure uses stop/restore recovery.
-    func setEnhancedTUN(_ enabled: Bool, globalDNS: Bool = false) throws {
+    func setEnhancedTUN(_ enabled: Bool) throws {
         try queue.sync {
             let clock = MonotonicStartupClock()
             if agent.isRunning, agent.expectsEnhancedTUN == enabled,
-               agent.globalDNSFallbackConfigured == globalDNS,
+               agent.globalDNSFallbackConfigured == enabled,
                let health = try agent.expectedHealthSnapshot()?.health,
                health.tunEnabled == enabled, health.networkConsistent {
                 try validateStartedRuntime()
@@ -344,17 +267,11 @@ final class ProfileBroker: @unchecked Sendable {
 
             var runtimeTransitionRequested = false
             do {
-                if globalDNS {
-                    guard enabled else { throw profileError("Global DNS requires Enhanced TUN") }
-                    try LocalDoHConfigurationStore.useGlobalDNSFallback(
-                        configurationPath: root.appendingPathComponent("daemon.json").path
-                    )
-                } else {
-                    try LocalDoHConfigurationStore.setEnhancedTUN(
-                        enabled,
-                        configurationPath: root.appendingPathComponent("daemon.json").path
-                    )
-                }
+                // Enabled means Global DNS + TUN; disabled means standby.
+                try DNSOwnershipStore.setEnhancedTUN(
+                    enabled,
+                    configurationPath: root.appendingPathComponent("daemon.json").path
+                )
                 let runtimeProfile = root.appendingPathComponent("mihomo-data/config.yaml")
                 if agent.isRunning {
                     guard let sourceProfile = String(data: data, encoding: .utf8),
@@ -412,8 +329,8 @@ final class ProfileBroker: @unchecked Sendable {
     }
 
     /// Reloading an already-active profile does not mutate its files. Keep the
-    /// daemon-owned LocalHttpDns listener alive and replace only the agent-owned
-    /// Mihomo child. Profile import/switch still uses the full atomic activation
+    /// agent's DNS listeners alive and replace only the agent-owned Mihomo
+    /// child. Profile import/switch still uses the full atomic activation
     /// transaction because those operations change files and credentials.
     private func renderingChanged(data: Data) throws -> Bool {
         let configured = try preparedProfile(data: data, publishController: true)

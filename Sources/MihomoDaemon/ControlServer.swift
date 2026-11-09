@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import MihomoControl
+import Security
 import MihomoDNSCore
 import XPC
 
@@ -13,13 +14,12 @@ final class ControlDispatcher: @unchecked Sendable {
     private let systemProxy: SystemProxyController
     private let configurationPath: String
     private let profiles: ProfileBroker
-    private let localDoH: LocalDoHManager
-    private let localDoHServer: IndependentLocalDoHServer
     private let components: ComponentUpdater
     private let startupClock: MonotonicStartupClock
     private let mutationLock = NSLock()
-    private var localDoHReadinessTimer: DispatchSourceTimer?
-    private var localDoHReadinessRecovery = LocalDoHReadinessRecovery()
+    private let legacyLocalDoH = LegacyLocalDoHCleanup()
+    private let dnsResolver: AppProxyDNSResolver
+    private var systemProxyTimer: DispatchSourceTimer?
 
     init(
         agent: AgentSupervisor,
@@ -38,41 +38,37 @@ final class ControlDispatcher: @unchecked Sendable {
             try Self.validateStartedRuntime(agent: agent, controller: controllerBroker,
                                             timeout: Self.updatedComponentsStartTimeout)
         }
-        let localDoHServer = IndependentLocalDoHServer(
-            configurationPath: configPath
-        )
         controller = controllerBroker
-        self.localDoHServer = localDoHServer
         profiles = ProfileBroker(
             agent: agent,
             validateStartedRuntime: validateStartedRuntime
-        )
-        localDoH = LocalDoHManager(
-            agent: agent,
-            controller: controllerBroker,
-            server: localDoHServer
         )
         components = try ComponentUpdater(
             agent: agent,
             validateStartedRuntime: validateUpdatedRuntime
         )
-        localDoHServer.setFailureHandler { [weak self] in
-            // The callback originates on the listener queue. Enter lifecycle
-            // serialization elsewhere so stopping the server cannot deadlock.
-            DispatchQueue.global().async { [weak self] in
-                self?.handleLocalDoHFailure()
-            }
-        }
+        dnsResolver = AppProxyDNSResolver(
+            endpoint: AppProxyDNSResolver.coreEndpoint(configurationPath: configPath)
+        )
         let timer = DispatchSource.makeTimerSource(
-            queue: DispatchQueue(label: "dev.linsheng.mihomo.local-doh-readiness")
+            queue: DispatchQueue(label: "dev.linsheng.mihomo.system-proxy-reconcile")
         )
         timer.schedule(deadline: .now() + 15, repeating: 15, leeway: .seconds(1))
-        timer.setEventHandler { [weak self] in self?.checkLocalDoHReadiness() }
-        localDoHReadinessTimer = timer
+        timer.setEventHandler { [weak self] in self?.reconcileSystemProxy() }
+        systemProxyTimer = timer
         timer.resume()
     }
 
-    deinit { localDoHReadinessTimer?.cancel() }
+    deinit { systemProxyTimer?.cancel() }
+
+    /// App Proxy DNS for policy-matched applications. Runs outside the
+    /// lifecycle lock; the resolver bounds outstanding work.
+    func resolveAppProxyDNS(
+        _ query: Data,
+        completion: @escaping @Sendable (Result<Data, AppProxyDNSResolver.Failure>) -> Void
+    ) {
+        dnsResolver.resolve(query, completion: completion)
+    }
 
     /// Boot keeps the Mach service available even when the managed runtime
     /// cannot prove a safe route. This lets the signed App repair a profile or
@@ -80,9 +76,6 @@ final class ControlDispatcher: @unchecked Sendable {
     func startInitialRuntime() {
         mutationLock.lock()
         defer { mutationLock.unlock() }
-        // Prepared Local DoH is a daemon base service, even if the agent's
-        // recovery/startup subsequently fails or remains intentionally stopped.
-        localDoHServer.startSupervising()
         if components.recoveryRequired {
             try? systemProxy.setEnabled(false)
             let restored = agent.stopAndRestoreVerified()
@@ -101,51 +94,20 @@ final class ControlDispatcher: @unchecked Sendable {
             scheduleDaemonRestart()
             return
         }
-        let resumeEnhancedTUN = agent.resumesEnhancedTUN
-        let preserveFallback = agent.globalDNSFallbackConfigured && resumeEnhancedTUN
-        // Restore using the OLD DNS owner before changing daemon.json, or a
-        // persisted 198.18.0.1 backup would be compared against 127.0.0.53.
+        // Restore with the persisted DNS owner before daemon.json is migrated.
         guard agent.stopAndRestoreVerified() else {
             ServiceLog.error("event=initial_runtime result=dns_restore_unconfirmed")
             logInitialRuntimeStartup(result: "dns_restore_unconfirmed")
             return
         }
-        let installedProfile = LocalDoHStatusProvider.inspectInstalledProfile()
-        let enhancedPrerequisitePrepared = installedProfile.succeeded
-            && installedProfile.inspection.installed
-            && installedProfile.inspection.domainCount > 0
-            && agent.localDoHIdentityPrepared
-            && LocalDoHStatusProvider.certificateTrusted()
+        // The retired LocalHttpDns split-DNS profile would keep sending its
+        // domains to a listener that no longer exists, in either TUN state.
+        legacyLocalDoH.run()
         do {
-            if !preserveFallback {
-                try profiles.ensureLocalHttpDNSBaseConfiguration(
-                    allowEnhancedTUN: resumeEnhancedTUN && enhancedPrerequisitePrepared
-                )
-            }
+            try profiles.migrateLegacyDNSConfiguration()
         } catch {
-            let restored = agent.stopAndRestoreVerified()
-            ServiceLog.error(
-                "event=initial_runtime result=" +
-                (restored ? "local_http_dns_migration_failed" : "restore_unconfirmed")
-            )
-            logInitialRuntimeStartup(
-                result: restored ? "local_http_dns_migration_failed" : "restore_unconfirmed"
-            )
-            return
-        }
-        let localStarted = localDoHServer.startSupervising()
-        if localStarted {
-            ServiceLog.info("event=initial_local_doh result=ready")
-        }
-        do {
-            if !preserveFallback {
-                try profiles.ensureLocalHttpDNSBaseConfiguration(
-                    allowEnhancedTUN: resumeEnhancedTUN && enhancedPrerequisitePrepared && localStarted
-                )
-            }
-        } catch {
-            ServiceLog.error("event=initial_runtime result=local_http_dns_start_failed")
-            logInitialRuntimeStartup(result: "local_http_dns_start_failed")
+            ServiceLog.error("event=initial_runtime result=dns_configuration_migration_failed")
+            logInitialRuntimeStartup(result: "dns_configuration_migration_failed")
             return
         }
         if profiles.activationRequired {
@@ -167,16 +129,11 @@ final class ControlDispatcher: @unchecked Sendable {
             return
         }
         do {
-            if resumeEnhancedTUN && !preserveFallback && !localStarted
-                && (agent.localDoHIdentityPrepared || installedProfile.present == true) {
-                try activateGlobalDNSFallbackLocked()
-            } else {
-                try agent.start()
-                try ensureStartedRuntimeLocked(timeout: components.hasPendingBootValidation
-                    ? Self.updatedComponentsStartTimeout : 20)
-                if preserveFallback { finishGlobalDNSFallbackLocked() }
-            }
-            if resumeEnhancedTUN { try resumeEnhancedRuntimeLocked() }
+            try ensureRuntimePrerequisiteLocked()
+            try agent.start()
+            try ensureStartedRuntimeLocked(timeout: components.hasPendingBootValidation
+                ? Self.updatedComponentsStartTimeout : 20)
+            try resumeEnhancedRuntimeLocked()
             try components.commitPendingBootValidation()
             do { try refreshSystemProxy(restoreSavedChoice: true) } catch { ServiceLog.error("event=system_proxy_restore result=failed") }
             ServiceLog.info("event=initial_runtime result=ready")
@@ -282,6 +239,7 @@ final class ControlDispatcher: @unchecked Sendable {
                 )) as? [String: Any] ?? [:]
                 status["agent_running"] = agent.isRunning
                 status["global_dns_fallback"] = agent.globalDNSFallbackConfigured
+                status["legacy_local_doh_profile_removed"] = legacyLocalDoH.profileRemoved
                 payload = try JSONSerialization.data(withJSONObject: status, options: [.sortedKeys])
             case .trayState:
                 let agentRunning = agent.isRunning
@@ -310,8 +268,7 @@ final class ControlDispatcher: @unchecked Sendable {
                 try ensureRuntimePrerequisiteLocked()
                 try agent.start()
                 try ensureStartedRuntimeLocked()
-                if agent.resumesEnhancedTUN { try resumeEnhancedRuntimeLocked() }
-                else if agent.expectsEnhancedTUN { try profiles.setEnhancedTUN(false) }
+                try resumeEnhancedRuntimeLocked()
                 payload = nil
             case .setSystemProxy:
                 guard request.arguments.count == 1, request.payload == nil,
@@ -344,106 +301,6 @@ final class ControlDispatcher: @unchecked Sendable {
                 payload = nil
             case .componentStatus:
                 payload = try components.status()
-            case .localDoHStatus:
-                let health = (try? agent.passiveHealth()).flatMap {
-                    try? JSONDecoder().decode(NetworkConsistencyHealth.self, from: $0)
-                }
-                let profile = LocalDoHStatusProvider.inspectInstalledProfile()
-                let preparedProfile = LocalDoHStatusProvider.inspectPreparedProfile()
-                let prepared = agent.localDoHIdentityPrepared
-                let trusted = prepared && LocalDoHStatusProvider.certificateTrusted()
-                let status = LocalDoHStatus(
-                    serverPrepared: prepared,
-                    profileInstalled: profile.inspection.installed,
-                    profileInspectionSucceeded: profile.succeeded,
-                    runtimeHealthy: prepared && localDoHServer.isRunning && trusted
-                        && (agent.localDoHBackendReady || localDoHServer.originalDNSAvailable),
-                    systemDNSManaged: health?.systemDNSManaged,
-                    installedDomainCount: profile.inspection.domainCount,
-                    preparedDomainCount: preparedProfile.domainCount,
-                    globalDNSFallback: agent.globalDNSFallbackConfigured,
-                    fallbackProfileRemovalRequired: agent.globalDNSFallbackConfigured
-                        && profile.present != false,
-                    certificateTrusted: trusted,
-                    resumeEnhancedTUN: agent.resumesEnhancedTUN
-                )
-                payload = try JSONEncoder().encode(status)
-            case .installLocalDoH:
-                guard !profiles.activationRequired else {
-                    throw serverError("activate a profile before preparing LocalHttpDns")
-                }
-                do {
-                    localDoHReadinessRecovery = LocalDoHReadinessRecovery()
-                    if agent.globalDNSFallbackConfigured {
-                        if !agent.isRunning {
-                            try agent.start()
-                            try ensureStartedRuntimeLocked()
-                        }
-                        // setEnhancedTUN is a root-file transaction which
-                        // restores the old Global DNS owner before switching.
-                        try profiles.setEnhancedTUN(false)
-                    }
-                    payload = try JSONEncoder().encode(localDoH.install())
-                } catch {
-                    try activateGlobalDNSFallbackLocked()
-                    throw serverError(
-                        "LocalHttpDns preparation failed; Global DNS fallback was configured. " +
-                        "Check LocalHttpDns status for any required profile removal."
-                    )
-                }
-            case .trustLocalDoHCertificate:
-                throw serverError("SSL trust requires the current MihomoBox App's interactive Trust Certificate action")
-            case .prepareLocalDoHCertificateTrust:
-                guard request.arguments.isEmpty, request.payload == nil else {
-                    throw serverError("certificate trust accepts no arguments or certificate bytes")
-                }
-                payload = try localDoH.prepareCertificateTrust()
-                localDoHReadinessRecovery = LocalDoHReadinessRecovery()
-            case .setDNSMode:
-                guard request.payload == nil, request.arguments.count == 1,
-                      let raw = request.arguments["mode"],
-                      let mode = DNSIntegrationMode(rawValue: raw),
-                      !profiles.activationRequired else {
-                    throw serverError("a valid DNS integration mode and an activated profile are required")
-                }
-                switch mode {
-                case .globalDNS:
-                    try activateGlobalDNSFallbackLocked()
-                    let profile = LocalDoHStatusProvider.inspectInstalledProfile()
-                    guard profile.succeeded, profile.present == false else {
-                        throw serverError(
-                            "Global DNS is configured, but the Local DoH profile still overrides it. " +
-                            "Remove only the MihomoBox DNS profile in Device Management."
-                        )
-                    }
-                case .localDoH:
-                    let profile = LocalDoHStatusProvider.inspectInstalledProfile()
-                    guard profile.succeeded, profile.inspection.installed,
-                          agent.localDoHIdentityPrepared,
-                          LocalDoHStatusProvider.certificateTrusted() else {
-                        throw serverError(
-                            "prepare and trust the Local DoH certificate, then install its current profile before selecting Local DoH"
-                        )
-                    }
-                    do {
-                        if agent.globalDNSFallbackConfigured {
-                            if !agent.isRunning { try agent.start() }
-                            try profiles.setEnhancedTUN(agent.expectsEnhancedTUN)
-                        }
-                        guard localDoHServer.startSupervising() else {
-                            throw serverError("the Local DoH HTTPS listener is unavailable")
-                        }
-                        guard agent.localDoHBackendReady || localDoHServer.originalDNSAvailable else {
-                            throw serverError("the Local DoH DNS backend is unavailable")
-                        }
-                        localDoHReadinessRecovery = LocalDoHReadinessRecovery()
-                    } catch {
-                        try activateGlobalDNSFallbackLocked()
-                        throw serverError("Local DoH activation failed; Global DNS fallback was configured")
-                    }
-                }
-                DNSCacheMaintenance.flushSystemCaches()
-                payload = nil
             case .upgradeComponents:
                 guard let package = request.payload else {
                     throw serverError("component update package is required")
@@ -502,35 +359,12 @@ final class ControlDispatcher: @unchecked Sendable {
                 guard agent.isRunning else {
                     throw serverError("Mihomo agent is not running")
                 }
-                if agent.globalDNSFallbackConfigured {
-                    if enabled {
-                        try ensureStartedRuntimeLocked()
-                        finishGlobalDNSFallbackLocked()
-                        try verifyGlobalDNSProfileRemovalLocked()
-                    } else {
-                        // Restore the old Global DNS owner before entering
-                        // standby. App Proxy still needs the daemon-owned core
-                        // and shared DNS listener after the TUN route is gone.
-                        try profiles.setEnhancedTUN(false)
-                    }
-                    payload = nil
-                    break
+                if enabled, !legacyLocalDoH.profileRemoved {
+                    // Boot could not prove the retired split-DNS profile gone.
+                    legacyLocalDoH.run()
                 }
-                if enabled {
-                    let profile = LocalDoHStatusProvider.inspectInstalledProfile()
-                    if !EnhancedDNSSelection.useLocalDoH(
-                        profileVerified: profile.succeeded && profile.inspection.installed
-                            && profile.inspection.domainCount > 0,
-                        identityPrepared: agent.localDoHIdentityPrepared,
-                        certificateTrusted: LocalDoHStatusProvider.certificateTrusted(),
-                        listenerRunning: localDoHServer.isRunning
-                    ) {
-                        try activateGlobalDNSFallbackLocked()
-                        try verifyGlobalDNSProfileRemovalLocked()
-                        payload = nil
-                        break
-                    }
-                }
+                // Enabled is Global DNS + TUN; disabled is standby, where App
+                // Proxy keeps the daemon-owned core and its DNS listener.
                 try profiles.setEnhancedTUN(enabled)
                 payload = nil
             case .snapshot, .setOutboundMode, .selectProxy,
@@ -542,6 +376,10 @@ final class ControlDispatcher: @unchecked Sendable {
                     throw serverError("Mihomo agent is not running")
                 }
                 payload = try controller.perform(request, owner: owner)
+            case .resolveDNS:
+                // Served asynchronously by ControlServer for the App Proxy
+                // extension only; it never enters the lifecycle dispatcher.
+                throw serverError("DNS resolution is not a lifecycle operation")
             }
             if [.importProfile, .switchProfile, .reloadProfile, .controllerRequest, .restartAgent, .startAgent].contains(request.operation) {
                 do { try refreshSystemProxy(restoreSavedChoice: request.operation == .startAgent) } catch { ServiceLog.error("event=system_proxy_reconcile result=failed") }
@@ -586,7 +424,7 @@ final class ControlDispatcher: @unchecked Sendable {
 
     func stopIndependentServices() {
         do { try systemProxy.setEnabled(false) } catch { ServiceLog.error("event=system_proxy_restore result=failed") }
-        localDoHServer.shutdown()
+        dnsResolver.shutdown()
     }
 
     private static func isMutating(_ operation: ControlOperation) -> Bool {
@@ -594,8 +432,7 @@ final class ControlDispatcher: @unchecked Sendable {
         case .startAgent, .stopAgent, .restartAgent, .upgradeComponents, .setSystemProxy,
              .importProfile, .switchProfile, .reloadProfile, .setTUN,
              .setOutboundMode, .selectProxy, .refreshProxyProvider,
-             .closeAllConnections, .installLocalDoH, .trustLocalDoHCertificate,
-             .prepareLocalDoHCertificateTrust, .setDNSMode, .setAppProxyRouting, .setAppProxyProcesses:
+             .closeAllConnections, .setAppProxyRouting, .setAppProxyProcesses:
             return true
         case .controllerRequest:
             // ControllerRequestPolicy is still the authority for the exact
@@ -603,7 +440,7 @@ final class ControlDispatcher: @unchecked Sendable {
             // because this operation represents both safe reads and bounded
             // mutations, and the typed envelope does not carry the method here.
             return true
-        case .ping, .status, .trayState, .snapshot, .componentStatus, .localDoHStatus, .appProxyStatus,
+        case .ping, .status, .trayState, .snapshot, .componentStatus, .appProxyStatus, .resolveDNS,
              .controllerVersion, .listRules, .listProxyProviders,
              .listRuleProviders, .listConnections, .controllerStreamMessage,
              .controllerStreamOpen, .controllerStreamNext, .controllerStreamClose,
@@ -624,45 +461,18 @@ final class ControlDispatcher: @unchecked Sendable {
         }
     }
 
+    /// Re-applies a remembered TUN choice whose transition did not finish
+    /// (for example after a failed switch or a reboot during one).
     private func resumeEnhancedRuntimeLocked() throws {
-        guard !agent.expectsEnhancedTUN else { return }
-        let profile = LocalDoHStatusProvider.inspectInstalledProfile()
-        if profile.inspection.installed && LocalDoHStatusProvider.certificateTrusted()
-            && localDoHServer.isRunning {
-            try profiles.setEnhancedTUN(true)
-        } else {
-            // Remembering Enhanced mode must not depend on a fresh profile
-            // approval at every boot. The existing verified fallback is safe.
-            try activateGlobalDNSFallbackLocked()
-        }
+        guard agent.resumesEnhancedTUN, !agent.expectsEnhancedTUN else { return }
+        try profiles.setEnhancedTUN(true)
     }
 
+    /// Completes an unfinished switch-off before the core starts, so it never
+    /// comes up owning Global DNS and a TUN route the user turned off.
     private func ensureRuntimePrerequisiteLocked() throws {
-        guard agent.resumesEnhancedTUN else {
-            if agent.expectsEnhancedTUN { try profiles.setEnhancedTUN(false) }
-            return
-        }
-        if agent.globalDNSFallbackConfigured { return }
-        guard agent.localHttpDNSBaseConfigured else {
-            throw serverError("repair the LocalHttpDns base service before starting Mihomo")
-        }
-        if agent.resumesEnhancedTUN, agent.localDoHIdentityPrepared, !localDoHServer.isRunning,
-           (try? localDoHServer.startIfPrepared()) != true {
-            try activateGlobalDNSFallbackLocked()
-            return
-        }
-        guard agent.expectsEnhancedTUN else { return }
-        let profile = LocalDoHStatusProvider.inspectInstalledProfile()
-        guard profile.succeeded,
-              profile.inspection.installed,
-              profile.inspection.domainCount > 0,
-              agent.localDoHIdentityPrepared,
-              LocalDoHStatusProvider.certificateTrusted(),
-              localDoHServer.isRunning else {
-            try activateGlobalDNSFallbackLocked()
-            try verifyGlobalDNSProfileRemovalLocked()
-            return
-        }
+        guard !agent.resumesEnhancedTUN, agent.expectsEnhancedTUN else { return }
+        try profiles.setEnhancedTUN(false)
     }
 
     private func refreshSystemProxy(restoreSavedChoice: Bool = false) throws {
@@ -681,96 +491,15 @@ final class ControlDispatcher: @unchecked Sendable {
         }
     }
 
-    private func checkLocalDoHReadiness() {
+    private func reconcileSystemProxy() {
         mutationLock.lock()
         defer { mutationLock.unlock() }
         do { try refreshSystemProxy() } catch { ServiceLog.error("event=system_proxy_reconcile result=failed") }
-        guard agent.isRunning, agent.resumesEnhancedTUN, agent.localHttpDNSBaseConfigured,
-              !agent.globalDNSFallbackConfigured, !profiles.activationRequired,
-              !components.recoveryRequired, !components.requiresDaemonRestart,
-              !components.ownsPendingMutationFileLock else {
-            localDoHReadinessRecovery = LocalDoHReadinessRecovery()
-            return
-        }
-        let profile = LocalDoHStatusProvider.inspectInstalledProfile()
-        let trusted = LocalDoHStatusProvider.certificateTrusted()
-        let ready = profile.inspection.installed && trusted && localDoHServer.isRunning
-        guard localDoHReadinessRecovery.needsFallback(
-            profilePresent: profile.present, ready: ready,
-            now: ProcessInfo.processInfo.systemUptime
-        ) else { return }
-        do {
-            let externalLock = try ComponentMutationFileLock()
-            defer { withExtendedLifetime(externalLock) {} }
-            ServiceLog.error("event=local_doh_readiness result=" +
-                (trusted ? "profile_or_listener_invalid" : "ssl_trust_failed"))
-            try activateGlobalDNSFallbackLocked()
-            localDoHReadinessRecovery = LocalDoHReadinessRecovery()
-        } catch {
-            ServiceLog.error("event=local_doh_readiness result=fallback_failed")
-        }
     }
 
-    private func activateGlobalDNSFallbackLocked() throws {
-        // Cancel recovery before the stop/configure transaction: otherwise a
-        // timer could rebind 443 while daemon.json still says LocalHttpDns.
-        localDoHServer.shutdown()
-        do {
-            if agent.isRunning {
-                try profiles.setEnhancedTUN(true, globalDNS: true)
-                finishGlobalDNSFallbackLocked()
-                return
-            }
-            try GlobalDNSFallbackTransition.run(
-                stopAndRestore: { agent.stopAndRestoreVerified() },
-                configure: { try profiles.configureGlobalDNSFallback() },
-                startAndValidate: {
-                    try agent.start()
-                    try ensureStartedRuntimeLocked()
-                },
-                finish: { finishGlobalDNSFallbackLocked() }
-            )
-        } catch GlobalDNSFallbackTransition.Failure.restoreUnconfirmed {
-            throw ControllerBrokerCriticalError.unsafeGlobalRuntime
-        } catch {
-            throw error
-        }
-    }
-
-    private func finishGlobalDNSFallbackLocked() {
-        let removed = localDoH.removeProfileForGlobalDNSFallback()
-        DNSCacheMaintenance.flushSystemCaches()
-        ServiceLog.info(
-            "event=global_dns_fallback result=" +
-            (removed ? "ready" : "profile_removal_required")
-        )
-    }
-
-    private func verifyGlobalDNSProfileRemovalLocked() throws {
-        let profile = LocalDoHStatusProvider.inspectInstalledProfile()
-        guard profile.succeeded, profile.present == false else {
-            throw serverError("Global DNS is configured, but its use is not confirmed. Remove only the MihomoBox DNS profile in Device Management.")
-        }
-    }
-
-    private func handleLocalDoHFailure() {
-        mutationLock.lock()
-        defer { mutationLock.unlock() }
-        guard agent.isRunning, agent.resumesEnhancedTUN, agent.localHttpDNSBaseConfigured,
-              !localDoHServer.isRunning, !profiles.activationRequired,
-              !components.recoveryRequired, !components.requiresDaemonRestart,
-              !components.ownsPendingMutationFileLock else { return }
-        do {
-            let externalLock = try ComponentMutationFileLock()
-            defer { withExtendedLifetime(externalLock) {} }
-            try activateGlobalDNSFallbackLocked()
-        } catch {
-            ServiceLog.error("event=global_dns_fallback result=failed")
-        }
-    }
-
-    /// Validate standby, LocalHttpDns Enhanced mode, or the explicit Global
-    /// DNS fallback. Fallback requires both TUN and its port-53 data path.
+    /// Validate standby (no system DNS, no TUN) or Global DNS + TUN, which
+    /// requires the TUN route and the 127.0.0.53 bridge answering a standard
+    /// query (the form DNS Proxy providers such as MTTA forward).
     private static func validateStartedRuntime(
         agent: AgentSupervisor,
         controller: ControllerBroker,
@@ -796,12 +525,11 @@ final class ControlDispatcher: @unchecked Sendable {
                 }
                 if agent.globalDNSFallbackConfigured {
                     guard health.systemDNSManaged, health.dnsBridgeReady else {
-                        throw serverErrorStatic("the Global DNS fallback is not ready")
+                        throw serverErrorStatic("the Global DNS bridge is not ready")
                     }
                 } else {
-                    guard agent.usesLocalDoH, !agent.managesSystemDNS,
-                          !health.systemDNSManaged else {
-                        throw serverErrorStatic("the DNS ownership is not ready")
+                    guard !agent.managesSystemDNS, !health.systemDNSManaged else {
+                        throw serverErrorStatic("the standby runtime still owns system DNS")
                     }
                 }
                 if agent.expectsEnhancedTUN {
@@ -855,11 +583,25 @@ final class ControlServer: @unchecked Sendable {
     private let queue = DispatchQueue(label: "dev.linsheng.mihomo.daemon.xpc", attributes: .concurrent)
     private let dispatcher: ControlDispatcher
     private let requirement: String
+    private let extensionRequirement: SecRequirement
+    private let rolesLock = NSLock()
+    private var roles: [ObjectIdentifier: ControlPeerRole] = [:]
     private var listener: xpc_connection_t?
 
     init(dispatcher: ControlDispatcher) throws {
         self.dispatcher = dispatcher
         requirement = try SigningCertificateRequirement.currentProcess()
+        var compiled: SecRequirement?
+        guard SecRequirementCreateWithString(
+            AppProxyDNSPolicy.extensionRequirement(certificateFamily: requirement) as CFString,
+            [],
+            &compiled
+        ) == errSecSuccess, let compiled else {
+            throw NSError(domain: "MihomoControlServer", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "failed to compile the App Proxy extension requirement",
+            ])
+        }
+        extensionRequirement = compiled
     }
 
     func start() throws {
@@ -908,6 +650,7 @@ final class ControlServer: @unchecked Sendable {
             // stream budget until their idle expiry.
             if type == XPC_TYPE_ERROR {
                 ServiceLog.info("event=control_peer_disconnected")
+                self.forgetRole(owner)
                 self.dispatcher.controllerBroker.releaseStreams(owner: owner)
             }
         }
@@ -915,37 +658,114 @@ final class ControlServer: @unchecked Sendable {
     }
 
     private func handle(_ message: xpc_object_t, peer: xpc_connection_t) {
-        let response: ControlResponse
         var length = 0
-        if let bytes = xpc_dictionary_get_data(message, "request", &length), length > 0,
-           var request = try? JSONDecoder().decode(
-               ControlRequest.self,
-               from: Data(bytes: bytes, count: length)
-           ) {
-            var payloadLength = 0
-            if let payload = xpc_dictionary_get_data(message, "payload", &payloadLength),
-               payloadLength > 0 {
-                guard payloadLength <= mihomoControlMaximumPayloadBytes else {
-                    ServiceLog.error(
-                        "event=control_request operation=\(request.operation.rawValue) " +
-                        "result=payload_too_large"
-                    )
-                    send(
-                        ControlResponse(success: false, error: "XPC payload exceeds the size limit"),
-                        replyingTo: message,
-                        peer: peer
-                    )
-                    return
-                }
-                request.payload = Data(bytes: payload, count: payloadLength)
-            }
-            response = dispatcher.dispatch(request, owner: ObjectIdentifier(peer))
-        } else {
+        guard let bytes = xpc_dictionary_get_data(message, "request", &length), length > 0,
+              var request = try? JSONDecoder().decode(
+                  ControlRequest.self,
+                  from: Data(bytes: bytes, count: length)
+              ) else {
             ServiceLog.error("event=control_request operation=unknown result=invalid_request")
-            response = ControlResponse(success: false, error: "invalid XPC request")
+            send(ControlResponse(success: false, error: "invalid XPC request"), replyingTo: message, peer: peer)
+            return
         }
+        var payloadLength = 0
+        if let payload = xpc_dictionary_get_data(message, "payload", &payloadLength),
+           payloadLength > 0 {
+            guard payloadLength <= mihomoControlMaximumPayloadBytes else {
+                ServiceLog.error(
+                    "event=control_request operation=\(request.operation.rawValue) " +
+                    "result=payload_too_large"
+                )
+                send(
+                    ControlResponse(success: false, error: "XPC payload exceeds the size limit"),
+                    replyingTo: message,
+                    peer: peer
+                )
+                return
+            }
+            request.payload = Data(bytes: payload, count: payloadLength)
+        }
+        // Every peer passed the certificate-family requirement. The App Proxy
+        // extension is further confined to DNS answers, and DNS answers are
+        // served only to it.
+        let role = role(of: peer, message: message)
+        guard AppProxyDNSPolicy.permits(request.operation, role: role) else {
+            ServiceLog.error(
+                "event=control_request operation=\(request.operation.rawValue) " +
+                "result=peer_not_permitted role=\(role.rawValue)"
+            )
+            send(
+                ControlResponse(success: false, error: "this operation is not permitted for the caller"),
+                replyingTo: message,
+                peer: peer
+            )
+            return
+        }
+        if request.operation == .resolveDNS {
+            resolveDNS(request, replyingTo: message, peer: peer)
+            return
+        }
+        send(
+            dispatcher.dispatch(request, owner: ObjectIdentifier(peer)),
+            replyingTo: message,
+            peer: peer
+        )
+    }
 
-        send(response, replyingTo: message, peer: peer)
+    /// Replies asynchronously so one connection's queries do not wait on each
+    /// other. Individual queries and answers are never logged.
+    private func resolveDNS(
+        _ request: ControlRequest,
+        replyingTo message: xpc_object_t,
+        peer: xpc_connection_t
+    ) {
+        guard request.version == mihomoControlProtocolVersion,
+              request.arguments.isEmpty,
+              let query = request.payload else {
+            send(ControlResponse(success: false, error: "invalid DNS request"), replyingTo: message, peer: peer)
+            return
+        }
+        dispatcher.resolveAppProxyDNS(query) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let answer):
+                self.send(ControlResponse(success: true, payload: answer), replyingTo: message, peer: peer)
+            case .failure(let failure):
+                self.send(
+                    ControlResponse(success: false, error: "dns_\(failure)"),
+                    replyingTo: message,
+                    peer: peer
+                )
+            }
+        }
+    }
+
+    /// Classifies a connection once, from the audit token of its first
+    /// message. A connection cannot change its process, and the entry is
+    /// dropped when the connection is invalidated.
+    private func role(of peer: xpc_connection_t, message: xpc_object_t) -> ControlPeerRole {
+        let key = ObjectIdentifier(peer)
+        rolesLock.lock()
+        if let cached = roles[key] {
+            rolesLock.unlock()
+            return cached
+        }
+        rolesLock.unlock()
+        var code: SecCode?
+        let isExtension = SecCodeCreateWithXPCMessage(message, [], &code) == errSecSuccess
+            && code.map { SecCodeCheckValidity($0, [], extensionRequirement) == errSecSuccess } == true
+        let role: ControlPeerRole = isExtension ? .appProxyExtension : .controller
+        rolesLock.lock()
+        roles[key] = role
+        rolesLock.unlock()
+        if isExtension { ServiceLog.info("event=control_peer_classified role=\(role.rawValue)") }
+        return role
+    }
+
+    private func forgetRole(_ key: ObjectIdentifier) {
+        rolesLock.lock()
+        roles[key] = nil
+        rolesLock.unlock()
     }
 
     private func send(

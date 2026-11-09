@@ -78,7 +78,7 @@ public final class ProxyService {
             primary: mihomoForwarder,
             fallback: originalDNSForwarder,
             primaryAllowed: { [safetyState] query in
-                safetyState.isRuntimeReady() || query == DNSMessage.runtimeHealthQuery
+                safetyState.isRuntimeReady() || DNSMessage.isRuntimeHealthQuery(query)
             },
             fallbackAllowed: { [fakeIPPolicy] query in
                 fakeIPPolicy.allowsOriginalDNSFallback(for: query)
@@ -87,7 +87,9 @@ public final class ProxyService {
 
         self.systemDNSForwarder = systemDNSForwarder
         do {
-            if configuration.localDoH == nil {
+            // The port-53 bridge exists while macOS Global DNS points at it
+            // (Enhanced TUN). Standby leaves the system resolver alone.
+            if configuration.servesSystemDNSBridge {
                 bridgeChannels.append(try startUDP(endpoint: configuration.systemDNSListen, forwarder: systemDNSForwarder))
                 bridgeChannels.append(try startTCP(endpoint: configuration.systemDNSListen, forwarder: systemDNSForwarder))
             }
@@ -128,7 +130,10 @@ public final class ProxyService {
     }
 
     private func startConsistencyObservation() {
-        if configuration.manageSystemDNS || configuration.localDoH != nil {
+        // Standby publishes health too: the daemon validates every runtime
+        // from these snapshots, including one that leaves system DNS alone.
+        // A plain forwarder has no runtime for the daemon to validate.
+        if !configuration.isPlainForwarder {
             let controller = NetworkConsistencyController(
                 configuration: configuration,
                 globalDNS: globalDNS,
@@ -147,9 +152,9 @@ public final class ProxyService {
             consistencyController = controller
             controller.start()
 
-            // Resolver and route changes also matter in local-DoH mode: the
+            // Resolver and route changes also matter in standby: the
             // original-DNS escape still follows the physical network even
-            // though MihomoBox no longer writes the system resolver itself.
+            // though MihomoBox does not write the system resolver itself.
             networkState.setRefreshHandler { [weak controller] signal in
                 controller?.handleNetworkChange(reason: signal)
             }
@@ -208,7 +213,7 @@ public final class ProxyService {
             includeLegacyTUNDNS: next.usesGlobalDNSFallback
         )
         if next.manageSystemDNS { try aliasManager.ensure() }
-        if next.localDoH == nil {
+        if next.servesSystemDNSBridge {
             bridgeChannels.append(try startUDP(endpoint: next.systemDNSListen, forwarder: systemDNSForwarder))
             bridgeChannels.append(try startTCP(endpoint: next.systemDNSListen, forwarder: systemDNSForwarder))
         }

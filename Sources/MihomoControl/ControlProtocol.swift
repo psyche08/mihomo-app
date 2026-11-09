@@ -4,14 +4,16 @@ import Security
 import XPC
 
 public let mihomoControlServiceName = "dev.linsheng.mihomo.daemon.control"
-/// Protocol 3 makes LocalHttpDns a persistent root-daemon base service and
-/// changes runtime.set-tun into a durable standby/enhanced transition. Older
-/// daemons must be replaced through the verified installer; mixing either side
-/// with protocol 2 could bypass the certificate/profile prerequisite.
+/// Protocol 3 changes runtime.set-tun into a durable standby/enhanced
+/// transition. Enhanced TUN always owns macOS Global DNS through the loopback
+/// bridge. Older daemons must be replaced through the verified installer.
+/// `dns.resolve` was added within protocol 3: it is accepted only from the App
+/// Proxy system extension, and an older daemon rejects it as an invalid request,
+/// which the extension treats as a failed (closed) DNS answer.
 public let mihomoControlProtocolVersion = 3
 public let mihomoControlMaximumPayloadBytes = 256 * 1_024 * 1_024
 
-public enum ControlOperation: String, Codable, Sendable {
+public enum ControlOperation: String, Codable, CaseIterable, Sendable {
     case ping = "protocol.ping"
     case status = "service.status"
     case trayState = "runtime.tray-state"
@@ -20,11 +22,6 @@ public enum ControlOperation: String, Codable, Sendable {
     case stopAgent = "agent.stop"
     case restartAgent = "agent.restart"
     case componentStatus = "component.status"
-    case localDoHStatus = "local-doh.status"
-    case installLocalDoH = "local-doh.install"
-    case trustLocalDoHCertificate = "local-doh.trust-certificate"
-    case prepareLocalDoHCertificateTrust = "local-doh.prepare-certificate-trust"
-    case setDNSMode = "runtime.set-dns-mode"
     case upgradeComponents = "component.upgrade"
     case setTUN = "runtime.set-tun"
     case setSystemProxy = "runtime.set-system-proxy"
@@ -46,6 +43,9 @@ public enum ControlOperation: String, Codable, Sendable {
     case appProxyStatus = "app-proxy.status"
     case setAppProxyRouting = "app-proxy.set-routing"
     case setAppProxyProcesses = "app-proxy.set-processes"
+    /// One wire-format DNS query from the App Proxy extension, answered by the
+    /// daemon-owned Mihomo resolver. Never available to other peers.
+    case resolveDNS = "dns.resolve"
     case listProfiles = "profile.list"
     case importProfile = "profile.import"
     case switchProfile = "profile.switch"
@@ -61,7 +61,7 @@ public enum ControlOperation: String, Codable, Sendable {
 public enum ControlRequestAuditPolicy {
     public static func logsRoutineLifecycle(for operation: ControlOperation) -> Bool {
         switch operation {
-        case .trayState, .controllerStreamNext:
+        case .trayState, .controllerStreamNext, .resolveDNS:
             return false
         default:
             return true

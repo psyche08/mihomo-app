@@ -13,7 +13,6 @@ import Foundation
 /// document, and the backup taken on first apply is what `restore` puts back.
 public enum MihomoConfigurator {
     struct RuntimeProfilePolicy {
-        var localDoH: LocalDoHConfiguration?
         var enhancedTUNEnabled: Bool
         var globalDNSFallbackEnabled: Bool
     }
@@ -91,7 +90,6 @@ public enum MihomoConfigurator {
         let runtime = try resolveRuntimeConfiguration(
             runtimeConfig: paths.runtimeConfig ?? paths.daemonConfig
         )
-        let localDoH = runtime?.localDoH
 
         guard directScalar(lines, section: "tun", key: "enable")?.lowercased() == "true" else {
             throw ConfiguratorError.tunDisabled
@@ -124,7 +122,7 @@ public enum MihomoConfigurator {
         // Standby still resolves through Mihomo, but must not hand applications
         // unroutable Fake-IPs. The active source profile restores its filter
         // when Enhanced TUN is enabled again.
-        if localDoH != nil, runtime?.enhancedTUNEnabled == false {
+        if runtime?.enhancedTUNEnabled == false {
             dns = replaceScalar(dns, key: "fake-ip-filter-mode", value: "rule")
             dns = replaceList(dns, key: "fake-ip-filter", values: ["MATCH,real-ip"])
         }
@@ -143,17 +141,11 @@ public enum MihomoConfigurator {
         // logs held nothing at all. Volume is handled by retaining a bounded
         // sample of the text rather than by discarding the level.
         lines = replaceTopLevelScalar(lines, key: "log-level", value: "warning")
-        if localDoH != nil || runtime?.globalDNSFallbackEnabled == true {
-            // Port 443 belongs to the daemon's independent DoH server. Mihomo
-            // must not bind it or read the server identity, so proxy/TUN
-            // lifecycle can never take the encrypted resolver down.
-            for key in ["external-controller-tls", "external-doh-server", "tls"] {
-                lines = removeTopLevelValue(lines, key: key)
-            }
-            lines = replaceTopLevelScalar(lines, key: "external-controller-unix",
-                                          value: jsonQuoted(LocalDoHIPC.socketPath))
-            lines = replaceTopLevelScalar(lines, key: "external-doh-server",
-                                          value: jsonQuoted(LocalDoHIPC.requestPath))
+        // The daemon-brokered loopback controller is the only controller
+        // surface. A profile must not open a TLS, DoH or unix-socket side door
+        // (the last two were LocalHttpDns plumbing in earlier releases).
+        for key in legacyControllerSurfaces {
+            lines = removeTopLevelValue(lines, key: key)
         }
 
         lines = excludeProxyServersFromTunnel(lines, resolver: resolver)
@@ -225,8 +217,8 @@ public enum MihomoConfigurator {
         tun = replaceScalar(tun, key: "enable", value: enable ? "true" : "false")
         tun = replaceScalar(tun, key: "device", value: interfaceName)
         tun = replaceScalar(tun, key: "file-descriptor", value: String(DaemonOwnedTUN.childDescriptor))
-        // A stable DNS interception policy works in both Local DoH and Global
-        // DNS modes, without recreating the listener and closing its fd.
+        // A stable DNS interception policy works in standby and Global DNS +
+        // TUN alike, without recreating the listener and closing its fd.
         tun = replaceList(tun, key: "dns-hijack", values: ["any:53", "tcp://any:53"])
         lines = Array(lines[...start]) + tun + Array(lines[end...])
         return lines.joined()
@@ -296,11 +288,16 @@ public enum MihomoConfigurator {
         try contents.write(toFile: config, atomically: true, encoding: .utf8)
     }
 
-    public static func hasLocalDoHIPC(configPath: String) -> Bool {
+    static let legacyControllerSurfaces = [
+        "external-controller-tls", "external-controller-unix", "external-doh-server", "tls",
+    ]
+
+    /// Whether a rendered runtime profile still carries a controller side door,
+    /// such as the LocalHttpDns unix socket written by earlier releases.
+    public static func hasLegacyControllerSurface(configPath: String) -> Bool {
         guard let contents = try? String(contentsOfFile: configPath, encoding: .utf8) else { return false }
         let lines = contents.components(separatedBy: "\n")
-        return topLevelScalar(lines, "external-controller-unix") == LocalDoHIPC.socketPath
-            && topLevelScalar(lines, "external-doh-server") == LocalDoHIPC.requestPath
+        return legacyControllerSurfaces.contains { topLevelScalar(lines, $0) != nil }
     }
 
     // MARK: - Tunnel exclusion
@@ -424,22 +421,14 @@ public enum MihomoConfigurator {
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw ConfiguratorError.daemonConfigUnreadable
         }
-        var localDoH: LocalDoHConfiguration?
-        if let value = object["localDoH"], !(value is NSNull) {
-            guard JSONSerialization.isValidJSONObject(value),
-                  let localData = try? JSONSerialization.data(withJSONObject: value),
-                  let decoded = try? JSONDecoder().decode(
-                    LocalDoHConfiguration.self,
-                    from: localData
-                  ) else {
-                throw ConfiguratorError.daemonConfigUnreadable
-            }
-            localDoH = decoded
-        }
+        // Mirrors ProxyConfiguration.normalizeDNSOwnership: an explicit TUN
+        // state decides the DNS owner, so a legacy LocalHttpDns daemon.json
+        // renders as Global DNS + TUN or as standby.
+        let explicitTUN = object["enhancedTUNEnabled"] as? Bool
         return RuntimeProfilePolicy(
-            localDoH: localDoH,
-            enhancedTUNEnabled: object["enhancedTUNEnabled"] as? Bool ?? true,
-            globalDNSFallbackEnabled: object["globalDNSFallbackEnabled"] as? Bool ?? false
+            enhancedTUNEnabled: explicitTUN ?? true,
+            globalDNSFallbackEnabled: explicitTUN
+                ?? (object["globalDNSFallbackEnabled"] as? Bool ?? false)
         )
     }
 
@@ -688,7 +677,7 @@ public enum MihomoConfigurator {
     private static func jsonQuoted(_ value: String) -> String {
         // JSONSerialization escapes every slash as `\/` by default. That is
         // legal JSON but not a legal escape in a YAML double-quoted scalar, so
-        // absolute paths such as the Local DoH certificate made Mihomo reject
+        // absolute paths such as rule-provider files made Mihomo reject
         // an otherwise valid generated profile. JSON's remaining escapes are
         // also valid YAML escapes and still round-trip through parseScalar.
         let data = try? JSONSerialization.data(

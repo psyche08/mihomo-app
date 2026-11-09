@@ -12,6 +12,7 @@
     "port": 1054
   },
   "manageSystemDNS": false,
+  "globalDNSFallbackEnabled": false,
   "enhancedTUNEnabled": false,
   "loopbackInterface": "lo0",
   "loopbackAlias": "127.0.0.53",
@@ -27,14 +28,5 @@
     "pidPath": "/Library/Application Support/Mihomo App/mihomo.pid",
     "logPath": "/Library/Logs/Mihomo App/mihomo.log",
     "restartDelayMilliseconds": 1000
-  },
-  "localDoH": {
-    "endpoint": {
-      "host": "127.0.0.1",
-      "port": 443
-    },
-    "serverURL": "https://127.0.0.1/dns-query",
-    "certificatePath": "/Library/Application Support/Mihomo App/local-doh/server.crt",
-    "privateKeyPath": "/Library/Application Support/Mihomo App/local-doh/server.key"
   }
 }

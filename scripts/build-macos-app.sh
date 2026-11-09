@@ -147,8 +147,7 @@ for resource in daemon.json default-config.yaml dev.linsheng.mihomo.daemon.plist
 done
 /usr/bin/install -m 0644 "$ROOT/THIRD_PARTY_NOTICES.md" \
   "$STAGING_APP/Contents/Resources/THIRD_PARTY_NOTICES.md"
-for license in Mihomo.LICENSE MetaCubeXD.LICENSE Sparkle.LICENSE \
-  SwiftNIOSSL.LICENSE SwiftNIOSSL.NOTICE; do
+for license in Mihomo.LICENSE MetaCubeXD.LICENSE Sparkle.LICENSE; do
   /usr/bin/install -m 0644 "$ROOT/third_party/$license" \
     "$STAGING_APP/Contents/Resources/licenses/$license"
 done

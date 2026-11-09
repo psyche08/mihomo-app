@@ -30,13 +30,5 @@ does not change the root daemon or XPC trust boundary.
 
 Copyright (c) 2006-2013 Andy Matuschak and contributors
 
-## SwiftNIO SSL
-
-SwiftNIO SSL 2.37.2 is distributed under the Apache License 2.0 and includes
-BoringSSL-derived code covered by the retained upstream NOTICE. MihomoBox uses
-it only in the root daemon's loopback-only Local DoH TLS server.
-
-Copyright 2017, 2018 The SwiftNIO Project
-
 The full license and notice texts are retained in the application resources and the
 upstream projects remain the authoritative source for their copyright notices.

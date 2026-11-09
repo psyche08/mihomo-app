@@ -39,7 +39,7 @@ final class DaemonOwnedTUNTests: XCTestCase {
         let source = "tun:\n  enable: true\n  auto-route: true\ndns:\n  enhanced-mode: fake-ip\n  fake-ip-range: 198.18.0.1/16\n  fake-ip-filter: ['real.invalid']\n"
         let attached = try MihomoConfigurator.attachingDaemonTUN(source, interfaceName: "utun123")
         let off = try MihomoConfigurator.residentProfile(attached, sourceProfile: source,
-            configuration: .init(manageSystemDNS: false, enhancedTUNEnabled: false, localDoH: .init()), preserveTUNListener: true)
+            configuration: .init(manageSystemDNS: false, globalDNSFallbackEnabled: false, enhancedTUNEnabled: false), preserveTUNListener: true)
         let on = try MihomoConfigurator.residentProfile(off, sourceProfile: source,
             configuration: .init(manageSystemDNS: true, globalDNSFallbackEnabled: true, enhancedTUNEnabled: true), preserveTUNListener: true)
         for text in [off, on] {
@@ -153,9 +153,9 @@ final class DaemonOwnedTUNTests: XCTestCase {
         """
         let attached = try MihomoConfigurator.attachingDaemonTUN(source, interfaceName: owner.interfaceName, enable: false)
         try attached.write(to: path, atomically: true, encoding: .utf8)
-        let configuration = ProxyConfiguration(manageSystemDNS: false, enhancedTUNEnabled: true,
+        let configuration = ProxyConfiguration(manageSystemDNS: true, globalDNSFallbackEnabled: true, enhancedTUNEnabled: true,
             mihomoProcess: .init(binaryPath: binary.path, configDirectory: directory.path, configPath: path.path),
-            controllerEndpoint: .init(host: "127.0.0.1", port: port), controllerSecret: "fixture-only", localDoH: .init())
+            controllerEndpoint: .init(host: "127.0.0.1", port: port), controllerSecret: "fixture-only")
         // Exercise Foundation's explicit stdin handoff, exactly as the signed
         // production launcher does, with this fixture's own executable/paths.
         for _ in 0..<2 {
@@ -187,7 +187,7 @@ final class DaemonOwnedTUNTests: XCTestCase {
             try MihomoRuntimeInspector.attachPrebuiltTUN(configuration: configuration)
             let pid = child.processIdentifier
             for enabled in [true, false, true, false] {
-                var policy = configuration; policy.enhancedTUNEnabled = enabled
+                var policy = configuration; policy.enhancedTUNEnabled = enabled; policy.normalizeDNSOwnership()
                 let next = try MihomoConfigurator.residentProfile(
                     String(contentsOf: path, encoding: .utf8), sourceProfile: source, configuration: policy, preserveTUNListener: true)
                 try next.write(to: path, atomically: true, encoding: .utf8)

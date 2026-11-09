@@ -27,7 +27,6 @@ private let commandMode = arguments.contains("--check")
     || arguments.contains("--health")
     || arguments.contains("--configure-profile")
     || arguments.contains("--restore-profile")
-    || arguments.contains("--set-local-doh")
     || arguments.contains("--set-enhanced-tun")
 
 ServiceLog.configure(
@@ -56,7 +55,6 @@ if arguments.contains("--help") || arguments.contains("-h") {
                          [--secret-file PATH] [--controller-metadata PATH]
                          [--daemon-config PATH] [--runtime-config PATH]]
                         [--restore-profile --profile PATH --profile-backup PATH]
-                        [--set-local-doh enabled]
                         [--set-enhanced-tun enabled|disabled]
     """)
     exit(0)
@@ -81,22 +79,6 @@ let runtimeGeneration: String = {
     return arguments[index + 1]
 }()
 
-if let index = arguments.firstIndex(of: "--set-local-doh") {
-    guard arguments.indices.contains(index + 1), arguments[index + 1] == "enabled" else {
-        print("--set-local-doh only accepts enabled; LocalHttpDns is a base service", to: &standardError)
-        exit(2)
-    }
-    do {
-        try LocalDoHConfigurationStore.ensureBaseService(configurationPath: configPath)
-        ServiceLog.info("event=agent_command command=set_local_doh result=success")
-        exit(0)
-    } catch {
-        ServiceLog.error("event=agent_command command=set_local_doh result=failed")
-        print(error.localizedDescription, to: &standardError)
-        exit(1)
-    }
-}
-
 if let index = arguments.firstIndex(of: "--set-enhanced-tun") {
     guard arguments.indices.contains(index + 1),
           ["enabled", "disabled"].contains(arguments[index + 1]) else {
@@ -104,7 +86,7 @@ if let index = arguments.firstIndex(of: "--set-enhanced-tun") {
         exit(2)
     }
     do {
-        try LocalDoHConfigurationStore.setEnhancedTUN(
+        try DNSOwnershipStore.setEnhancedTUN(
             arguments[index + 1] == "enabled",
             configurationPath: configPath
         )

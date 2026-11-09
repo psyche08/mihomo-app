@@ -44,13 +44,20 @@ rm "$TEST_TMP/events"
 # Missing optional DNS mode flags are normal, not a rollback trigger.
 printf '%s\n' '{}' > "$TEST_TMP/daemon.json"
 APP_SUPPORT="$TEST_TMP"
-LOCAL_DOH_CERT="$TEST_TMP/absent.crt"
-LOCAL_DOH_KEY="$TEST_TMP/absent.key"
-managed_agent_standby_ready() { return 0; }
-export APP_SUPPORT LOCAL_DOH_CERT LOCAL_DOH_KEY
-export -f managed_runtime_dns_ready managed_agent_standby_ready
+managed_agent_standby_ready() { echo standby >> "$TEST_TMP/readiness"; }
+managed_network_ready() { echo network >> "$TEST_TMP/readiness"; }
+export APP_SUPPORT
+export -f managed_runtime_dns_ready managed_agent_standby_ready managed_network_ready
 /bin/bash -c 'set -Eeuo pipefail; trap rollback_installation ERR; managed_runtime_dns_ready'
 test ! -e "$TEST_TMP/events"
+# Global DNS is owned with TUN: either flag requires the full network runtime,
+# and no retired loopback HTTPS listener is probed.
+printf '%s\n' '{"enhancedTUNEnabled":true}' > "$TEST_TMP/daemon.json"
+managed_runtime_dns_ready
+printf '%s\n' '{"globalDNSFallbackEnabled":true}' > "$TEST_TMP/daemon.json"
+managed_runtime_dns_ready
+test "$(cat "$TEST_TMP/readiness")" = $'standby\nnetwork\nnetwork'
+rm "$TEST_TMP/readiness"
 
 # An exited core leaves a Unix socket behind. Remove only that socket before
 # copying the stopped installation; never follow a symlink or remove real data.

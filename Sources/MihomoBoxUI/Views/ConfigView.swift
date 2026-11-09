@@ -12,7 +12,6 @@ public struct ConfigView: View {
     ScrollView {
       VStack(alignment: .leading, spacing: DashboardTheme.sectionSpacing) {
         configHeader
-        localDoHPanel
         applicationUpdatePanel
 
         switch store.configState {
@@ -29,12 +28,6 @@ public struct ConfigView: View {
       .padding(DashboardTheme.sectionSpacing)
     }
     .background(DashboardTheme.background)
-    .task {
-      while !Task.isCancelled {
-        await store.refreshLocalDoHStatus()
-        try? await Task.sleep(for: .seconds(5))
-      }
-    }
   }
 
   private var configHeader: some View {
@@ -200,6 +193,10 @@ public struct ConfigView: View {
           }
         }
 
+        settingRow("DNS") {
+          managedValue(store.configuration.enhancedTUNEnabled ? "Global DNS" : "System DNS")
+        }
+
         settingRow("TUN Mode Stack") {
           managedValue(store.configuration.tunStack.rawValue)
         }
@@ -209,7 +206,7 @@ public struct ConfigView: View {
         }
 
         Text(
-          "Enhanced TUN remains read-only here. Local DoH stays active when TUN is off; Global DNS uses 198.18.0.2 and requires Enhanced TUN."
+          "Enhanced TUN remains read-only here. When on, MihomoBox routes traffic through TUN and points macOS Global DNS at its loopback bridge; when off, system DNS is left untouched."
         )
         .font(.system(size: 10))
         .foregroundStyle(DashboardTheme.muted.opacity(0.72))
@@ -306,211 +303,6 @@ public struct ConfigView: View {
         .fixedSize(horizontal: false, vertical: true)
         .padding(.horizontal, 8)
       }
-    }
-  }
-
-  private var localDoHPanel: some View {
-    configPanel("DNS Integration", symbol: "lock.shield") {
-      VStack(alignment: .leading, spacing: 10) {
-        HStack(spacing: 10) {
-          StatusPill(
-            localDoHStatusTitle,
-            color: localDoHStatusColor
-          )
-          if store.localDoHDomainCount > 0 {
-            Text("All domains by default")
-              .font(.system(size: 10, weight: .medium))
-              .foregroundStyle(DashboardTheme.muted)
-          }
-          Spacer()
-        }
-
-        HStack(spacing: 10) {
-          actionButton(
-            store.confirmedDNSMode == .globalDNS ? "Global DNS · Active" : "Use Global DNS",
-            symbol: "network", tint: DashboardTheme.info, actionKind: .switchingDNSMode
-          ) { await store.setDNSMode(.globalDNS) }
-          .disabled(!store.localDoHAvailable || store.configAction != nil
-            || store.confirmedDNSMode == .globalDNS)
-
-          actionButton(
-            store.confirmedDNSMode == .localDoH ? "Local DoH · Active" : "Use Local DoH",
-            symbol: "lock.shield", tint: DashboardTheme.primary, actionKind: .switchingDNSMode
-          ) { await store.setDNSMode(.localDoH) }
-          .disabled(!store.localDoHAvailable || store.configAction != nil
-            || !store.localDoHPrepared || !store.localDoHProfileInstalled
-            || !store.localDoHCertificateTrusted || store.confirmedDNSMode == .localDoH)
-        }
-
-        Text("Certificate SSL trust: \(store.localDoHCertificateTrusted ? "Ready" : "Not ready") · DNS profile: \(store.localDoHProfileInstalled ? "Installed" : "Not installed / not matched")")
-          .font(.system(size: 11, weight: .medium))
-          .foregroundStyle(DashboardTheme.muted)
-
-        Text(
-          localDoHStatusDetail
-        )
-        .font(.system(size: 11, weight: .medium))
-        .foregroundStyle(
-          store.localDoHPhase == .degraded ? DashboardTheme.warning : DashboardTheme.content
-        )
-        .fixedSize(horizontal: false, vertical: true)
-
-        Text(
-          "Local HTTPS on port 443 stays on after setup. All domains go to Mihomo over a root-private Unix socket; when Mihomo is stopped or IPC is unresponsive, queries use the current network's DNS directly. Enhanced TUN off uses real addresses. Reinstall an older split-DNS profile to adopt global coverage."
-        )
-        .font(.system(size: 10))
-        .foregroundStyle(DashboardTheme.muted.opacity(0.78))
-        .fixedSize(horizontal: false, vertical: true)
-
-        if store.localDoHExpandedGeoSiteRuleCount > 0 {
-          Text(
-            "Expanded all representable entries from \(store.localDoHExpandedGeoSiteRuleCount) proxied GEOSITE rules using the protected managed GeoSite database; no domain-count truncation was applied."
-          )
-          .font(.system(size: 10, weight: .medium))
-          .foregroundStyle(DashboardTheme.info)
-          .fixedSize(horizontal: false, vertical: true)
-        }
-
-        if store.localDoHOmittedRuleCount > 0
-          || store.localDoHExactDomainCount > 0
-          || store.localDoHUnrepresentableGeoSiteEntryCount > 0
-        {
-          Text(
-            "Generated with \(store.localDoHOmittedRuleCount) unsupported rules omitted"
-              + (store.localDoHUnrepresentableGeoSiteEntryCount > 0
-                ? ", including \(store.localDoHUnrepresentableGeoSiteEntryCount) GEOSITE keyword, regex, or invalid entries that macOS split DNS cannot express"
-                : "")
-              + (store.localDoHExactDomainCount > 0
-                ? ", and \(store.localDoHExactDomainCount) exact-domain entries represented as suffixes."
-                : ".")
-          )
-          .font(.system(size: 10, weight: .medium))
-          .foregroundStyle(DashboardTheme.warning)
-          .fixedSize(horizontal: false, vertical: true)
-        }
-
-        if store.localDoHInvertedGeoSiteRuleCount > 0 {
-          Text(
-            "\(store.localDoHInvertedGeoSiteRuleCount) inverted GEOSITE rules could not be represented and were omitted; MihomoBox did not widen Local DoH to global DNS."
-          )
-          .font(.system(size: 10, weight: .medium))
-          .foregroundStyle(DashboardTheme.warning)
-          .fixedSize(horizontal: false, vertical: true)
-        }
-
-        Text(
-          "Prepare & Trust installs this Mac's CA for SSL, then opens the DNS profile for macOS approval. Local DoH is ready only when both pass verification. Global DNS removes only this app's DoH profile and releases 443; switching back requires Prepare & Trust and profile approval again. The existing identity is reused."
-        )
-        .font(.system(size: 10))
-        .foregroundStyle(DashboardTheme.muted.opacity(0.72))
-        .fixedSize(horizontal: false, vertical: true)
-
-        HStack(spacing: 10) {
-          actionButton(
-            "Prepare & Trust / Open Profile",
-            symbol: "plus.shield.fill",
-            tint: DashboardTheme.primary,
-            actionKind: .preparingLocalDoH
-          ) {
-            await store.prepareLocalDoH()
-          }
-          .disabled(!store.localDoHAvailable || store.configAction != nil)
-
-          if store.localDoHPrepared || store.localDoHProfileInstalled
-            || store.localDoHPhase == .fallbackNeedsProfileRemoval {
-            actionButton(
-              "Open Device Management",
-              symbol: "gearshape.fill",
-              tint: DashboardTheme.content,
-              actionKind: .openingDeviceManagement
-            ) {
-              await store.openDeviceManagement()
-            }
-            .disabled(store.configAction != nil)
-
-            Button {
-              Task { await store.refreshLocalDoHStatus() }
-            } label: {
-              Label("Refresh Status", systemImage: "arrow.clockwise")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(DashboardTheme.muted)
-                .frame(maxWidth: .infinity, minHeight: 36)
-                .background(
-                  DashboardTheme.muted.opacity(0.09),
-                  in: RoundedRectangle(cornerRadius: 8)
-                )
-            }
-            .buttonStyle(.plain)
-            .disabled(store.configAction != nil)
-          }
-        }
-
-        HStack(spacing: 10) {
-          actionButton(
-            "Trust Certificate for SSL", symbol: "checkmark.shield",
-            tint: DashboardTheme.primary, actionKind: .trustingLocalDoH
-          ) { await store.trustLocalDoHCertificate() }
-          .disabled(!store.localDoHAvailable || !store.localDoHPrepared
-            || store.configAction != nil || store.localDoHCertificateTrusted)
-
-          actionButton(
-            "Open Keychain Access", symbol: "key",
-            tint: DashboardTheme.content, actionKind: .openingKeychainAccess
-          ) { await store.openKeychainAccess() }
-          .disabled(store.configAction != nil)
-        }
-      }
-    }
-  }
-
-  private var localDoHStatusTitle: String {
-    switch store.localDoHPhase {
-    case .unavailable: "Unavailable"
-    case .statusUnavailable: "Status Unavailable"
-    case .off:
-      "Setup Required"
-    case .awaitingApproval: "Awaiting macOS Approval"
-    case .certificateUntrusted: "SSL Trust Required"
-    case .active: "Active"
-    case .degraded: "Needs Attention"
-    case .globalDNSFallback: "Global DNS"
-    case .fallbackNeedsProfileRemoval: "Remove DoH Profile"
-    case .fallbackUnavailable: "Global DNS Inactive"
-    }
-  }
-
-  private var localDoHStatusColor: Color {
-    switch store.localDoHPhase {
-    case .active: DashboardTheme.success
-    case .awaitingApproval: DashboardTheme.info
-    case .degraded, .certificateUntrusted, .globalDNSFallback, .fallbackNeedsProfileRemoval,
-         .fallbackUnavailable: DashboardTheme.warning
-    case .unavailable, .statusUnavailable, .off: DashboardTheme.muted
-    }
-  }
-
-  private var localDoHStatusDetail: String {
-    switch store.localDoHPhase {
-    case .unavailable:
-      "Run the signed MihomoBox application bundle to prepare Local DoH."
-    case .statusUnavailable:
-      "The authenticated daemon could not verify Local DoH state. Allow component synchronization or use Install / Repair Daemon, then refresh."
-    case .off:
-      "Enhanced TUN can use Global DNS without a certificate or profile. To use Local DoH instead, prepare its certificate and approve the DNS profile."
-    case .awaitingApproval:
-      "The identity is prepared, but the installed DNS Settings profile does not yet match. Finish confirmation in General › Device Management. Profile installation alone does not guarantee SSL trust."
-    case .certificateUntrusted:
-      "The profile is installed, but SSL trust is not ready. Choose Trust Certificate for SSL and approve the macOS authorization dialog in the App. Enhanced TUN can use Global DNS instead."
-    case .active:
-      "The HTTPS listener has a DNS backend, the certificate passes system SSL trust, and the installed DNS settings match. It prefers Mihomo IPC and falls back to current network DNS when Mihomo is unavailable. Proxy access still requires Enhanced TUN or an explicit proxy."
-    case .degraded:
-      "Local DoH is not ready. Enhanced TUN can use Global DNS without a certificate or profile. Prepare and approve the profile to use Local DoH."
-    case .globalDNSFallback:
-      "System DNS uses 198.18.0.2 through Enhanced TUN, either by selection or fallback. Stop Mihomo to restore the original DNS. Prepare & Trust and reinstall the profile to return to Local DoH."
-    case .fallbackNeedsProfileRemoval:
-      "Global DNS fallback is configured, but macOS has not confirmed removal of the MihomoBox DNS profile. Remove it in Device Management so matching domains can use Global DNS."
-    case .fallbackUnavailable:
-      "Global DNS fallback is configured but not currently active. Start Mihomo to restore the TUN DNS path, or Prepare to retry LocalHttpDns."
     }
   }
 

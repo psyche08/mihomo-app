@@ -50,9 +50,6 @@ public final class MihomoSupervisor: @unchecked Sendable {
             throw MihomoSupervisorError.configMissing(configuration.configPath)
         }
         Self.stopOwnedProcess(configuration: configuration)
-        if configuration.binaryPath == "/Library/Application Support/Mihomo App/mihomo" {
-            try LocalDoHIPC.prepareDirectory()
-        }
         try SanitizedProcessLogMigration.prepare(logPath: configuration.logPath)
         lock.lock()
         stopping = false
@@ -201,8 +198,8 @@ public final class MihomoSupervisor: @unchecked Sendable {
         }
     }
 
-    /// The managed Mihomo child never needs filesystem access to the daemon's
-    /// independent Local DoH identity. Do not inherit a caller's SAFE_PATHS.
+    /// The managed Mihomo child never needs filesystem access outside its own
+    /// data directory. Do not inherit a caller's SAFE_PATHS.
     static func processEnvironment(base: [String: String]) -> [String: String] {
         var environment = base
         environment.removeValue(forKey: "SAFE_PATHS")

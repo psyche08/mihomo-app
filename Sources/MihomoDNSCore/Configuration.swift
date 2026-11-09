@@ -10,25 +10,6 @@ public struct Endpoint: Codable, Equatable, Hashable {
     }
 }
 
-public struct LocalDoHConfiguration: Codable, Equatable {
-    public var endpoint: Endpoint
-    public var serverURL: String
-    public var certificatePath: String
-    public var privateKeyPath: String
-
-    public init(
-        endpoint: Endpoint = Endpoint(host: "127.0.0.1", port: 443),
-        serverURL: String = "https://127.0.0.1/dns-query",
-        certificatePath: String = "/Library/Application Support/Mihomo App/local-doh/server.crt",
-        privateKeyPath: String = "/Library/Application Support/Mihomo App/local-doh/server.key"
-    ) {
-        self.endpoint = endpoint
-        self.serverURL = serverURL
-        self.certificatePath = certificatePath
-        self.privateKeyPath = privateKeyPath
-    }
-}
-
 /// With the pinned Mihomo core the interface owns .1 and sing-tun serves DNS
 /// at its next address, .2. Sending DNS to .1 can hit a local port-53 listener
 /// (including macOS DNS Proxy) instead of traversing the tunnel.
@@ -43,9 +24,10 @@ public struct ProxyConfiguration: Codable, Equatable {
     public var mihomoDNS: Endpoint
     public var upstreamListen: Endpoint
     public var manageSystemDNS: Bool
-    /// Persisted Global DNS mode, explicitly selected or entered as fallback
-    /// when LocalHttpDns is unavailable. macOS DNS uses the independent
-    /// loopback bridge; Enhanced TUN remains required for Fake-IP traffic.
+    /// Persisted Global DNS ownership. Enhanced TUN always points macOS
+    /// Global DNS at the independent loopback bridge (Fake-IP needs both);
+    /// standby leaves the system resolver alone. The historical key name is
+    /// kept so existing daemon.json files decode unchanged.
     public var globalDNSFallbackEnabled: Bool?
     /// Persisted desired TUN state. `nil` is accepted only for upgrades from
     /// older installations and means the previously always-on TUN behavior.
@@ -66,7 +48,6 @@ public struct ProxyConfiguration: Codable, Equatable {
     public var mihomoProcess: MihomoProcessConfiguration?
     public var controllerEndpoint: Endpoint?
     public var controllerSecret: String?
-    public var localDoH: LocalDoHConfiguration?
 
     public init(
         systemDNSListen: Endpoint = Endpoint(host: "127.0.0.53", port: 53),
@@ -87,8 +68,7 @@ public struct ProxyConfiguration: Codable, Equatable {
         fallbackDNSServers: [String] = [],
         mihomoProcess: MihomoProcessConfiguration? = nil,
         controllerEndpoint: Endpoint? = nil,
-        controllerSecret: String? = nil,
-        localDoH: LocalDoHConfiguration? = nil
+        controllerSecret: String? = nil
     ) {
         self.systemDNSListen = systemDNSListen
         self.mihomoDNS = mihomoDNS
@@ -109,24 +89,25 @@ public struct ProxyConfiguration: Codable, Equatable {
         self.mihomoProcess = mihomoProcess
         self.controllerEndpoint = controllerEndpoint
         self.controllerSecret = controllerSecret
-        self.localDoH = localDoH
     }
 
     public static func load(path: String) throws -> ProxyConfiguration {
         let data = try Data(contentsOf: URL(fileURLWithPath: path))
         var configuration = try JSONDecoder().decode(ProxyConfiguration.self, from: data)
-        // Accept only the former fixed endpoint during an in-place upgrade.
-        // Normalizing before validation lets DNS restoration run with old
-        // daemon.json bytes, without widening accepted paths or ports.
-        let legacy = LocalDoHConfiguration(
-            endpoint: Endpoint(host: "127.0.0.1", port: 9443),
-            serverURL: "https://127.0.0.1:9443/dns-query"
-        )
-        if configuration.localDoH == legacy {
-            configuration.localDoH = LocalDoHConfiguration()
-        }
+        // LocalHttpDns was removed. Decoding ignores its old `localDoH` key;
+        // DNS ownership is derived from the persisted TUN intent so an
+        // in-place upgrade lands in Global DNS + TUN or in standby.
+        configuration.normalizeDNSOwnership()
         try configuration.validate()
         return configuration
+    }
+
+    /// Couples macOS Global DNS ownership to the explicit TUN state. A legacy
+    /// configuration without that state keeps its stored ownership.
+    public mutating func normalizeDNSOwnership() {
+        guard let enabled = enhancedTUNEnabled else { return }
+        manageSystemDNS = enabled
+        globalDNSFallbackEnabled = enabled
     }
 
     /// Where the agent publishes its runtime health for the daemon to serve.
@@ -163,7 +144,6 @@ public struct ProxyConfiguration: Codable, Equatable {
         normalized.enhancedTUNPreviouslyEnabled = enhancedTUNPreviouslyEnabled
         normalized.enhancedTUNResumeEnabled = enhancedTUNResumeEnabled
         normalized.systemProxyEnabled = systemProxyEnabled
-        normalized.localDoH = localDoH
         return self == normalized
     }
 
@@ -182,6 +162,20 @@ public struct ProxyConfiguration: Codable, Equatable {
 
     public var usesGlobalDNSFallback: Bool {
         globalDNSFallbackEnabled == true
+    }
+
+    /// A configuration without TUN state that leaves system DNS alone: the
+    /// agent is only a DNS forwarder (tests and pre-TUN installations). The
+    /// daemon never writes one; it always records an explicit TUN choice.
+    public var isPlainForwarder: Bool {
+        !manageSystemDNS && enhancedTUNEnabled == nil
+    }
+
+    /// Whether the agent listens on `systemDNSListen`. Global DNS needs the
+    /// bridge; standby (an explicit TUN off) leaves port 53 alone, since
+    /// 127.0.0.53 exists only while the managed alias does.
+    public var servesSystemDNSBridge: Bool {
+        manageSystemDNS || isPlainForwarder
     }
 
     public var managedSystemDNSServers: [String] {
@@ -225,26 +219,15 @@ public struct ProxyConfiguration: Codable, Equatable {
                 throw ConfigurationError.invalidControllerSecret
             }
         }
-        if let localDoH {
-            // These values select the root daemon's local TLS endpoint. Keep
-            // the surface fixed instead of accepting caller-selected ports or
-            // file paths (including path traversal below local-doh/).
-            guard localDoH == LocalDoHConfiguration(),
-                  localDoH.endpoint != controllerEndpoint else {
-                throw ConfigurationError.invalidLocalDoH
-            }
-            guard !manageSystemDNS else {
-                throw ConfigurationError.incompatibleDNSOwnership
-            }
-        }
+        // Enhanced TUN and macOS Global DNS move together: Fake-IP answers
+        // without the tunnel are unroutable, and a tunnel without the bridge
+        // leaves applications on real answers that bypass the Fake-IP rules.
         if usesGlobalDNSFallback {
-            guard manageSystemDNS,
-                  localDoH == nil,
-                  enhancedTUNEnabled == true else {
+            guard manageSystemDNS, enhancedTUNEnabled == true else {
                 throw ConfigurationError.incompatibleDNSOwnership
             }
-        } else if enhancedTUNEnabled != nil {
-            guard localDoH == LocalDoHConfiguration(), !manageSystemDNS else {
+        } else if let enhancedTUNEnabled {
+            guard !enhancedTUNEnabled, !manageSystemDNS else {
                 throw ConfigurationError.incompatibleDNSOwnership
             }
         }
@@ -272,78 +255,54 @@ public enum RuntimeSwitchPreferences {
     }
 }
 
-public enum LocalDoHConfigurationStore {
-    public static func ensureBaseService(configurationPath: String) throws {
-        var configuration = try ProxyConfiguration.load(path: configurationPath)
-        configuration.enhancedTUNResumeEnabled = configuration.resumesEnhancedTUN
-        configuration.enhancedTUNPreviouslyEnabled = configuration.resumesEnhancedTUN
-        configuration.manageSystemDNS = false
-        configuration.globalDNSFallbackEnabled = false
-        configuration.localDoH = LocalDoHConfiguration()
-        // Installing or migrating the base service must never preserve an
-        // already-enabled tunnel. Certificate/profile approval is the explicit
-        // prerequisite that later permits setEnhancedTUN(true).
-        configuration.enhancedTUNEnabled = false
-        try write(configuration, to: configurationPath)
-    }
-
+public enum DNSOwnershipStore {
+    /// Persists the TUN choice together with the DNS owner it implies:
+    /// enabled means Global DNS + Enhanced TUN, disabled means standby.
     public static func setEnhancedTUN(_ enabled: Bool, configurationPath: String) throws {
         var configuration = try ProxyConfiguration.load(path: configurationPath)
         configuration.enhancedTUNResumeEnabled = enabled
         configuration.enhancedTUNPreviouslyEnabled = enabled
-        configuration.manageSystemDNS = false
-        configuration.globalDNSFallbackEnabled = false
-        configuration.localDoH = LocalDoHConfiguration()
         configuration.enhancedTUNEnabled = enabled
+        configuration.normalizeDNSOwnership()
         try write(configuration, to: configurationPath)
     }
 
-    /// Selects the proven Global DNS ownership model explicitly or when the
-    /// HTTPS endpoint cannot be kept alive. Global DNS is coupled to Enhanced TUN.
-    public static func useGlobalDNSFallback(configurationPath: String) throws {
-        var configuration = try ProxyConfiguration.load(path: configurationPath)
-        configuration.manageSystemDNS = true
-        configuration.localDoH = nil
-        configuration.globalDNSFallbackEnabled = true
-        configuration.enhancedTUNEnabled = true
-        configuration.enhancedTUNPreviouslyEnabled = true
-        configuration.enhancedTUNResumeEnabled = true
-        try write(configuration, to: configurationPath)
+    /// Whether daemon.json still carries the removed LocalHttpDns key or a
+    /// stored DNS owner that differs from the one its TUN state implies.
+    /// Formatting differences alone never force a rewrite.
+    public static func requiresRewrite(configurationPath: String) throws -> Bool {
+        let stored = try Data(contentsOf: URL(fileURLWithPath: configurationPath))
+        guard let object = try JSONSerialization.jsonObject(with: stored) as? [String: Any] else {
+            throw ConfigurationError.incompatibleDNSOwnership
+        }
+        let configuration = try ProxyConfiguration.load(path: configurationPath)
+        return object["localDoH"] != nil
+            || object["manageSystemDNS"] as? Bool != configuration.manageSystemDNS
+            || object["globalDNSFallbackEnabled"] as? Bool != configuration.globalDNSFallbackEnabled
+    }
+
+    /// Rewrites daemon.json in normalized form when `requiresRewrite` says so.
+    /// Returns whether the file was rewritten.
+    @discardableResult
+    public static func rewriteNormalized(configurationPath: String) throws -> Bool {
+        guard try requiresRewrite(configurationPath: configurationPath) else { return false }
+        try write(ProxyConfiguration.load(path: configurationPath), to: configurationPath)
+        return true
+    }
+
+    static func encoded(_ configuration: ProxyConfiguration) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return try encoder.encode(configuration)
     }
 
     private static func write(_ configuration: ProxyConfiguration, to configurationPath: String) throws {
         try configuration.validate()
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(configuration)
-        try data.write(to: URL(fileURLWithPath: configurationPath), options: [.atomic])
+        try encoded(configuration).write(to: URL(fileURLWithPath: configurationPath), options: [.atomic])
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o600],
             ofItemAtPath: configurationPath
         )
-    }
-}
-
-/// Keeps restoration, ownership change, verified TUN startup and encrypted
-/// profile removal in order. A failed new runtime always gets a verified stop.
-public enum GlobalDNSFallbackTransition {
-    public enum Failure: Error { case restoreUnconfirmed }
-
-    public static func run(
-        stopAndRestore: () -> Bool,
-        configure: () throws -> Void,
-        startAndValidate: () throws -> Void,
-        finish: () -> Void
-    ) throws {
-        guard stopAndRestore() else { throw Failure.restoreUnconfirmed }
-        do {
-            try configure()
-            try startAndValidate()
-        } catch {
-            guard stopAndRestore() else { throw Failure.restoreUnconfirmed }
-            throw error
-        }
-        finish()
     }
 }
 
@@ -379,7 +338,6 @@ public enum ConfigurationError: Error, Equatable, CustomStringConvertible {
     case invalidSystemDNSListener
     case invalidControllerEndpoint
     case invalidControllerSecret
-    case invalidLocalDoH
     case incompatibleDNSOwnership
 
     public var description: String {
@@ -390,8 +348,7 @@ public enum ConfigurationError: Error, Equatable, CustomStringConvertible {
         case .invalidSystemDNSListener: return "managed system DNS must listen on the configured loopback alias port 53"
         case .invalidControllerEndpoint: return "Mihomo controller must use a valid 127.0.0.1 port"
         case .invalidControllerSecret: return "Mihomo controller secret is invalid"
-        case .invalidLocalDoH: return "local DoH configuration is invalid"
-        case .incompatibleDNSOwnership: return "local DoH and managed system DNS cannot be enabled together"
+        case .incompatibleDNSOwnership: return "Global DNS ownership must match the Enhanced TUN state"
         }
     }
 }

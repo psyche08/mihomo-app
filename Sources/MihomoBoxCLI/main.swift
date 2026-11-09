@@ -1035,9 +1035,6 @@ private func usage() {
     usage: mihomoboxctl COMMAND
 
       status [--json]                 Show service and network consistency
-      local-doh status               Show authenticated LocalHttpDns status
-      local-doh prepare              Prepare certificate/profile through XPC;
-                                      finish profile approval in System Settings
       app-proxy status               Show saved applications and routes
       app-proxy set-all PROXY         Route all saved apps through one node/group
       app-proxy policy migrate-defaults Merge unchanged legacy presets; leaves interception off
@@ -1174,19 +1171,6 @@ private func main() throws -> Int32 {
         let json = arguments == ["--json"]
         guard arguments.isEmpty || json else { throw CLIError(message: "usage: mihomoboxctl status [--json]") }
         return try printStatus(json: json)
-    case "local-doh":
-        guard arguments.count == 1 else {
-            throw CLIError(message: "usage: mihomoboxctl local-doh status|prepare")
-        }
-        switch arguments[0] {
-        case "status":
-            try writePayload(try sendControl(.localDoHStatus))
-        case "prepare":
-            try writePayload(try sendControl(.installLocalDoH))
-        default:
-            throw CLIError(message: "usage: mihomoboxctl local-doh status|prepare")
-        }
-        return 0
     case "app-proxy":
         if arguments == ["status"] {
             try writePayload(try sendControl(.appProxyStatus))

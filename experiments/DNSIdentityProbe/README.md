@@ -13,8 +13,12 @@ for test identities, team `89LGY6BD53`. It logs category counters only, never DN
 wire data, domains, addresses, credentials or raw tokens.
 
 Selected and helper flows use Cloudflare's IP-address DoH URL through the existing
-Mihomo HTTP proxy on port 7897. Control/other flows use native TLS to the existing
-Local DoH endpoint. A selected upstream error never retries using direct DNS.
+Mihomo HTTP proxy on port 7897. Control/other flows use native TLS to
+`https://127.0.0.1/dns-query`, the loopback endpoint of MihomoBox's former Local
+DoH feature. MihomoBox no longer serves that endpoint, so against a current
+installation those flows get no answer and are counted as failures; the
+DNS-only mode needs a new control upstream before another live run. A selected
+upstream error never retries using direct DNS.
 **A mixed listener alone does not guarantee a proxy exit:** a live test must also
 verify the extension's Mihomo rule/chain and exercise an explicit proxy failure.
 The original-DNS escape and daemon ownership remain unchanged. The provider has
@@ -27,8 +31,9 @@ After validating the complete Cloud-signed bundle and installing it under
 
 - `--activate`: request ordinary macOS system-extension approval.
 - `--status`: read this app's DNS manager status.
-- `--session`: enable for four minutes; unknown identities forward to Local DoH
-  and are counted. This observation mode is intentionally not strict.
+- `--session`: enable for four minutes; unknown identities forward like control
+  flows (to the retired loopback DoH URL above) and are counted. This
+  observation mode is intentionally not strict.
 - `--strict-session`: same time limit, but unknown/mismatched origins get REFUSED.
 - `--disable`: immediately disable this probe's DNS configuration.
 - `--deactivate`: request removal of this system extension.
@@ -36,9 +41,11 @@ After validating the complete Cloud-signed bundle and installing it under
 The host auto-disables after 240 seconds. The provider independently stops at the
 saved 300-second deadline and refuses to start with an expired deadline. If the
 host is killed, the provider deadline does not remove the saved enabled preference;
-run `--disable` to restore preferences. Do not start with another DNS proxy active:
-enabling a DNS proxy may disable another provider. Preserve the current Local DoH
-profile and test precedence before considering any configuration change.
+run `--disable` to restore preferences. Do not start with another DNS proxy active
+(for example a corporate DNS Proxy such as MTTA): enabling a DNS proxy may
+disable another provider. Preserve the current MihomoBox DNS state (Global DNS
+with Enhanced TUN, or untouched system DNS with TUN off) and test precedence
+before considering any configuration change.
 
 Clients are under `Contents/Resources/Clients`. Run their executables with
 `system`, `udp`, `tcp`, or `https`, followed by case `a`, `b`, or `fresh`. These use
@@ -51,7 +58,7 @@ launches its embedded signed helper for a system resolver query.
 Record signed bundle/profile validation, active provider state, identity counters,
 per-case client results, selected proxy connection chain/failure behavior, and
 post-test rollback. Compare selected/control queries in both cache orders and
-concurrently with Local DoH and TUN enabled. A successful UDP test alone is not
+concurrently with Enhanced TUN (and its Global DNS) enabled. A successful UDP test alone is not
 proof of strict DNS routing: high-level resolution, shared caches, delegated
 processes and application-owned encrypted DNS may behave differently. Broader
 coverage (DNSService, A/AAAA/HTTPS, browser helpers, selector changes and sleep/wake)
@@ -72,8 +79,9 @@ must still verify the exported entitlements and provisioning profiles; adding
 Notarize alone is not evidence that the signing mismatch is resolved.
 See [Apple's Cloud notarization demonstration](https://developer.apple.com/videos/play/wwdc2023/10224/?time=807).
 No probe was installed or activated, and no real-flow identity claim follows
-from this build. The existing Local DoH profile remained healthy; both unsigned
-baseline clients resolved the same fixed test name to Fake IP.
+from this build. The Local DoH profile then in use (a feature since removed)
+remained healthy; both unsigned baseline clients resolved the same fixed test
+name to Fake IP.
 
 After the signed bundle is verified and ordinary macOS activation is approved,
 `./run-live-checks.py RESULT.json` exercises the basic selected/control/helper
@@ -100,7 +108,8 @@ the host's saved configuration by reloading preferences, then reported
 `missing_deadline`, with one top-level option. This distinguishes a provider
 configuration-delivery problem from missing activation or missing log output.
 Both attempts disabled the probe, restored the original profile, and verified
-Local DoH health. Neither attempt established per-app DNS behavior.
+the health of the Local DoH endpoint then in use. Neither attempt established
+per-app DNS behavior.
 
 The configuration adapter accepts the documented direct dictionary or one
 dictionary envelope containing exactly the two typed test fields. It still
@@ -130,10 +139,11 @@ public answers, and selected reused control Fake IP. A warm-cache helper query
 had no matching helper flow counter. Thus the matrix does **not** establish
 strict DNS isolation, even for the cases whose resolver call succeeded.
 
-The probe configuration is disabled after testing; the original profile and
-healthy Local DoH are restored. Keep this extension separate from the shipping
-App. Before any further live experiment, investigate Local DoH forwarding
-failures and require a new design for system resolver/cache separation.
+The probe configuration was disabled after testing, and the original profile
+and the then-healthy Local DoH were restored. Keep this extension separate from
+the shipping App. Local DoH has since been removed from MihomoBox, so any
+further live DNS-only experiment needs a new control upstream as well as a new
+design for system resolver/cache separation.
 See [the architecture decision](../../docs/decisions.md#signed-runtime-counterexample).
 
 ## Connection-level App Proxy experiment
@@ -150,8 +160,10 @@ the normal macOS VPN authorization. `--app-status` reads its state and
 after 240 seconds; the provider independently expires after 300 seconds.
 Never run the DNS-only and App Proxy sessions together.
 
-Selected DNS flows now use the existing Mihomo resolver on loopback TCP 1153,
-sharing TUN DNS policy without a public fallback or global DNS override. Selected TCP
+In this probe build, selected DNS flows use the existing Mihomo resolver on
+loopback TCP 1153, sharing TUN DNS policy without a public fallback or global
+DNS override (the main App's build resolves through the daemon instead; see
+[Main application integration](#main-application-integration)). Selected TCP
 connections to the two fixed public HTTPS test names use SOCKS domain-address
 requests through the existing managed Mihomo mixed listener. A missing or
 unexpected hostname is rejected; numeric cached answers are not assumed to
@@ -174,12 +186,14 @@ swiftc experiments/DNSIdentityProbe/Extension/SOCKSConnect.swift \
 /private/tmp/mihomo-app-proxy-socks-tests
 ```
 
-`doh` queries the installed Local DoH endpoint with native TLS verification.
-`doh-connect` uses that answer only if it is a Fake IP, opens TLS to it with the
-original fixed test hostname for certificate verification/SNI, and verifies an
-HTTP 200 response. It deliberately bypasses system name resolution to distinguish
-the Fake-IP connection path from system DNS integration; it is not evidence that
-macOS resolver caches are isolated.
+`doh` queries `https://127.0.0.1/dns-query`, the former Local DoH endpoint, with
+native TLS verification. `doh-connect` uses that answer only if it is a Fake IP,
+opens TLS to it with the original fixed test hostname for certificate
+verification/SNI, and verifies an HTTP 200 response. It deliberately bypassed
+system name resolution to distinguish the Fake-IP connection path from system
+DNS integration; it was not evidence that macOS resolver caches are isolated.
+MihomoBox no longer serves that endpoint, so both modes now fail with
+`native_doh` against a current installation.
 
 `run-mixed-cache-checks.py RESULT.json [CLIENTS_DIRECTORY]` checks selected
 Proxy/control DIRECT, selected REJECT, and swapped policies. It retains existing
@@ -188,6 +202,8 @@ rules and connection chains, and restores the original profile in `finally`.
 A separate 230-second watchdog restores only while this test's profile remains
 active. No DNS cache is flushed. Native DoH and fresh system queries are recorded
 separately, so a working connection path cannot mask a failed DNS integration.
+Because it depends on the `doh` and `doh-connect` modes, this check cannot pass
+against a current MihomoBox; its earlier results are historical.
 
 The clients must be independent applications for the positive App Proxy test:
 copy the Cloud-signed `MihomoDNSSelected.app` and `MihomoDNSControl.app` unchanged
@@ -246,7 +262,7 @@ AI mode forwards general TCP names, IPv4/IPv6 destinations and ports through the
 managed core's mixed SOCKS listener at `127.0.0.1:7897`. The 30-second TCP limit
 covers establishment only, allowing streaming and WebSockets after connection.
 Explicit TCP/UDP loopback forwarding stays local for authentication callbacks and local MCP services.
-DNS now goes through the shared Mihomo resolver on TCP 1153. Other UDP uses SOCKS5 UDP
+In this probe build, DNS goes through the shared Mihomo resolver on TCP 1153. Other UDP uses SOCKS5 UDP
 ASSOCIATE with a loopback relay, rejects fragmented SOCKS datagrams, and expires
 after 180 seconds idle. Upstream UDP support remains dependent on the selected
 node. The provider caps AI mode at 1024 flows. Failure closes the affected flow;
@@ -303,9 +319,30 @@ The main App now builds these provider sources as a separate system-extension
 identity (`dev.linsheng.mihomo-app.app-proxy`) with `MAIN_APP_PROXY`. That variant
 requires `routing: per-application-v1`, assigning ChatGPT, Codex CLI, Claude,
 and Claude CLI to loopback ports 17971, 17972, 17973 and 17974 respectively.
-TCP, UDP and DoH all use that assignment; host-only CLI attribution is rejected.
+TCP and UDP use that assignment; host-only CLI attribution is rejected.
 The standalone experiment retains its 7897 legacy behavior for existing tests.
 Signature discovery is shared from `Sources/MihomoBoxApp/AIAppTargets.swift`.
 See `docs/tray-and-controller.md` for the Config UI, root transaction and
 migration/validation limitations. Historical Cloud34 live results do not count
 as live acceptance of the new main-App extension.
+
+DNS transport differs by build. With `MAIN_APP_PROXY`, `AppProxyDNSRequest`
+opens no socket: it sends each captured query to the root daemon over the
+privileged Mach service `dev.linsheng.mihomo.daemon.control` as control
+operation `dns.resolve` (protocol 3, query and answer in the XPC `payload`
+field). The daemon serves that operation only to this extension's signing
+identifier and answers from Mihomo DNS at `127.0.0.1:1153`, so another
+product's port-53 DNS Proxy (such as MTTA) never sees the forwarded query. The extension
+shares one connection whose peer requirement is the release certificate
+family, waits at most 6 seconds, and fails closed with no system-resolver or
+public fallback; an older daemon rejects the operation, so upgrade the daemon
+with the App. The main extension's entitlements
+(`Config/AppProxyExtension.entitlements`) add a
+`com.apple.security.temporary-exception.mach-lookup.global-name` exception for
+that service. The probe build (without `MAIN_APP_PROXY`) keeps the TCP 1153
+transport and needs no such exception. `Tests/Fixtures/app-proxy-dns-xpc.swift`
+covers five fail-closed cases of the XPC transport;
+`Tests/Fixtures/app-proxy-dns.swift` covers the probe's TCP transport. Not yet
+verified on a device: whether the mach-lookup exception works for the
+sandboxed system extension, and whether per-app DNS reaches the App Proxy while
+MTTA's DNS Proxy is active. See `docs/operations.md` for failure diagnosis.

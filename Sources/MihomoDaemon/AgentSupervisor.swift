@@ -43,26 +43,12 @@ final class AgentSupervisor: @unchecked Sendable {
         (try? ProxyConfiguration.load(path: configPath).manageSystemDNS) ?? true
     }
 
-    var usesLocalDoH: Bool {
-        (try? ProxyConfiguration.load(path: configPath).localDoH) != nil
-    }
-
-    var localHttpDNSBaseConfigured: Bool {
-        guard let configuration = try? ProxyConfiguration.load(path: configPath) else {
-            return false
-        }
-        return configuration.localDoH == LocalDoHConfiguration()
-            && !configuration.manageSystemDNS
-            && configuration.enhancedTUNEnabled != nil
-    }
-
     var globalDNSFallbackConfigured: Bool {
         guard let configuration = try? ProxyConfiguration.load(path: configPath) else {
             return false
         }
         return configuration.usesGlobalDNSFallback
             && configuration.manageSystemDNS
-            && configuration.localDoH == nil
             && configuration.expectsEnhancedTUN
     }
 
@@ -76,39 +62,6 @@ final class AgentSupervisor: @unchecked Sendable {
 
     var resumesEnhancedTUN: Bool {
         (try? ProxyConfiguration.load(path: configPath).resumesEnhancedTUN) ?? false
-    }
-
-    var localDoHIdentityPrepared: Bool {
-        let support = URL(fileURLWithPath: configPath).deletingLastPathComponent()
-        let required: [(String, mode_t)] = [
-            ("local-doh/ca.crt", 0o644),
-            ("local-doh/ca.der", 0o644),
-            ("local-doh/server.crt", 0o644),
-            ("local-doh/server.key", 0o600),
-            ("local-doh/certificate.sha1", 0o600),
-        ]
-        return required.allSatisfy { relative, expectedMode in
-            var metadata = stat()
-            let path = support.appendingPathComponent(relative).path
-            return lstat(path, &metadata) == 0
-                && metadata.st_mode & S_IFMT == S_IFREG
-                && metadata.st_uid == 0
-                && metadata.st_gid == 0
-                && metadata.st_mode & 0o777 == expectedMode
-        }
-    }
-
-    /// Generation-bound passive backend readiness, including TUN-off standby.
-    /// This affects status only; every DoH packet still goes through Mihomo IPC.
-    var localDoHBackendReady: Bool {
-        guard isRunning,
-              let snapshot = try? expectedHealthSnapshot(),
-              LocalDoHIPC.socketIsProtected()
-        else { return false }
-        let health = snapshot.health
-        return health.controllerReachable
-            && health.mihomoDNSReady
-            && health.networkConsistent
     }
 
     func start() throws {

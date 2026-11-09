@@ -65,7 +65,8 @@ final class AppProbeProvider: NEAppProxyProvider {
         let settings = NETunnelNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
         // Advertise the managed TUN DNS address, not loopback port 53: macOS
         // can resolve selected apps outside handleNewFlow for loopback DNS,
-        // where nothing listens. Captured DNS still goes to shared TCP 1153.
+        // where nothing listens. The main App Proxy resolves captured DNS
+        // through the root daemon over XPC; the probe build uses TCP 1153.
         let dns = NEDNSSettings(servers: ["198.18.0.2"])
         // App rules scope this resolver to selected applications. An empty
         // match domain publishes a supplemental default resolver and can send

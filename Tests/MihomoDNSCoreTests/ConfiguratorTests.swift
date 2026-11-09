@@ -48,11 +48,10 @@ final class ConfiguratorTests: XCTestCase {
             secretFile: directory.appendingPathComponent("secret").path, runtimeConfig: runtime.path
         )
         let policies = [
-            ProxyConfiguration(manageSystemDNS: false, enhancedTUNEnabled: true, localDoH: .init()),
-            ProxyConfiguration(manageSystemDNS: false, enhancedTUNEnabled: false, localDoH: .init()),
             ProxyConfiguration(manageSystemDNS: true, globalDNSFallbackEnabled: true, enhancedTUNEnabled: true),
-            ProxyConfiguration(manageSystemDNS: false, enhancedTUNEnabled: false, localDoH: .init()),
-            ProxyConfiguration(manageSystemDNS: false, enhancedTUNEnabled: true, localDoH: .init()),
+            ProxyConfiguration(manageSystemDNS: false, globalDNSFallbackEnabled: false, enhancedTUNEnabled: false),
+            ProxyConfiguration(manageSystemDNS: true, globalDNSFallbackEnabled: true, enhancedTUNEnabled: true),
+            ProxyConfiguration(manageSystemDNS: false, globalDNSFallbackEnabled: false, enhancedTUNEnabled: false),
         ]
         for filter in ["", "  fake-ip-filter-mode: whitelist\n  fake-ip-filter: ['+.example.invalid']\n",
                        "  fake-ip-filter-mode: rule\n  fake-ip-filter:\n    - DOMAIN-SUFFIX,example.invalid,real-ip\n    - MATCH,fake-ip\n"] {
@@ -370,7 +369,7 @@ extension ConfiguratorTests {
         XCTAssertEqual(daemon["loopbackAlias"] as? String, "127.0.0.53")
     }
 
-    func testLocalDoHRuntimeRemovesMihomoTLSDoHOwnership() throws {
+    func testLegacyControllerSurfacesAreAlwaysStripped() throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let config = directory.appendingPathComponent("config.yaml")
@@ -387,13 +386,10 @@ extension ConfiguratorTests {
           enable: true
 
         """.write(to: config, atomically: true, encoding: .utf8)
-        let runtimeConfiguration = ProxyConfiguration(
-            manageSystemDNS: false,
-            enhancedTUNEnabled: false,
-            localDoH: LocalDoHConfiguration()
-        )
-        let encoder = JSONEncoder()
-        try encoder.encode(runtimeConfiguration).write(to: runtime)
+        XCTAssertTrue(MihomoConfigurator.hasLegacyControllerSurface(configPath: config.path))
+        try JSONEncoder().encode(ProxyConfiguration(
+            manageSystemDNS: false, globalDNSFallbackEnabled: false, enhancedTUNEnabled: false
+        )).write(to: runtime)
 
         try MihomoConfigurator.apply(MihomoConfigurator.Paths(
             config: config.path,
@@ -401,67 +397,62 @@ extension ConfiguratorTests {
             runtimeConfig: runtime.path
         ), resolver: StubResolver(answers: [:]))
         let result = try String(contentsOf: config, encoding: .utf8)
+        XCTAssertFalse(MihomoConfigurator.hasLegacyControllerSurface(configPath: config.path))
         XCTAssertFalse(result.contains("external-controller-tls:"))
-        XCTAssertTrue(MihomoConfigurator.hasLocalDoHIPC(configPath: config.path))
         XCTAssertFalse(result.contains("/user-path"))
-        XCTAssertTrue(result.contains("fake-ip-filter-mode: rule"))
-        XCTAssertTrue(result.contains("MATCH,real-ip"))
         XCTAssertFalse(result.contains("\ntls:"))
         XCTAssertFalse(result.contains("/tmp/user.crt"))
+        // Standby answers with real IPs and owns no TUN.
+        XCTAssertTrue(result.contains("fake-ip-filter-mode: rule"))
+        XCTAssertTrue(result.contains("MATCH,real-ip"))
         XCTAssertTrue(result.contains("tun:\n  enable: false"))
     }
 
-    func testLocalDoHConfigurationStoreKeepsBaseDNSWhileTUNToggles() throws {
+    func testPortFiftyThreeBridgeRunsOnlyForGlobalDNSOrAPlainForwarder() {
+        // Global DNS + TUN needs the bridge macOS resolves through.
+        XCTAssertTrue(ProxyConfiguration(
+            manageSystemDNS: true, globalDNSFallbackEnabled: true, enhancedTUNEnabled: true
+        ).servesSystemDNSBridge)
+        // Standby must not bind 127.0.0.53:53 without the managed alias.
+        XCTAssertFalse(ProxyConfiguration(
+            manageSystemDNS: false, globalDNSFallbackEnabled: false, enhancedTUNEnabled: false
+        ).servesSystemDNSBridge)
+        // A configuration without TUN state is the plain forwarder.
+        XCTAssertTrue(ProxyConfiguration(manageSystemDNS: false).servesSystemDNSBridge)
+        XCTAssertTrue(ProxyConfiguration(manageSystemDNS: false).isPlainForwarder)
+        XCTAssertFalse(ProxyConfiguration(
+            manageSystemDNS: false, globalDNSFallbackEnabled: false, enhancedTUNEnabled: false
+        ).isPlainForwarder)
+        XCTAssertFalse(ProxyConfiguration().isPlainForwarder)
+    }
+
+    func testDNSOwnershipStoreCouplesGlobalDNSToTUN() throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let runtime = directory.appendingPathComponent("daemon.json")
-        let encoder = JSONEncoder()
-        try encoder.encode(ProxyConfiguration(
-            manageSystemDNS: false,
-            enhancedTUNEnabled: true,
-            localDoH: LocalDoHConfiguration()
+        try JSONEncoder().encode(ProxyConfiguration(
+            manageSystemDNS: false, globalDNSFallbackEnabled: false, enhancedTUNEnabled: false
         )).write(to: runtime)
 
-        try LocalDoHConfigurationStore.ensureBaseService(configurationPath: runtime.path)
+        try DNSOwnershipStore.setEnhancedTUN(true, configurationPath: runtime.path)
         var configured = try ProxyConfiguration.load(path: runtime.path)
-        XCTAssertFalse(configured.manageSystemDNS)
-        XCTAssertEqual(configured.localDoH?.endpoint, Endpoint(host: "127.0.0.1", port: 443))
-        XCTAssertFalse(configured.expectsEnhancedTUN)
-        XCTAssertTrue(configured.resumesEnhancedTUN)
-
-        try LocalDoHConfigurationStore.setEnhancedTUN(true, configurationPath: runtime.path)
-        configured = try ProxyConfiguration.load(path: runtime.path)
         XCTAssertTrue(configured.expectsEnhancedTUN)
-        XCTAssertFalse(configured.manageSystemDNS)
-        XCTAssertNotNil(configured.localDoH)
+        XCTAssertTrue(configured.resumesEnhancedTUN)
+        XCTAssertTrue(configured.manageSystemDNS)
+        XCTAssertTrue(configured.usesGlobalDNSFallback)
+        XCTAssertEqual(configured.managedSystemDNSServers, ["127.0.0.53"])
+        XCTAssertEqual(configured.managedDNSProbeEndpoint, Endpoint(host: "127.0.0.53", port: 53))
+        XCTAssertEqual(configured.upstreamListen, Endpoint(host: "127.0.0.1", port: 1054))
+        XCTAssertFalse(try DNSOwnershipStore.requiresRewrite(configurationPath: runtime.path))
 
-        try LocalDoHConfigurationStore.setEnhancedTUN(false, configurationPath: runtime.path)
+        try DNSOwnershipStore.setEnhancedTUN(false, configurationPath: runtime.path)
         configured = try ProxyConfiguration.load(path: runtime.path)
         XCTAssertFalse(configured.expectsEnhancedTUN)
+        XCTAssertFalse(configured.resumesEnhancedTUN)
         XCTAssertFalse(configured.manageSystemDNS)
-        XCTAssertNotNil(configured.localDoH)
-    }
-
-    func testExplicitTUNOffSurvivesReloadAndBaseMigration() throws {
-        let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let path = directory.appendingPathComponent("daemon.json")
-        try JSONEncoder().encode(ProxyConfiguration(
-            manageSystemDNS: false, enhancedTUNEnabled: false,
-            localDoH: LocalDoHConfiguration()
-        )).write(to: path)
-        XCTAssertFalse(try ProxyConfiguration.load(path: path.path).resumesEnhancedTUN)
-        try LocalDoHConfigurationStore.setEnhancedTUN(true, configurationPath: path.path)
-        try LocalDoHConfigurationStore.setEnhancedTUN(false, configurationPath: path.path)
-        let stored = try ProxyConfiguration.load(path: path.path)
-        XCTAssertFalse(stored.resumesEnhancedTUN)
-        XCTAssertFalse(stored.expectsEnhancedTUN)
-        try LocalDoHConfigurationStore.ensureBaseService(configurationPath: path.path)
-        XCTAssertFalse(try ProxyConfiguration.load(path: path.path).resumesEnhancedTUN)
-        try LocalDoHConfigurationStore.useGlobalDNSFallback(configurationPath: path.path)
-        XCTAssertTrue(try ProxyConfiguration.load(path: path.path).resumesEnhancedTUN)
-        try LocalDoHConfigurationStore.setEnhancedTUN(false, configurationPath: path.path)
-        XCTAssertFalse(try ProxyConfiguration.load(path: path.path).resumesEnhancedTUN)
+        XCTAssertFalse(configured.usesGlobalDNSFallback)
+        XCTAssertFalse(try DNSOwnershipStore.requiresRewrite(configurationPath: runtime.path))
+        XCTAssertEqual((try FileManager.default.attributesOfItem(atPath: runtime.path)[.posixPermissions] as? NSNumber)?.intValue, 0o600)
     }
 
     func testIndependentSavedSwitchesSurviveRuntimeFailureAndRestartMigration() throws {
@@ -472,8 +463,7 @@ extension ConfiguratorTests {
             for proxy in [false, true] {
                 // The old running state deliberately differs from the new choice.
                 try JSONEncoder().encode(ProxyConfiguration(
-                    manageSystemDNS: false, enhancedTUNEnabled: !tun,
-                    localDoH: LocalDoHConfiguration()
+                    manageSystemDNS: !tun, globalDNSFallbackEnabled: !tun, enhancedTUNEnabled: !tun
                 )).write(to: path)
                 try RuntimeSwitchPreferences.setTUN(tun, configurationPath: path.path)
                 try RuntimeSwitchPreferences.setSystemProxy(proxy, configurationPath: path.path)
@@ -483,13 +473,14 @@ extension ConfiguratorTests {
                 XCTAssertEqual(saved.resumesEnhancedTUN, tun)
                 XCTAssertEqual(saved.systemProxyEnabled, proxy)
                 // A runtime transaction restores its checkpoint on failure.
-                try LocalDoHConfigurationStore.setEnhancedTUN(tun, configurationPath: path.path)
+                try DNSOwnershipStore.setEnhancedTUN(tun, configurationPath: path.path)
                 try beforeTransition.write(to: path)
-                try LocalDoHConfigurationStore.ensureBaseService(configurationPath: path.path)
+                XCTAssertFalse(try DNSOwnershipStore.rewriteNormalized(configurationPath: path.path))
                 saved = try ProxyConfiguration.load(path: path.path)
                 XCTAssertEqual(saved.resumesEnhancedTUN, tun)
                 XCTAssertEqual(saved.systemProxyEnabled, proxy)
-                XCTAssertFalse(saved.expectsEnhancedTUN)
+                XCTAssertEqual(saved.expectsEnhancedTUN, !tun)
+                XCTAssertEqual(saved.manageSystemDNS, !tun)
                 XCTAssertEqual((try FileManager.default.attributesOfItem(atPath: path.path)[.posixPermissions] as? NSNumber)?.intValue, 0o600)
             }
         }
@@ -498,42 +489,54 @@ extension ConfiguratorTests {
         XCTAssertTrue(legacy.resumesEnhancedTUN)
     }
 
-    func testLegacyStickyHistoryCannotOverrideLastTUNChoice() throws {
+    func testLocalDoHUpgradeNormalizesOwnershipFromTheLastTUNChoice() throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let path = directory.appendingPathComponent("daemon.json")
         for enabled in [false, true] {
-            try JSONEncoder().encode(ProxyConfiguration(
-                manageSystemDNS: false, enhancedTUNEnabled: enabled,
-                enhancedTUNPreviouslyEnabled: true, localDoH: LocalDoHConfiguration()
-            )).write(to: path)
-            XCTAssertEqual(try ProxyConfiguration.load(path: path.path).resumesEnhancedTUN, enabled)
-            try LocalDoHConfigurationStore.ensureBaseService(configurationPath: path.path)
-            try LocalDoHConfigurationStore.ensureBaseService(configurationPath: path.path)
-            let migrated = try ProxyConfiguration.load(path: path.path)
-            XCTAssertFalse(migrated.expectsEnhancedTUN)
-            XCTAssertEqual(migrated.resumesEnhancedTUN, enabled)
+            // LocalHttpDns releases stored manageSystemDNS=false in both TUN
+            // states, plus a sticky history flag and their own endpoint block.
+            var object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(
+                ProxyConfiguration(
+                    manageSystemDNS: false, enhancedTUNEnabled: enabled,
+                    enhancedTUNPreviouslyEnabled: true
+                )
+            )) as? [String: Any])
+            object["localDoH"] = [
+                "endpoint": ["host": "127.0.0.1", "port": 443],
+                "serverURL": "https://127.0.0.1/dns-query",
+            ]
+            try JSONSerialization.data(withJSONObject: object).write(to: path)
+
+            let loaded = try ProxyConfiguration.load(path: path.path)
+            XCTAssertEqual(loaded.expectsEnhancedTUN, enabled)
+            XCTAssertEqual(loaded.resumesEnhancedTUN, enabled)
+            XCTAssertEqual(loaded.manageSystemDNS, enabled)
+            XCTAssertEqual(loaded.usesGlobalDNSFallback, enabled)
+            XCTAssertTrue(try DNSOwnershipStore.requiresRewrite(configurationPath: path.path))
+            XCTAssertTrue(try DNSOwnershipStore.rewriteNormalized(configurationPath: path.path))
+            XCTAssertFalse(try DNSOwnershipStore.rewriteNormalized(configurationPath: path.path))
+
+            let stored = try XCTUnwrap(JSONSerialization.jsonObject(
+                with: Data(contentsOf: path)
+            ) as? [String: Any])
+            XCTAssertNil(stored["localDoH"])
+            XCTAssertEqual(stored["manageSystemDNS"] as? Bool, enabled)
+            XCTAssertEqual(stored["globalDNSFallbackEnabled"] as? Bool, enabled)
+            XCTAssertEqual(stored["enhancedTUNEnabled"] as? Bool, enabled)
+            XCTAssertEqual((try FileManager.default.attributesOfItem(atPath: path.path)[.posixPermissions] as? NSNumber)?.intValue, 0o600)
         }
         XCTAssertTrue(ProxyConfiguration().resumesEnhancedTUN, "Pre-toggle releases retain their always-on state")
     }
 
-    func testGlobalDNSFallbackAndReturnToLocalStandby() throws {
+    func testGlobalDNSWithTUNRendersFakeIPRouteAndReturnsToStandby() throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let runtime = directory.appendingPathComponent("daemon.json")
         try JSONEncoder().encode(ProxyConfiguration(
-            manageSystemDNS: false, enhancedTUNEnabled: false,
-            localDoH: LocalDoHConfiguration()
+            manageSystemDNS: false, globalDNSFallbackEnabled: false, enhancedTUNEnabled: false
         )).write(to: runtime)
-        try LocalDoHConfigurationStore.useGlobalDNSFallback(configurationPath: runtime.path)
-        let fallback = try ProxyConfiguration.load(path: runtime.path)
-        XCTAssertTrue(fallback.usesGlobalDNSFallback)
-        XCTAssertTrue(fallback.expectsEnhancedTUN)
-        XCTAssertTrue(fallback.manageSystemDNS)
-        XCTAssertNil(fallback.localDoH)
-        XCTAssertEqual(fallback.managedSystemDNSServers, ["127.0.0.53"])
-        XCTAssertEqual(fallback.managedDNSProbeEndpoint, Endpoint(host: "127.0.0.53", port: 53))
-        XCTAssertEqual(fallback.upstreamListen, Endpoint(host: "127.0.0.1", port: 1054))
+        try DNSOwnershipStore.setEnhancedTUN(true, configurationPath: runtime.path)
 
         let config = directory.appendingPathComponent("config.yaml")
         try profile.replacingOccurrences(of: "auto-route: true", with: "auto-route: false")
@@ -551,15 +554,14 @@ extension ConfiguratorTests {
         try MihomoConfigurator.apply(paths, resolver: StubResolver(answers: [:]))
         XCTAssertEqual(once, try String(contentsOf: config, encoding: .utf8))
 
-        try LocalDoHConfigurationStore.setEnhancedTUN(false, configurationPath: runtime.path)
+        try DNSOwnershipStore.setEnhancedTUN(false, configurationPath: runtime.path)
         let standby = try ProxyConfiguration.load(path: runtime.path)
         XCTAssertFalse(standby.usesGlobalDNSFallback)
         XCTAssertFalse(standby.manageSystemDNS)
         XCTAssertFalse(standby.expectsEnhancedTUN)
-        XCTAssertEqual(standby.localDoH, LocalDoHConfiguration())
     }
 
-    func testFallbackRejectsMixedOwnershipAndDisabledTUN() throws {
+    func testGlobalDNSRejectsMixedOwnershipAndDisabledTUN() throws {
         let valid = ProxyConfiguration(
             globalDNSFallbackEnabled: true, enhancedTUNEnabled: true
         )
@@ -567,70 +569,12 @@ extension ConfiguratorTests {
         for change in [
             { (c: inout ProxyConfiguration) in c.enhancedTUNEnabled = false },
             { (c: inout ProxyConfiguration) in c.enhancedTUNEnabled = nil },
-            { (c: inout ProxyConfiguration) in c.localDoH = LocalDoHConfiguration() },
             { (c: inout ProxyConfiguration) in c.manageSystemDNS = false },
         ] {
             var invalid = valid
             change(&invalid)
             XCTAssertThrowsError(try invalid.validate())
         }
-    }
-
-    func testFormerFixedDoHEndpointMigratesWithoutAcceptingOtherPaths() throws {
-        let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let runtime = directory.appendingPathComponent("daemon.json")
-        var old = ProxyConfiguration(
-            manageSystemDNS: false, enhancedTUNEnabled: false,
-            localDoH: LocalDoHConfiguration(
-                endpoint: Endpoint(host: "127.0.0.1", port: 9443),
-                serverURL: "https://127.0.0.1:9443/dns-query"
-            )
-        )
-        try JSONEncoder().encode(old).write(to: runtime)
-        XCTAssertEqual(try ProxyConfiguration.load(path: runtime.path).localDoH, LocalDoHConfiguration())
-        try LocalDoHConfigurationStore.ensureBaseService(configurationPath: runtime.path)
-        let persisted = try JSONDecoder().decode(ProxyConfiguration.self, from: Data(contentsOf: runtime))
-        XCTAssertEqual(persisted.localDoH?.endpoint.port, 443)
-        old.localDoH?.privateKeyPath = "/tmp/untrusted.key"
-        try JSONEncoder().encode(old).write(to: runtime)
-        XCTAssertThrowsError(try ProxyConfiguration.load(path: runtime.path))
-    }
-
-    func testFallbackTransactionRemovesProfileOnlyAfterHealthyNewRuntime() throws {
-        var events: [String] = []
-        try GlobalDNSFallbackTransition.run(
-            stopAndRestore: { events.append("restore"); return true },
-            configure: { events.append("configure") },
-            startAndValidate: { events.append("healthy") },
-            finish: { events.append("remove-profile") }
-        )
-        XCTAssertEqual(events, ["restore", "configure", "healthy", "remove-profile"])
-    }
-
-    func testFallbackTransactionStopsOnFailureAndPreservesProfile() {
-        enum TestFailure: Error { case failed }
-        for failingStage in ["configure", "start"] {
-            var events: [String] = []
-            XCTAssertThrowsError(try GlobalDNSFallbackTransition.run(
-                stopAndRestore: { events.append("restore"); return true },
-                configure: {
-                    events.append("configure")
-                    if failingStage == "configure" { throw TestFailure.failed }
-                },
-                startAndValidate: { events.append("start"); throw TestFailure.failed },
-                finish: { events.append("remove-profile") }
-            ))
-            XCTAssertEqual(events.last, "restore")
-            XCTAssertEqual(events.filter { $0 == "restore" }.count, 2)
-            XCTAssertFalse(events.contains("remove-profile"))
-        }
-        var mutated = false
-        XCTAssertThrowsError(try GlobalDNSFallbackTransition.run(
-            stopAndRestore: { false }, configure: { mutated = true },
-            startAndValidate: { mutated = true }, finish: { mutated = true }
-        ))
-        XCTAssertFalse(mutated)
     }
 
     func testLegacyRuntimeWithoutExplicitTUNIntentPreservesEnabledProfile() throws {

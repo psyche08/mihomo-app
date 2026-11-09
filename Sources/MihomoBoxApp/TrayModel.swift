@@ -237,7 +237,7 @@ struct TraySnapshot: Equatable, Sendable {
     }
     if daemonReachable, !agentRunning {
       return networkHealthy == true
-        ? "MihomoBox · Mihomo stopped; LocalHttpDns is independent"
+        ? "MihomoBox · Mihomo stopped, system DNS restored"
         : "MihomoBox · Mihomo stopped, state unconfirmed"
     }
     if controllerReachable && networkHealthy == true {

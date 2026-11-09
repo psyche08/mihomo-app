@@ -258,13 +258,8 @@ final class AppServicePolicyTests: XCTestCase {
       InstallerCoordinator.classification("configuration file test failed"), "profile_rejected")
     XCTAssertEqual(InstallerCoordinator.classification("timed out waiting for daemon"), "timeout")
     XCTAssertEqual(
-      InstallerCoordinator.classification("the root-owned Local DoH profile is invalid"),
-      "local_doh_profile_generation"
-    )
-    XCTAssertEqual(
-      InstallerCoordinator.classification(
-        "macOS did not trust the Local DoH certificate authority"),
-      "local_doh_trust"
+      InstallerCoordinator.classification("macOS did not remove the Local DoH profile"),
+      "legacy_local_doh_cleanup"
     )
     XCTAssertEqual(InstallerCoordinator.classification("arbitrary profile contents"), "other")
   }
@@ -720,8 +715,7 @@ final class AppServicePolicyTests: XCTestCase {
     XCTAssertTrue(cli.contains("InstallerProtocolProbeExit.legacy.rawValue"))
     XCTAssertTrue(cli.contains("received == 2 && expected == 3"))
     XCTAssertTrue(cli.contains("InstallerProtocolProbeExit.versionedPredecessor.rawValue"))
-    XCTAssertTrue(cli.contains("try writePayload(try sendControl(.localDoHStatus))"))
-    XCTAssertTrue(cli.contains("try writePayload(try sendControl(.installLocalDoH))"))
+    XCTAssertFalse(cli.contains("local-doh"))
     XCTAssertTrue(installer.contains("probe_status\" -eq 14 && \"$marker_present\" -ne 1"))
     XCTAssertFalse(cli.contains("ControlRequest(version: 1"))
     XCTAssertFalse(installer.contains("--client-app-bundle"))

@@ -3,233 +3,72 @@ import MihomoControl
 import XCTest
 
 final class ControlProtocolTests: XCTestCase {
-    func testGlobalDoHProfileOmitsSupplementalMatchDomains() throws {
-        let root = Data([1, 2, 3])
-        let data = try LocalDoHProfileDocument.data(
-            for: LocalDoHDomainPlan(domains: [""]), rootCertificate: root
-        )
-        let profile = try XCTUnwrap(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
-        let payloads = try XCTUnwrap(profile["PayloadContent"] as? [[String: Any]])
-        let dns = try XCTUnwrap(payloads.last?["DNSSettings"] as? [String: Any])
-        XCTAssertNil(dns["SupplementalMatchDomains"])
-        XCTAssertEqual(dns["ServerURL"] as? String, "https://127.0.0.1/dns-query")
-        XCTAssertEqual(LocalDoHProfileDocument.validatedDomainCount(in: data, expectedRootCertificate: root), 1)
-        XCTAssertEqual(LocalDoHProfileInspection.validatedInstalled(
-            propertyList: data, expectedRootCertificate: root
-        ), LocalDoHProfileInspection(installed: true, domainCount: 1))
-    }
     func testRoutineAuditSuppressesOnlyHighFrequencySuccessfulReads() {
         XCTAssertFalse(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .trayState))
         XCTAssertFalse(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .controllerStreamNext))
         XCTAssertTrue(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .status))
         XCTAssertTrue(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .setTUN))
         XCTAssertTrue(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .reloadProfile))
-        XCTAssertTrue(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .localDoHStatus))
-        XCTAssertTrue(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .installLocalDoH))
+        XCTAssertFalse(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .resolveDNS))
     }
 
-    func testLocalDoHStatusRoundTripsWithoutProfileDetails() throws {
-        let status = LocalDoHStatus(
-            serverPrepared: true,
-            profileInstalled: true,
-            profileInspectionSucceeded: true,
-            runtimeHealthy: true,
-            systemDNSManaged: false,
-            installedDomainCount: 2,
-            preparedDomainCount: 5_123
-        )
-
-        let decoded = try JSONDecoder().decode(
-            LocalDoHStatus.self,
-            from: JSONEncoder().encode(status)
-        )
-
-        XCTAssertEqual(decoded, status)
+    func testRemovedLocalDoHOperationsNoLongerDecode() {
+        for removed in ["local-doh.status", "local-doh.install", "local-doh.trust-certificate", "local-doh.prepare-certificate-trust", "runtime.set-dns-mode"] {
+            XCTAssertNil(ControlOperation(rawValue: removed), removed)
+        }
+        XCTAssertEqual(ControlOperation(rawValue: "dns.resolve"), .resolveDNS)
     }
 
-    func testLocalDoHStatusDefaultsPreparedCountForOlderResponses() throws {
-        let data = Data(
-            """
-            {
-              "server_prepared": false,
-              "profile_installed": false,
-              "profile_inspection_succeeded": true,
-              "runtime_healthy": false,
-              "installed_domain_count": 0
-            }
-            """.utf8
-        )
-
-        XCTAssertEqual(
-            try JSONDecoder().decode(LocalDoHStatus.self, from: data).preparedDomainCount,
-            0
-        )
-    }
-
-    func testLocalDoHPlanSummaryRoundTripsWithoutExpandedDomains() throws {
-        let summary = LocalDoHPlanSummary(
-            domainCount: 5_123,
-            omittedRuleCount: 2,
-            exactDomainApproximationCount: 3,
-            expandedGeoSiteRuleCount: 7,
-            unrepresentableGeoSiteEntryCount: 11,
-            invertedGeoSiteRuleCount: 1
-        )
-
-        XCTAssertEqual(
-            try JSONDecoder().decode(
-                LocalDoHPlanSummary.self,
-                from: JSONEncoder().encode(summary)
-            ),
-            summary
-        )
-    }
-
-    func testFallbackStatusAndStaleProfilePresence() throws {
-        let status = LocalDoHStatus(
-            serverPrepared: true, profileInstalled: false,
-            profileInspectionSucceeded: true, runtimeHealthy: false,
-            systemDNSManaged: true, globalDNSFallback: true,
-            fallbackProfileRemovalRequired: true
-        )
-        XCTAssertEqual(status, try JSONDecoder().decode(
-            LocalDoHStatus.self, from: JSONEncoder().encode(status)
-        ))
-        let stale: [String: Any] = [
-            "PayloadIdentifier": LocalDoHStatus.profileIdentifier,
-            "PayloadContent": [["DNSSettings": [
-                "ServerURL": "https://127.0.0.1:9443/dns-query",
-                "SupplementalMatchDomains": ["example.com"],
-            ]]],
-        ]
-        let data = try PropertyListSerialization.data(fromPropertyList: stale, format: .xml, options: 0)
-        XCTAssertEqual(LocalDoHProfileInspection.presence(in: data), true)
-        XCTAssertNil(LocalDoHProfileDocument.validatedDomainCount(in: data))
-        XCTAssertEqual(LocalDoHProfileInspection.presence(in: Data(
-            "There are no configuration profiles installed in the system domain".utf8
-        )), false)
-        XCTAssertNil(LocalDoHProfileInspection.presence(in: Data("unexpected output".utf8)))
-    }
-
-    func testPreparedLocalDoHProfileRejectsAlteredPrivilegedFields() throws {
-        let rootCertificate = Data([0x30, 0x03, 0x02, 0x01, 0x00])
-        let valid = try LocalDoHProfileDocument.data(
-            for: LocalDoHDomainPlan(domains: ["example.com", "claude.ai"]),
-            rootCertificate: rootCertificate
-        )
-        XCTAssertEqual(
-            LocalDoHProfileDocument.validatedDomainCount(
-                in: valid,
-                expectedRootCertificate: rootCertificate
-            ),
-            2
-        )
-
-        var object = try XCTUnwrap(
-            PropertyListSerialization.propertyList(
-                from: valid,
-                options: [],
-                format: nil
-            ) as? [String: Any]
-        )
-        var content = try XCTUnwrap(object["PayloadContent"] as? [[String: Any]])
-        let dnsIndex = try XCTUnwrap(content.firstIndex(where: {
-            $0["PayloadType"] as? String == "com.apple.dnsSettings.managed"
-        }))
-        var settings = try XCTUnwrap(content[dnsIndex]["DNSSettings"] as? [String: Any])
-        settings["ServerURL"] = "https://example.invalid/dns-query"
-        content[dnsIndex]["DNSSettings"] = settings
-        object["PayloadContent"] = content
-        let altered = try PropertyListSerialization.data(
-            fromPropertyList: object,
-            format: .xml,
-            options: 0
-        )
-        XCTAssertNil(LocalDoHProfileDocument.validatedDomainCount(in: altered))
-        XCTAssertNil(
-            LocalDoHProfileDocument.validatedDomainCount(
-                in: valid,
-                expectedRootCertificate: Data([0x01])
+    func testAppProxyExtensionIsConfinedToDNSResolution() {
+        for operation in ControlOperation.allCases {
+            XCTAssertEqual(
+                AppProxyDNSPolicy.permits(operation, role: .appProxyExtension),
+                operation == .resolveDNS,
+                operation.rawValue
             )
-        )
-    }
-
-    func testLocalDoHProfileInspectionReturnsOnlyFixedProfileStateAndCount() throws {
-        let profile: [String: Any] = [
-            "_computerlevel": [[
-                "PayloadIdentifier": LocalDoHStatus.profileIdentifier,
-                "PayloadContent": [[
-                    "DNSSettings": [
-                        "SupplementalMatchDomains": ["example.com", "claude.ai"],
-                    ],
-                ]],
-            ]],
-            "unrelated": [[
-                "PayloadIdentifier": "com.example.other",
-                "PayloadContent": [[
-                    "DNSSettings": [
-                        "SupplementalMatchDomains": ["private.example"],
-                    ],
-                ]],
-            ]],
-        ]
-        let data = try PropertyListSerialization.data(
-            fromPropertyList: profile,
-            format: .xml,
-            options: 0
-        )
-
-        XCTAssertEqual(
-            LocalDoHProfileInspection.inspect(propertyList: data),
-            LocalDoHProfileInspection(installed: true, domainCount: 2)
-        )
-        XCTAssertNil(LocalDoHProfileInspection.inspect(propertyList: Data("not a plist".utf8)))
-    }
-
-    func testInstalledLocalDoHProfileMustMatchCurrentRootCertificate() throws {
-        let plan = LocalDoHDomainPlan(
-            domains: ["example.com"],
-            omittedRules: 0,
-            exactDomainApproximations: 0,
-            expandedGeoSiteRules: 0,
-            unrepresentableGeoSiteEntries: 0,
-            invertedGeoSiteRules: 0
-        )
-        let currentRoot = Data([0x01, 0x02, 0x03])
-        let document = try LocalDoHProfileDocument.data(
-            for: plan,
-            rootCertificate: currentRoot
-        )
-        let installed: [String: Any] = [
-            "_computerlevel": [
-                try XCTUnwrap(
-                    PropertyListSerialization.propertyList(
-                        from: document,
-                        options: [],
-                        format: nil
-                    ) as? [String: Any]
-                )
-            ]
-        ]
-        let output = try PropertyListSerialization.data(
-            fromPropertyList: installed,
-            format: .xml,
-            options: 0
-        )
-
-        XCTAssertEqual(
-            LocalDoHProfileInspection.validatedInstalled(
-                propertyList: output,
-                expectedRootCertificate: currentRoot
-            ),
-            LocalDoHProfileInspection(installed: true, domainCount: 1)
-        )
-        XCTAssertNil(
-            LocalDoHProfileInspection.validatedInstalled(
-                propertyList: output,
-                expectedRootCertificate: Data([0xff])
+            XCTAssertEqual(
+                AppProxyDNSPolicy.permits(operation, role: .controller),
+                operation != .resolveDNS,
+                operation.rawValue
             )
+        }
+        XCTAssertEqual(
+            AppProxyDNSPolicy.extensionRequirement(certificateFamily: "anchor apple generic"),
+            "(anchor apple generic) and identifier \"dev.linsheng.mihomo-app.app-proxy\""
         )
+        XCTAssertLessThan(
+            AppProxyDNSPolicy.resolveTimeoutMilliseconds,
+            AppProxyDNSPolicy.clientTimeoutMilliseconds
+        )
+    }
+
+    func testAppProxyDNSAcceptsOnlyOneQuestionStandardQueries() {
+        let query = Data([0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0,
+                          7]) + Data("example".utf8) + Data([3]) + Data("com".utf8) + Data([0, 0, 1, 0, 1])
+        XCTAssertTrue(AppProxyDNSPolicy.isAcceptableQuery(query))
+        XCTAssertFalse(AppProxyDNSPolicy.isAcceptableQuery(query.prefix(11)))
+        XCTAssertFalse(AppProxyDNSPolicy.isAcceptableQuery(Data(repeating: 0, count: 65_536)))
+        var response = query; response[2] |= 0x80
+        XCTAssertFalse(AppProxyDNSPolicy.isAcceptableQuery(response))
+        var status = query; status[2] = 0x10
+        XCTAssertFalse(AppProxyDNSPolicy.isAcceptableQuery(status))
+        var twoQuestions = query; twoQuestions[5] = 2
+        XCTAssertFalse(AppProxyDNSPolicy.isAcceptableQuery(twoQuestions))
+        var noQuestion = query; noQuestion[5] = 0
+        XCTAssertFalse(AppProxyDNSPolicy.isAcceptableQuery(noQuestion))
+    }
+
+    func testAppProxyDNSResponseMustMatchQueryIdentityAndOpcode() {
+        let query = Data([0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0])
+        var negative = query; negative[2] = 0x81; negative[3] = 0x83
+        XCTAssertTrue(AppProxyDNSPolicy.isMatchingResponse(negative, for: query))
+        var wrongID = negative; wrongID[1] ^= 1
+        XCTAssertFalse(AppProxyDNSPolicy.isMatchingResponse(wrongID, for: query))
+        var notResponse = negative; notResponse[2] &= 0x7f
+        XCTAssertFalse(AppProxyDNSPolicy.isMatchingResponse(notResponse, for: query))
+        var wrongOpcode = negative; wrongOpcode[2] ^= 0x08
+        XCTAssertFalse(AppProxyDNSPolicy.isMatchingResponse(wrongOpcode, for: query))
+        XCTAssertFalse(AppProxyDNSPolicy.isMatchingResponse(negative.prefix(11), for: query))
     }
 
     func testComponentUpdatePackageBinaryRoundTrip() throws {
@@ -246,101 +85,6 @@ final class ControlProtocolTests: XCTestCase {
         XCTAssertEqual(decoded.formatVersion, ComponentUpdatePackage.currentFormatVersion)
         XCTAssertEqual(decoded.appVersion, "0.4.0")
         XCTAssertEqual(decoded.components, package.components)
-    }
-
-    func testInstalledProfileReportWithRedactedCertificateMatchesPreparedDocument() throws {
-        let certificate = Data([1, 2, 3])
-        let prepared = try LocalDoHProfileDocument.data(
-            for: LocalDoHDomainPlan(domains: ["example.com", "example.org"]),
-            rootCertificate: certificate
-        )
-        let original = try XCTUnwrap(PropertyListSerialization.propertyList(
-            from: prepared, format: nil
-        ) as? [String: Any])
-        let content = try XCTUnwrap(original["PayloadContent"] as? [[String: Any]])
-        let items = content.map { item -> [String: Any] in
-            var result = item
-            result.removeValue(forKey: "PayloadCertificateFileName")
-            if let settings = result.removeValue(forKey: "DNSSettings") {
-                result["PayloadContent"] = ["DNSSettings": settings]
-            } else {
-                result["PayloadContent"] = [String: Any]()
-            }
-            return result
-        }
-        var report: [String: Any] = [
-            "ProfileIdentifier": LocalDoHStatus.profileIdentifier,
-            "ProfileType": "Configuration", "ProfileVersion": 1,
-            "ProfileUUID": original["PayloadUUID"]!, "ProfileItems": items,
-        ]
-        func validate(_ report: [String: Any], root: Data = certificate,
-                      document: Data? = prepared) throws -> LocalDoHProfileInspection? {
-            let data = try PropertyListSerialization.data(
-                fromPropertyList: ["_computerlevel": [report]], format: .xml, options: 0
-            )
-            return LocalDoHProfileInspection.validatedInstalled(
-                propertyList: data, expectedRootCertificate: root,
-                expectedPreparedProfile: document
-            )
-        }
-        XCTAssertEqual(try validate(report), .init(installed: true, domainCount: 2))
-        XCTAssertNil(try validate(report, document: nil))
-        XCTAssertNil(try validate(report, root: Data([9])))
-        let good = report
-        for field in ["ProfileUUID", "ProfileType", "ProfileVersion"] {
-            report = good
-            report[field] = "wrong"
-            XCTAssertNil(try validate(report), field)
-        }
-        for field in ["PayloadType", "PayloadIdentifier", "PayloadUUID", "PayloadVersion"] {
-            report = good
-            var altered = items
-            altered[0][field] = "wrong"
-            report["ProfileItems"] = altered
-            XCTAssertNil(try validate(report), field)
-        }
-        for (key, value) in [
-            ("ServerURL", "https://127.0.0.1:9443/dns-query" as Any),
-            ("ServerAddresses", ["198.18.0.1"] as Any),
-            ("SupplementalMatchDomains", ["example.com"] as Any),
-            ("DNSProtocol", "TLS" as Any),
-        ] {
-            report = good
-            var altered = items
-            var settings = content[1]["DNSSettings"] as! [String: Any]
-            settings[key] = value
-            altered[1]["PayloadContent"] = ["DNSSettings": settings]
-            report["ProfileItems"] = altered
-            XCTAssertNil(try validate(report), key)
-        }
-        report = good
-        report["ProfileItems"] = [items[0], items[0]]
-        XCTAssertNil(try validate(report))
-        var disclosed = items
-        disclosed[0]["PayloadContent"] = Data([9])
-        report["ProfileItems"] = disclosed
-        XCTAssertNil(try validate(report))
-    }
-
-    func testLocalDoHTrustFailureRecoveryRequiresContinuousObservedFailure() {
-        var recovery = LocalDoHReadinessRecovery()
-        XCTAssertFalse(recovery.needsFallback(profilePresent: true, ready: false, now: 0))
-        XCTAssertFalse(recovery.needsFallback(profilePresent: true, ready: false, now: 59))
-        XCTAssertTrue(recovery.needsFallback(profilePresent: true, ready: false, now: 60))
-        XCTAssertFalse(recovery.needsFallback(profilePresent: true, ready: true, now: 61))
-        XCTAssertFalse(recovery.needsFallback(profilePresent: true, ready: false, now: 62))
-        XCTAssertFalse(recovery.needsFallback(profilePresent: nil, ready: false, now: 125))
-        XCTAssertFalse(recovery.needsFallback(profilePresent: false, ready: false, now: 200))
-        XCTAssertFalse(recovery.needsFallback(profilePresent: true, ready: false, now: 300))
-        XCTAssertTrue(recovery.needsFallback(profilePresent: true, ready: false, now: 360))
-    }
-
-    func testLocalDoHMalformedIdentityNeverPassesSystemTrust() {
-        XCTAssertFalse(LocalDoHTLSValidation.systemTrusts(serverPEM: Data(), rootDER: Data()))
-        XCTAssertFalse(LocalDoHTLSValidation.systemTrusts(
-            serverPEM: Data("-----BEGIN CERTIFICATE-----AQID-----END CERTIFICATE-----".utf8),
-            rootDER: Data([1, 2, 3])
-        ))
     }
 
     func testComponentDigestIsStable() {

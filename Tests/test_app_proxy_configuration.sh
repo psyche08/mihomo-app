@@ -15,6 +15,13 @@ cp "$ROOT/Tests/Fixtures/app-proxy-dns.swift" "$STAGE/main.swift"
   "$ROOT/experiments/DNSIdentityProbe/Extension/AppProxyDNSRequest.swift" \
   "$STAGE/main.swift" -o "$STAGE/dns-test"
 "$STAGE/dns-test"
+cp "$ROOT/Tests/Fixtures/app-proxy-dns-xpc.swift" "$STAGE/main.swift"
+/usr/bin/swiftc -D MAIN_APP_PROXY \
+  "$ROOT/experiments/DNSIdentityProbe/Extension/AppProxyDNSRequest.swift" \
+  "$ROOT/Sources/MihomoControl/AppProxyDNSPolicy.swift" \
+  "$ROOT/Sources/MihomoControl/ControlProtocol.swift" \
+  "$STAGE/main.swift" -o "$STAGE/dns-xpc-test"
+"$STAGE/dns-xpc-test"
 cp "$ROOT/Tests/Fixtures/app-proxy-connection.swift" "$STAGE/main.swift"
 /usr/bin/swiftc \
   "$ROOT/experiments/DNSIdentityProbe/Extension/AppProxyConnection.swift" \

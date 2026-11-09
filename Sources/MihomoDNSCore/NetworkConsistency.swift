@@ -207,8 +207,8 @@ public enum MihomoRuntimeInspector {
             .map { inspectFakeIPMode(path: $0.configPath) } ?? false
         let visibleRouteInterface = fakeIPRouteInterface()
         let mihomoDNSReady = dnsEndpointResponds(endpoint: configuration.mihomoDNS)
-        let dnsBridgeReady = configuration.localDoH == nil && mihomoDNSReady
-            ? dnsEndpointResponds(endpoint: configuration.managedDNSProbeEndpoint)
+        let dnsBridgeReady = configuration.manageSystemDNS && mihomoDNSReady
+            ? bridgeEndpointResponds(endpoint: configuration.managedDNSProbeEndpoint)
             : false
         let preferences: GlobalDNSPreferences
         if let globalDNS {
@@ -243,7 +243,7 @@ public enum MihomoRuntimeInspector {
             expectsEnhancedTUN: configuration.expectsEnhancedTUN,
             tunEnabled: tunEnabled,
             ownedRouteReady: routeReady,
-            usesLocalDoH: configuration.localDoH != nil,
+            managesSystemDNS: configuration.manageSystemDNS,
             dnsBridgeReady: dnsBridgeReady
         )
         let systemDNSRestored = !systemDNSManaged
@@ -473,6 +473,19 @@ public enum MihomoRuntimeInspector {
         return DNSMessage.isRuntimeHealthResponse(response)
     }
 
+    /// Port 53 may be intercepted by another product's DNS Proxy provider,
+    /// so the bridge is probed with a standard query (see `bridgeHealthQuery`).
+    private static func bridgeEndpointResponds(endpoint: Endpoint) -> Bool {
+        let query = DNSMessage.bridgeHealthQuery()
+        guard let response = try? SocketDNSClient.query(
+            query,
+            endpoint: endpoint,
+            timeoutMilliseconds: 2_000,
+            interfaceName: nil
+        ) else { return false }
+        return DNSMessage.isBridgeHealthResponse(response, query: query)
+    }
+
     static func tcpEndpointResponds(endpoint: Endpoint) -> Bool {
         let descriptor = socket(AF_INET, SOCK_STREAM, 0)
         guard descriptor >= 0 else { return false }
@@ -497,7 +510,7 @@ public enum MihomoRuntimeInspector {
     /// both DNS probes, turning a bounded DNS repair into several unrelated
     /// network operations on the consistency queue.
     static func systemDNSBridgeResponds(configuration: ProxyConfiguration) -> Bool {
-        dnsEndpointResponds(endpoint: configuration.managedDNSProbeEndpoint)
+        bridgeEndpointResponds(endpoint: configuration.managedDNSProbeEndpoint)
     }
 
     private static func controllerConfiguration(
@@ -687,16 +700,18 @@ enum RuntimeReadiness {
         expectsEnhancedTUN: Bool,
         tunEnabled: Bool,
         ownedRouteReady: Bool,
-        usesLocalDoH: Bool,
+        managesSystemDNS: Bool,
         dnsBridgeReady: Bool
     ) -> Bool {
         if expectsEnhancedTUN {
+            // Enhanced TUN owns macOS Global DNS through the loopback bridge.
             return baseRuntimeReady && tunEnabled && ownedRouteReady
-                && (usesLocalDoH || dnsBridgeReady)
+                && (!managesSystemDNS || dnsBridgeReady)
         }
-        // Standby issues real DNS answers and owns no TUN routes. An existing
-        // VPN's route through the Fake-IP range must not block this runtime.
-        return baseRuntimeReady && !tunEnabled && usesLocalDoH
+        // Standby issues real DNS answers, owns no TUN routes and leaves the
+        // system resolver alone; App Proxy reaches the core over daemon XPC.
+        // An existing VPN's route through the Fake-IP range must not block it.
+        return baseRuntimeReady && !tunEnabled && !managesSystemDNS
     }
 }
 
@@ -935,9 +950,9 @@ public final class NetworkConsistencyController: @unchecked Sendable {
 
     /// Freezes observation while the owned Mihomo child is replaced and moves
     /// the published-health identity to the daemon-requested generation. The
-    /// The agent-owned DNS listeners stay up during the child replacement;
-    /// daemon-owned LocalHttpDns independently falls back to physical resolvers
-    /// until the new child is observed ready.
+    /// agent-owned DNS listeners stay up during the child replacement; the
+    /// bridge falls back to physical resolvers only where the Fake-IP policy
+    /// allows it until the new child is observed ready.
     public func beginRuntimeReload(generation: String) {
         queue.sync {
             runtimeReloadInProgress = true
@@ -1231,8 +1246,7 @@ public final class NetworkConsistencyController: @unchecked Sendable {
         }
 
         // Egress is only meaningful when the complete Enhanced TUN path is up:
-        // kernel, Fake-IP route, Mihomo DNS, and controller. LocalHttpDns is a
-        // separate daemon service and is not part of this probe gate.
+        // kernel, Fake-IP route, Mihomo DNS, and controller.
         let fullyReady = configuration.expectsEnhancedTUN
             && upstreamRuntimeReady && before.networkConsistent
         if fullyReady, !checkedProxyServerResolution {

@@ -10,23 +10,27 @@ MihomoBox.app (current user)
 ├── current-user login item         starts only the hidden tray App after login
 ├── linked MihomoControl            signed direct XPC client used by SwiftUI
 ├── Contents/MacOS/mihomoboxctl     signed XPC client used by CLI
+├── App Proxy system extension      optional; sends captured DNS as dns.resolve
 └── Resources/daemon + scripts      bootstrap installer inputs
               │
-              │ authenticated XPC (same signing certificate)
+              │ authenticated XPC (same signing certificate family;
+              │ the extension may call only dns.resolve)
               ▼
 /Library/LaunchDaemons/dev.linsheng.mihomo.daemon.plist (root)
 └── mihomo-daemon                   privileged XPC broker and utun owner
-    ├── validates every peer's code-signing requirement
+    ├── validates every peer's code-signing requirement and role
     ├── owns privileged lifecycle/profile transactions
     ├── precreates and retains the managed utun descriptor
-    ├── keeps 127.0.0.1:443 Local DoH alive independently of TUN
+    ├── answers dns.resolve from Mihomo DNS (127.0.0.1:1153)
+    ├── removes legacy Local DoH artifacts at boot
     └── launches and monitors exactly one mihomo-agent
               │
               ▼
     mihomo-agent (root worker)
     ├── launches and supervises the pinned Mihomo process
     ├── listens on 127.0.0.1:1054 for Mihomo's original-DNS escape
-    ├── manages CurrentSet/Network/Service/*/DNS only in explicit fallback
+    ├── with Enhanced TUN on, binds the 127.0.0.53:53 bridge and manages
+    │   CurrentSet/Network/Service/<PrimaryService>/DNS
     └── observes DHCP, interface, route, and split-DNS changes
 ```
 
@@ -43,8 +47,8 @@ set through that XPC boundary without modifying the LaunchDaemon plist.
 An install without an existing root-owned active-profile marker stages the
 bundled REJECT provisioning profile, but the LaunchDaemon starts only its XPC
 control plane. After profile activation the agent starts in controller/DNS
-standby with TUN off. The App then prepares the LocalHttpDns certificate and
-split-DNS profile; only explicit macOS approval makes Enhanced TUN eligible.
+standby with TUN off and macOS DNS untouched. Enhanced TUN, which also takes
+macOS Global DNS, starts only from an explicit user action.
 This avoids both a DIRECT window and user-controlled paths inside root bootstrap.
 
 ## Ownership
@@ -59,15 +63,16 @@ This avoids both a DIRECT window and user-controlled paths inside root bootstrap
 | Precreated utun interface and primary descriptor | root daemon | interface survives agent/kernel restart; no GUI-owned TUN |
 | Agent lifecycle and profile transactions | root daemon | serialized, rollback-capable mutations |
 | Mihomo process, original-DNS escape, network observation | root agent | one runtime owner keeps proxy network state coherent |
-| LocalHttpDns TLS endpoint and physical-DNS fallback | root daemon | encrypted split DNS survives agent, Mihomo and TUN failure |
+| Global DNS bridge and PrimaryService DNS while Enhanced TUN is on | root agent | DNS ownership moves with TUN |
+| App Proxy DNS answers (`dns.resolve`) | root daemon | the sandboxed extension opens no DNS socket; port-53 interceptors are not crossed |
 | Controller credentials | root runtime boundary | clients receive typed results, never the secret |
 | MetaCubeXD reference | pinned source and screenshots, not executable App content | reproducible visual provenance |
 
-The daemon owns the utun capability and fixed LocalHttpDns TLS socket, and
-observes physical DNS for its fallback path. Its agent inherits a duplicate,
+The daemon owns the utun capability. Its agent inherits a duplicate,
 configures addresses/routes, and passes another duplicate to the sole Mihomo
-child. The daemon does not bind port 53 or 1054 or launch Mihomo directly.
-Only explicit Global DNS fallback changes the macOS system DNS list.
+child. The daemon does not bind any DNS listener or launch Mihomo directly; it
+answers App Proxy `dns.resolve` by querying Mihomo DNS on `127.0.0.1:1153`.
+Only Enhanced TUN changes the macOS system DNS list.
 The agent does not accept connections from Desktop or CLI. It is launched only
 from the stable root-owned daemon and terminates through the daemon-controlled
 safe shutdown path.
@@ -85,18 +90,22 @@ validation before exchanging messages:
 - an unsigned, ad-hoc-signed, differently signed, or invalid binary cannot use
   the control service;
 - App and CLI signing identifiers may differ; certificate equality is the
-  required release-family identity.
+  required release-family identity;
+- the daemon classifies each connection once, from its first message, with
+  `SecCodeCreateWithXPCMessage` and `SecCodeCheckValidity` against identifier
+  `dev.linsheng.mihomo-app.app-proxy` plus the certificate family. That App
+  Proxy extension role may call only `dns.resolve`, and `dns.resolve` is
+  refused for every other peer (`AppProxyDNSPolicy.permits`).
 
 Requests are typed and versioned. The broker allowlist covers status/snapshot,
 agent start-stop-restart, profile import/switch/reload, Enhanced TUN, outbound
 mode, proxy selection, latency tests, signed component synchronization, the
-fixed LocalHttpDns status projection and root-side prepare transaction, and the
-native dashboard's validated controller REST and live stream routes. LocalHttpDns
-preparation reads the authenticated controller state and exact managed
-root-owned `GeoSite.dat`, writes one fixed root-owned `.mobileconfig` containing
-the generated root-certificate and split-DNS payloads, prepares the fixed
-loopback identity without stopping the standby agent, and returns aggregate counts only;
-expanded domain names never cross XPC and the root daemon remains online.
+native dashboard's validated controller REST and live stream routes, and, for
+the App Proxy extension only, `dns.resolve`. The removed `local-doh.*` and
+`runtime.set-dns-mode` operations no longer decode. `dns.resolve` carries one
+wire-format query in the XPC `payload` field and returns the answer in
+`payload`; it runs outside the transaction lock with its own bounds (see
+[App Proxy DNS](daemon-and-dns.md#app-proxy-dns)).
 Component synchronization
 accepts exactly three named binary blobs with fixed size limits, validates each
 against the daemon's leaf-certificate requirement, stages and backs up inside
@@ -123,33 +132,33 @@ the request as version 1 and never sends the older non-transactional component
 update operation. A response from a protocol newer than the App instead
 requires an App update and disables repair so an older App cannot downgrade a
 newer root service. Administrator authorization is therefore user initiated,
-not a background consequence of polling or update checks.
+not a background consequence of polling or update checks. `dns.resolve` was
+added within protocol 3; an older daemon rejects it and the extension fails
+closed.
 
 ## Startup Sequence
 
 1. launchd starts `mihomo-daemon` and registers its Mach service before login.
-2. The daemon atomically migrates any legacy configuration to LocalHttpDns with
-   TUN off and restores stale `127.0.0.53` DNS ownership once.
-3. When a LocalHttpDns identity exists, it starts `127.0.0.1:443`; startup
-   failure enters Global DNS fallback. Later listener failures get three
-   five-second recovery attempts before fallback.
-4. The agent discovers DHCP/supplemental resolvers, binds the original-DNS
+2. The daemon restores recorded DNS ownership with the persisted owner, removes
+   legacy Local DoH artifacts, then normalizes `daemon.json`: an old `localDoH`
+   key is dropped and DNS ownership follows the last saved TUN choice.
+3. The agent discovers DHCP/supplemental resolvers, binds the original-DNS
    listener on `127.0.0.1:1054`, and starts Mihomo.
-5. Its generation-bound observer commits either controller/DNS standby (TUN
-   and Fake-IP route absent) or the persisted Enhanced state (controller, TUN,
-   Fake-IP route and Mihomo DNS healthy). Explicit fallback additionally
-   validates TUN DNS at `198.18.0.2:53`, applies system DNS and removes the
-   MihomoBox DoH profile. An existing fallback state survives reboot.
-7. The Swift `NSApplication` starts with accessory activation policy, compares bundled and installed
+4. Its generation-bound observer commits either controller/DNS standby (TUN,
+   Fake-IP route and system DNS ownership absent) or the persisted Enhanced
+   state (controller, TUN, Fake-IP route and Mihomo DNS healthy, plus
+   `system_dns_managed` and `dns_bridge_ready` for the `127.0.0.53:53` bridge).
+   Either state survives reboot.
+5. The Swift `NSApplication` starts with accessory activation policy, compares bundled and installed
    component digests through XPC, and synchronizes signed changes when the
    daemon protocol is compatible. An older-protocol reply enters the explicit
    verified repair state described above before any component mutation.
-8. The AppKit tray polls runtime state through XPC. The first healthy Enhanced TUN state
+6. The AppKit tray polls runtime state through XPC. The first healthy Enhanced TUN state
    observed from an App in `/Applications` or `~/Applications` applies a
    one-time user-level default to start MihomoBox hidden at login. The root
    LaunchDaemon, rather than this login item, remains responsible for restoring
-   LocalHttpDns and the persisted standby/Enhanced state at system startup.
-9. Sparkle checks the signed App update feed. The main `NSWindow` is still absent;
+   the persisted standby or Global DNS + TUN state at system startup.
+7. Sparkle checks the signed App update feed. The main `NSWindow` is still absent;
    selecting `Show Main Window` creates one `NSHostingController`, starts the
    bounded SwiftUI controller streams, and reuses that window until App exit.
    The hosting controller follows AppKit's resizable content bounds. The last
@@ -196,10 +205,9 @@ dialog; only the explicit repair boundaries described above do.
 | Endpoint | Direction | Purpose |
 |---|---|---|
 | XPC `dev.linsheng.mihomo.daemon.control` | Desktop/CLI → daemon | authenticated control plane |
-| `127.0.0.1:443` HTTPS | macOS → daemon | independent split DoH with managed-Mihomo then physical-DNS fallback |
-| `198.18.0.2:53` UDP/TCP | macOS → TUN | Global DNS fallback; requires verified Enhanced TUN |
-| `127.0.0.53:53` UDP/TCP | legacy only | restored during protocol-3 migration; not bound in normal operation |
-| `127.0.0.1:1153` UDP/TCP | agent / App Proxy → Mihomo | shared Mihomo DNS listener |
+| XPC `dev.linsheng.mihomo.daemon.control`, `dns.resolve` only | App Proxy extension → daemon | per-app DNS answered from Mihomo DNS |
+| `127.0.0.53:53` UDP/TCP | macOS → agent | Global DNS bridge; bound only while Enhanced TUN is on |
+| `127.0.0.1:1153` UDP/TCP | agent bridge / daemon `dns.resolve` → Mihomo | shared Mihomo DNS listener |
 | `127.0.0.1:1054` UDP/TCP | Mihomo → agent | nonrecursive path to current DHCP DNS |
 | `127.0.0.1:<profile port>` HTTP/WS | agent-local control path | Mihomo controller; never a Desktop/CLI control boundary |
 
@@ -248,9 +256,15 @@ The root
 settings schema bounds and validates application IDs, ports and route names;
 the extension independently validates the same port mapping. Application paths
 are discovery metadata, never root-side filesystem instructions. Unknown identities and unattributable
-CLI hosts fail closed. Captured DNS flows share the existing Mihomo/TUN DNS
-resolver through loopback TCP `1153`, with bounded requests and no public DNS
-fallback or supplemental default resolver. App node selections govern
+CLI hosts fail closed. Captured DNS flows go to the root daemon as `dns.resolve`
+over one shared XPC connection, which the daemon answers from the shared
+Mihomo DNS listener (`127.0.0.1:1153`); the extension opens no DNS socket, so
+port-53 DNS Proxy providers do not see these queries. Requests are bounded
+(6-second client timeout) and fail closed, with no public DNS fallback or
+supplemental default resolver. The extension's sandbox entitlement adds
+`com.apple.security.temporary-exception.mach-lookup.global-name` for
+`dev.linsheng.mihomo.daemon.control`. The probe build without `MAIN_APP_PROXY`
+still uses TCP to `127.0.0.1:1153`. App node selections govern
 connections, while DNS policy and cache remain owned by the core;
 loopback application callbacks remain explicit local bridges. Numeric addresses
 matching the persisted `bypass.cidrs` list also use bounded TCP/UDP bridges and

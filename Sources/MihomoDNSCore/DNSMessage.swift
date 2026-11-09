@@ -7,12 +7,15 @@ public enum DNSMessageError: Error, Equatable {
 
 public enum DNSMessage {
     public static let maximumWireLength = 65_535
+    static let runtimeHealthName = "mihomobox-health.invalid"
+
     // DNS STATUS (opcode 2): the pinned core's DNS server returns NOTIMP
-    // locally, before resolution. This checks the real UDP/bridge transport
+    // locally, before resolution. This checks the core's own UDP listener
     // without making switch completion depend on an external nameserver after
     // cache flushing. Controller, route and DNS ownership are checked separately.
+    // Never send it to port 53: see `bridgeHealthQuery`.
     static let runtimeHealthQuery: Data = {
-        var query = addressQuery(for: "mihomobox-health.invalid")!
+        var query = addressQuery(for: runtimeHealthName)!
         query[2] = 0x10 // STATUS, no recursion requested
         return query
     }()
@@ -21,6 +24,38 @@ public enum DNSMessage {
         data.count >= 12 && data.prefix(2) == runtimeHealthQuery.prefix(2)
             && data[2] & 0x80 != 0 && (data[2] >> 3) & 0x0f == 2
             && data[3] & 0x0f == 4 && data[2] & 0x02 == 0
+    }
+
+    /// Probe for the port-53 system-DNS bridge.
+    ///
+    /// Another product's DNS Proxy provider (MTTA's NEDNSProxyProvider, for
+    /// example) can intercept every port-53 flow, loopback included. Such a
+    /// provider forwards standard queries to the original destination,
+    /// rewriting the transaction ID and mapping it back, but silently drops a
+    /// STATUS query. A plain A question for the reserved `.invalid` name
+    /// crosses it intact. Any well-formed answer proves the bridge path: the
+    /// core's Fake-IP and a negative answer are both acceptable.
+    static func bridgeHealthQuery(
+        identifier: UInt16 = UInt16.random(in: UInt16.min ... UInt16.max)
+    ) -> Data {
+        addressQuery(for: runtimeHealthName, identifier: identifier)!
+    }
+
+    /// Either health probe, whatever its transaction ID: an intercepting DNS
+    /// proxy may have rewritten the ID before the bridge sees the query.
+    static func isRuntimeHealthQuery(_ query: Data) -> Bool {
+        guard query.count >= 12, query[query.startIndex + 2] & 0x80 == 0 else { return false }
+        return (try? questionName(Data(query))) == runtimeHealthName
+    }
+
+    static func isBridgeHealthResponse(_ response: Data, query: Data) -> Bool {
+        guard response.count >= 12, query.count >= 12,
+              response.prefix(2) == query.prefix(2) else { return false }
+        let flags = response[response.startIndex + 2]
+        guard flags & 0x80 != 0, (flags >> 3) & 0x0f == 0, flags & 0x02 == 0 else {
+            return false
+        }
+        return (try? questionName(Data(response))) == runtimeHealthName
     }
 
     /// Builds an A query for `name`.

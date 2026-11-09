@@ -46,7 +46,7 @@ package-scope candidate, not NE framework acceptance or Claude API recovery.
 | OS rules | Exact executable paths + OS designated requirements; explicit `matchTools`; save/reload/readback + rules digest | Persisted policy matches the approved identity generation |
 | NE framework | Apple's process/flow code validation, outside our callback | A correlated `handleNewFlow` receipt proves that flow reached the provider; host verification alone does not |
 | Provider runtime | Audit token including owner UID/PID version; `SecCodeCopyGuestWithAttributes`, runtime DR, canonical path, cdhash and current file stamp | The actual running source matches an authorized executable in the active/prepared generation |
-| DNS | Existing bounded `AppProxyDNSRequest` to shared Mihomo TCP `127.0.0.1:1153` | `dnsAnswered` means a response was obtained for this flow, not necessarily a successful DNS answer code or API request |
+| DNS | Bounded `AppProxyDNSRequest` to the root daemon's `dns.resolve` XPC operation (extension-only), which queries shared Mihomo DNS `127.0.0.1:1153`; fails closed | `dnsAnswered` means a response was obtained for this flow, not necessarily a successful DNS answer code or API request |
 | Proxy | Existing per-application listener, mode/rules and original-interface bypass | Upstream establishment is a transport stage; application/API success must be observed separately |
 
 The root daemon remains the sole owner of Mihomo. No new daemon filesystem
@@ -368,8 +368,9 @@ was restored to enabled in the test clone, but `syspolicy_check distribution`
 reported an internal XProtect error for Build 52 while deep strict signature
 validation passed. These environment limitations must remain explicit; results
 from this clone cannot establish acceptance under a normal SIP-enabled system.
-The test uses credential-free loopback exit fixtures, with TUN and Local DoH
-off; no Claude account, chats or real proxy credentials are copied.
+The test uses credential-free loopback exit fixtures, with TUN off (and the
+since-retired Local DoH also off); no Claude account, chats or real proxy
+credentials are copied.
 
 ## Mock child-process follow-up (2026-10-24)
 

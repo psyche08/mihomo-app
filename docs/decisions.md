@@ -53,7 +53,8 @@ process makes the privileged attack surface unnecessarily broad. The daemon is
 therefore limited to mutual code-signing authentication, typed command
 authorization, serialized profile/lifecycle transactions, and agent
 supervision. The agent owns the network data plane and has no client-facing
-service.
+service. Since 2026-11-09 the daemon also relays App Proxy `dns.resolve`
+queries to the core's DNS listener; it binds no DNS listener itself.
 
 ## Exact signing-certificate family instead of Team ID only
 
@@ -82,28 +83,32 @@ healthy, it applies a one-time current-user login-start default. This also
 migrates an already-healthy installation. A later user override is retained;
 the App does not repeatedly re-register the item. The unprivileged login item
 only restores the hidden tray App, while the root LaunchDaemon independently
-restores LocalHttpDns and the persisted standby/Enhanced state at system startup.
+restores the persisted standby or Global DNS + TUN state at system startup.
 
-## LocalHttpDns as the base service, Enhanced TUN as an optional layer
+## LocalHttpDns as the base service, Enhanced TUN as an optional layer (superseded)
 
-MihomoBox normally leaves the PrimaryService and Global DNS server list alone.
-Installing the root helper establishes a valid controller/DNS standby
-with TUN off. The daemon then prepares a manual DNS Settings profile with
+Superseded on 2026-11-09 by
+[Remove Local DoH; Global DNS is owned with TUN; App Proxy DNS goes through daemon XPC](#2026-11-09-remove-local-doh-global-dns-is-owned-with-tun-app-proxy-dns-goes-through-daemon-xpc).
+Retained as history; it does not describe current behavior.
+
+MihomoBox normally left the PrimaryService and Global DNS server list alone.
+Installing the root helper established a valid controller/DNS standby
+with TUN off. The daemon then prepared a manual DNS Settings profile with
 `SupplementalMatchDomains` and an embedded local root certificate. Enhanced
-TUN is unavailable until macOS reports that fixed profile installed and the
-daemon-owned `127.0.0.1:443` endpoint is live.
+TUN was unavailable until macOS reported that fixed profile installed and the
+daemon-owned `127.0.0.1:443` endpoint was live.
 
-The endpoint remains available when Mihomo restarts or TUN is disabled. It
-prefers Mihomo DNS only for a completely healthy Enhanced runtime and otherwise
-resolves through the current physical/scoped DNS. Manual profile confirmation
-is retained because macOS does not permit the `profiles` CLI to install a
+The endpoint remained available when Mihomo restarted or TUN was disabled. It
+preferred Mihomo DNS only for a completely healthy Enhanced runtime and otherwise
+resolved through the current physical/scoped DNS. Manual profile confirmation
+was retained because macOS does not permit the `profiles` CLI to install a
 configuration profile interactively on the user's behalf. A failed LocalHttpDns
-startup or preparation falls back to Global DNS at `198.18.0.1:53` with TUN
-required. The daemon removes its fixed DoH profile so it cannot override Global
-DNS, retaining the identity for retry. Failed removal remains visible in Config.
-Port 9443 is released. A wildcard 443 listener cannot be evaded by binding a
-different local IPv4 address; the TUN address also cannot support an independent
-always-on HTTPS resolver.
+startup or preparation fell back to Global DNS at `198.18.0.1:53` with TUN
+required. The daemon removed its fixed DoH profile so it could not override Global
+DNS, retaining the identity for retry. Failed removal remained visible in Config.
+Port 9443 was released. A wildcard 443 listener cannot be evaded by binding a
+different local IPv4 address; the TUN address also could not support an
+independent always-on HTTPS resolver.
 
 ## Separate port 53 and port 1054
 
@@ -129,7 +134,7 @@ features:
 |---|---|---|
 | Effective-profile diff | 6.9 CLI `profile diff` | High: compare source and daemon-normalized settings, redact credentials before returning anything over XPC. |
 | Rule explanation | 6.9 CLI `rule match` / `rule explain` | High: first explain the already-reported connection rule and chain. Offline simulation needs a core API to avoid approximating rule semantics. |
-| Persistent event timeline | 6.6 Logbook | High: bounded lifecycle events for profile apply/rollback, DNS mode and wake recovery. Keep DNS names, subscription URLs and credentials out. |
+| Persistent event timeline | 6.6 Logbook | High: bounded lifecycle events for profile apply/rollback, DNS ownership and wake recovery. Keep DNS names, subscription URLs and credentials out. |
 | UDP diagnostics | 6.10 test diagnostics | High: distinguish unsupported UDP, no egress and timeout; the existing HTTP latency probe cannot establish UDP capability. |
 | Aggregated metrics | 6.9 `/metrics` | Medium: expose counters through authenticated XPC first; a new HTTP endpoint would require a separate access-control design. |
 | Rich profile diagnostics | 6.10 language support | Medium: retain the pinned-core validator; add policy-reference diagnostics and line locations without logging profile contents. |
@@ -161,8 +166,8 @@ generated profile syntax.
 
 **Decision: the signed DNS-only prototype does not satisfy strict per-app DNS
 isolation on the tested Mac.** See the runtime counterexample below.
-The current Local DoH HTTP/AF_UNIX path transports DNS wire messages without
-original-application identity. Setting `dns.respect-rules` cannot recover that
+The Local DoH HTTP/AF_UNIX path in use at the time (removed on 2026-11-09)
+transported DNS wire messages without original-application identity. Setting `dns.respect-rules` cannot recover that
 identity and must not break the original-DNS escape through TCP `1054`.
 
 A macOS `NEDNSProxyProvider` system extension is a candidate identity-aware
@@ -217,8 +222,9 @@ The runtime acceptance checklist for any proposed strict implementation is:
    missing identity, app exit/PID reuse, selector changes, proxy failure and
    sleep/wake. Different DNS policies must not share cache or coalesced queries.
    A selector/policy change needs generation-scoped state and cancellation rules.
-5. Verify precedence and rollback with the existing global Local DoH profile
-   and Enhanced TUN. DNS Proxy configuration is system-wide; do not assume it
+5. Verify precedence and rollback with the managed Global DNS bridge and
+   Enhanced TUN (the global Local DoH profile at the time of this checkpoint;
+   removed on 2026-11-09). DNS Proxy configuration is system-wide; do not assume it
    can coexist without changing which component receives requests. App-owned
    encrypted DNS is ordinary application traffic and requires separate coverage;
    observing a DNS Proxy flow does not prove coverage of every name resolution.
@@ -424,6 +430,12 @@ disabled, and separately prove Claude and both CLIs reach their own listeners.
 Successful ChatGPT traffic or explicit listener probes cannot substitute for
 those checks. No DNS cache flush was used for this diagnosis.
 
+Superseded on 2026-11-09 for the transport: the main extension now sends
+captured DNS to the root daemon as `dns.resolve` over XPC, and the daemon
+queries the same `127.0.0.1:1153` resolver. Only the probe build (without
+`MAIN_APP_PROXY`) keeps the TCP path. The resolver sharing and the absence of
+public or system-resolver fallback are unchanged.
+
 ### App Proxy launch hosts (2026-10-26)
 
 A CLI is attributed to its session's responsible process, and flow divert refuses a
@@ -439,3 +451,51 @@ feature); a wrapper that disclaims responsibility (private SPI, opt-in per comma
 kept as a possible addition for unlisted launchers); hosts as authorized records
 (sealed-resource validation of IDEs and Xcode every 20 seconds, and a host failure
 would fail its application).
+
+## 2026-11-09: Remove Local DoH; Global DNS is owned with TUN; App Proxy DNS goes through daemon XPC
+
+Decision: remove Local DoH (LocalHttpDns) and the DNS integration mode that
+chose between it and Global DNS. macOS Global DNS is now owned together with
+Enhanced TUN: TUN on sets the PrimaryService DNS to the `127.0.0.53:53` bridge
+in front of Mihomo DNS (`127.0.0.1:1153`); TUN off leaves system DNS untouched
+while the core keeps serving App Proxy. The App Proxy extension sends captured
+DNS to the root daemon as the `dns.resolve` control operation over the existing
+Mach service, and the daemon answers from Mihomo DNS. Behavior is specified in
+[daemon-and-dns](daemon-and-dns.md).
+
+Reasons:
+
+- A corporate DNS Proxy provider (MTTA, `com.sankuai.sec.mtta.dns`) intercepts
+  every port-53 flow, loopback included. It forwards standard QUERY-opcode UDP
+  queries, drops STATUS-opcode queries, and breaks TCP DNS to loopback. The
+  STATUS-based bridge probe therefore never passed, Global DNS validation timed
+  out and TUN rolled back. The bridge probe is now a standard A query for
+  `mihomobox-health.invalid`, and App Proxy DNS no longer crosses port 53.
+- A split-DNS configuration profile plus a local CA trust anchor in the System
+  keychain is a heavy footprint for a DNS path: manual profile approval,
+  separate SSL trust, root-held identity files and a TLS server (the SwiftNIO
+  SSL dependency and its bundled licenses are removed with it).
+- The profile pointed matched domains at a listener that could disappear while
+  macOS kept the profile installed.
+
+Rejected: keeping Local DoH alongside the TUN-owned Global DNS. Two DNS owners
+retain the mode switch, the profile and trust lifecycle and the 443 listener
+supervision, and an installed profile still wins over Global DNS for matched
+domains.
+
+Consequences:
+
+- At boot the daemon removes the legacy profile, trust anchor, identity files,
+  prepared `.mobileconfig` and DNS IPC directory with fixed commands, and
+  re-runs that cleanup when TUN is enabled before absence is confirmed. The
+  installer's uninstall keeps the same removal as a fallback. `daemon.json`
+  drops `localDoH`, and DNS ownership follows the last saved TUN choice.
+- The daemon classifies the extension by signing identifier plus certificate
+  family; that role may call only `dns.resolve`, and no other peer may call it.
+  Queries are bounded, resolved outside the lifecycle lock and not logged.
+- Known limitation: a truncated Global DNS answer cannot be retried over TCP
+  while MTTA is active.
+- Not yet verified on a device: whether per-app DNS from `NEDNSSettings`
+  reaches the App Proxy while MTTA's DNS Proxy is active; whether the
+  `mach-lookup` temporary exception is honored for the sandboxed system
+  extension; the TCP-retry limitation above.

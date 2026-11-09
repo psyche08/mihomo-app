@@ -89,62 +89,49 @@
   network health before clearing it. Power loss or failed health restores the
   complete prior signed set with same-filesystem atomic replacement. While
   recovery is incomplete, runtime mutations fail closed.
-- LocalHttpDns setup is a fixed authenticated XPC operation of the already
-  installed root daemon; it accepts no certificate, key, hostname, port,
-  output path, or arbitrary domain argument. The daemon generates the identity at a fixed root-owned
-  path and deletes the CA private key after issuing the loopback server
-  certificate. The root CA is embedded as a `com.apple.security.root` payload
-  in the same manually approved profile as global/default DNS. The explicit
-  `local-doh.prepare-certificate-trust` action imports only the current validated,
-  root-owned CA into the System keychain using Security.framework. It returns
-  only that public DER certificate (at most 16 KiB), never a private key. The
-  native AppKit process requests Admin Trust Settings with SSL policy scoped to
-  `127.0.0.1` using `SecTrustSettingsSetTrustSettings`; macOS owns administrator
-  authorization in the GUI session. This is not a SwiftUI privilege capability.
-  Headless helper trust writes cannot reliably present that authorization UI;
-  the old `local-doh.trust-certificate` action now rejects with an App-upgrade
-  instruction. No caller certificate bytes, paths or policies are accepted by
-  the daemon. The App verifies current native SSL trust through XPC afterward.
-  Cancellation and denial are not retried, and import alone is not called trust
-  success. The prepared profile still opens when trust fails. If needed, the App
-  offers Keychain Access for manual approval. Neither process changes
-  `authorizationdb`, unlocks a keychain, or collects a password. Startup,
-  polling, fallback and profile-generation code never initiate trust writes.
-  Manual profile approval may
-  import a CA without granting SSL trust. Native system SSL evaluation, without
-  custom anchors or exceptions, gates Local DoH selection and health;
-  missing certificate/profile or failed trust selects verified Global DNS when
-  enabling Enhanced TUN, without initiating trust or profile authorization.
-  `runtime.set-dns-mode` accepts only `global-dns` or `local-doh`, not arbitrary
-  network settings. Selecting Local DoH requires current profile and SSL trust;
-  selecting Global DNS validates TUN DNS and verifies removal of only the fixed
-  DoH profile. Unknown/removal-required state is never reported as success.
-  The installed `profiles show` report redacts CA bytes, so profile matching
-  checks fixed UUIDs, payload types and the complete prepared DNS settings;
-  this is explicitly separate from certificate trust. New profiles deliberately
-  omit `SupplementalMatchDomains` for global coverage and do not derive scope
-  from proxy rules. Existing split profiles require user-approved replacement.
-  The daemon atomically writes
-  one fixed root-owned profile artifact and validates its ownership, mode and
-  fixed payload fields before publication. The root XPC service, standby agent
-  and existing LocalHttpDns listener remain available; identity and prepared
-  profile are rolled back together on failure. Normal status XPC returns only
-  server/profile booleans and aggregate counts; the explicit trust preparation
-  additionally returns the public CA. Full helper uninstall verifies the fixed
-  installed profile is absent before deleting legacy trust residue, server
-  identity, or the prepared artifact.
-- LocalHttpDns forwards only raw DNS POSTs to the fixed `/dns-query` endpoint on
-  Mihomo's Unix socket. It does not expose arbitrary controller paths. Mihomo's
-  Unix listener has no HTTP authentication and creates a mode-`0666` socket;
-  its root-owned mode-`0700` parent is therefore a mandatory privilege boundary.
-  Creation rejects symlinks, wrong ownership, and traversable permissions;
-  each connection rechecks directory and socket metadata. No controller secret
-  crosses this IPC channel. Deadlines, response-size bounds and an in-flight
-  cap limit resource use. Per the always-on DNS policy, absent/unresponsive IPC
-  falls back to current physical/scoped DNS via a daemon-owned observer, without
-  using system resolver APIs or the agent's 1054 listener. Valid Mihomo DNS error
-  responses are preserved; unsafe socket permissions, malformed responses,
-  HTTP errors and overload never trigger fallback. No public resolver is added.
+- The App Proxy system extension (signing identifier
+  `dev.linsheng.mihomo-app.app-proxy`) is a second kind of peer on the same
+  Mach service, with a narrower role. The daemon classifies each connection
+  once, from its first message, with `SecCodeCreateWithXPCMessage` and
+  `SecCodeCheckValidity` against that identifier plus the release certificate
+  family. The extension role may call only `dns.resolve`, and no other peer may
+  call `dns.resolve`; a refused call is logged as
+  `result=peer_not_permitted role=<role>`. The extension parses untrusted
+  application traffic, so it gains no profile, lifecycle, controller or
+  settings capability through this connection. Its sandbox entitlement adds
+  only a `com.apple.security.temporary-exception.mach-lookup.global-name`
+  exception for `dev.linsheng.mihomo.daemon.control`; whether that exception
+  works for the sandboxed system extension is not yet verified on a device.
+- `dns.resolve` carries one wire-format DNS query in the XPC `payload` field
+  within protocol 3; it takes no host, port, path or other argument. The daemon
+  accepts only a one-question standard query, forwards it to the fixed core DNS
+  endpoint from `daemon.json` (`127.0.0.1:1153`), and returns only an answer
+  that matches the query's ID, question and opcode. At most 128 queries are in
+  flight; extras fail at once with `dns_busy` instead of queueing. Each query
+  has a 4000 ms deadline, runs on a private event loop, and never takes the
+  daemon's lifecycle lock, so DNS load cannot block lifecycle transactions.
+  Queries and answers are never logged, and `dns.resolve` is excluded from the
+  routine audit log. The extension holds one shared connection whose peer
+  requirement is the release certificate family, waits at most 6 seconds, and
+  fails closed: on any error, timeout or rejection the application gets no
+  answer. There is no system-resolver or public fallback. An older daemon
+  rejects the operation, which the extension treats the same way.
+- Local DoH (LocalHttpDns) is retired. The daemon no longer runs a TLS server,
+  listens on `127.0.0.1:443`, generates a local CA or server key, writes a
+  configuration profile, requests certificate trust, or exposes a DNS Unix
+  socket; the `local-doh.*` and `runtime.set-dns-mode` operations no longer
+  exist. At each start the daemon removes the artifacts earlier releases left
+  behind, using fixed commands only: `profiles show`/`profiles remove` for the
+  fixed identifier `dev.linsheng.mihomobox.local-doh`, then
+  `security remove-trusted-cert -d` and
+  `security delete-certificate -Z <sha1> /Library/Keychains/System.keychain`.
+  It reads certificate and fingerprint inputs only from root-owned regular
+  files of at most 64 KB at fixed paths, deletes only the fixed `local-doh/`,
+  prepared `.mobileconfig` and `mihomo-data/.dns-ipc` paths, and never unlocks
+  a keychain, edits `authorizationdb`, or prompts for authorization. Its single
+  `event=legacy_local_doh_cleanup` log line carries only fixed status words,
+  nothing from profile or certificate contents. Uninstall repeats the profile
+  and trust removal as a fallback.
 - A signed legacy protocol response is not permission to downgrade the App's
   XPC requests. An older version is classified only from the authenticated response
   envelope, never from a marker file or error string. The tray disables all
@@ -176,10 +163,13 @@ unsigned bypass or environment-variable override.
 - `mihomo-agent`: root network worker, Mihomo supervision, DNS sockets,
   SystemConfiguration writes, and network-change observation.
 - `mihomo-app` / `mihomoboxctl`: current user, authenticated XPC clients only.
+- App Proxy system extension: sandboxed NetworkExtension provider; on the
+  daemon's control service it may call only `dns.resolve`.
 
-The daemon owns the independent LocalHttpDns endpoint but does not own the
-Mihomo child. The agent never accepts Desktop/CLI requests. Typed XPC actions
-remain the only unprivileged entry into network and profile mutations.
+The daemon answers `dns.resolve` by querying the core's DNS listener but does
+not own the Mihomo child. The agent never accepts Desktop/CLI requests. Typed
+XPC actions remain the only unprivileged entry into network and profile
+mutations.
 
 ## Supply Chain
 
@@ -203,7 +193,8 @@ remain the only unprivileged entry into network and profile mutations.
 - Root component updates add a second check at the privilege boundary: each
   executable must satisfy the already-installed daemon's certificate
   requirement before it can replace a root-owned binary.
-- Third-party license notices ship with the application.
+- Third-party license notices ship with the application. swift-nio-ssl is no
+  longer a dependency, so its LICENSE and NOTICE are no longer bundled.
 
 ## Sensitive Data
 
@@ -244,10 +235,14 @@ bytes to the daemon through XPC.
   and compare-before-write guarantees are retained for uninstall/recovery.
 - Pre-existing `127.0.0.53` aliases are not removed by legacy cleanup.
 - Original-DNS sockets bind to the physical interface to avoid TUN recursion.
-- LocalHttpDns uses loopback 443 and leaves the system DNS list alone. Explicit
-  fallback uses `198.18.0.1:53` only after Enhanced TUN and DNS validate, restoring
-  original DNS when that path fails. Fallback removes only the fixed MihomoBox
-  DoH profile; removal failure is reported and identity files are retained.
+- Global DNS is owned only together with Enhanced TUN (`manageSystemDNS`,
+  `globalDNSFallbackEnabled` and `enhancedTUNEnabled` stay equal). It is applied
+  only after Enhanced TUN and DNS validate, and original DNS is restored when
+  TUN is turned off or that path fails. TUN-off standby leaves system DNS
+  untouched.
+- The retired Local DoH profile is removed at daemon start and again before
+  TUN is enabled while its absence is unconfirmed; removal that macOS does not
+  confirm is reported as `profile=removal_required`, never as success.
 - A stale PID is terminated only after executable-path verification.
 - Profile reload is serialized by the daemon and rolls back configuration and
   agent state together on failure.

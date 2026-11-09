@@ -11,10 +11,11 @@ CONTROLLER_METADATA="$APP_SUPPORT/controller.json"
 COMPONENT_VERSION="$APP_SUPPORT/component-version"
 COMPONENT_PENDING="$APP_SUPPORT/component-update-pending.plist"
 PROVISIONING_STATE="$APP_SUPPORT/provisioning"
+# Artifacts of the removed LocalHttpDns feature. The daemon removes them after
+# an upgrade; uninstall removes them again in case that never ran.
 LOCAL_DOH_DIR="$APP_SUPPORT/local-doh"
 LOCAL_DOH_CA_CERT="$LOCAL_DOH_DIR/ca.crt"
 LOCAL_DOH_CERT="$LOCAL_DOH_DIR/server.crt"
-LOCAL_DOH_KEY="$LOCAL_DOH_DIR/server.key"
 LOCAL_DOH_FINGERPRINT="$LOCAL_DOH_DIR/certificate.sha1"
 LOCAL_DOH_PROFILE="$APP_SUPPORT/MihomoBox-Local-DoH.mobileconfig"
 LOCAL_DOH_PROFILE_IDENTIFIER="dev.linsheng.mihomobox.local-doh"
@@ -643,17 +644,15 @@ managed_agent_standby_ready() {
     "$health" == *'"network_consistent":true'* ]]
 }
 
+# Global DNS is owned together with TUN: when either flag is set the full
+# TUN, Fake-IP route and answering 127.0.0.53 bridge must be ready; otherwise
+# the core runs in standby and system DNS stays untouched.
 managed_runtime_dns_ready() {
-  if [[ "$(/usr/bin/plutil -extract globalDNSFallbackEnabled raw -o - "$APP_SUPPORT/daemon.json" 2>/dev/null || true)" == "true" ]]; then
+  if [[ "$(/usr/bin/plutil -extract globalDNSFallbackEnabled raw -o - "$APP_SUPPORT/daemon.json" 2>/dev/null || true)" == "true" ||
+    "$(/usr/bin/plutil -extract enhancedTUNEnabled raw -o - "$APP_SUPPORT/daemon.json" 2>/dev/null || true)" == "true" ]]; then
     managed_network_ready
-  elif [[ "$(/usr/bin/plutil -extract enhancedTUNEnabled raw -o - "$APP_SUPPORT/daemon.json" 2>/dev/null || true)" == "true" ]]; then
-    managed_network_ready || return 1
-    /usr/bin/nc -z 127.0.0.1 443
   else
-    managed_agent_standby_ready || return 1
-    if [[ -f "$LOCAL_DOH_CERT" && -f "$LOCAL_DOH_KEY" ]]; then
-      /usr/bin/nc -z 127.0.0.1 443
-    fi
+    managed_agent_standby_ready
   fi
 }
 
@@ -1288,37 +1287,6 @@ local_doh_fingerprint() {
     | /usr/bin/sed 's/^.*=//;s/://g'
 }
 
-validate_local_doh_profile_artifact() {
-  [[ -f "$LOCAL_DOH_PROFILE" && ! -L "$LOCAL_DOH_PROFILE" &&
-    "$(/usr/bin/stat -f '%u:%g:%Lp' "$LOCAL_DOH_PROFILE")" == "0:0:644" ]] || {
-    echo "the root-owned Local DoH profile is unavailable" >&2
-    return 1
-  }
-  /usr/bin/plutil -lint "$LOCAL_DOH_PROFILE" >/dev/null || {
-    echo "the root-owned Local DoH profile is invalid" >&2
-    return 1
-  }
-  local identifier server_url protocol server_address first_domain
-  identifier="$(/usr/libexec/PlistBuddy -c 'Print :PayloadIdentifier' \
-    "$LOCAL_DOH_PROFILE" 2>/dev/null || true)"
-  server_url="$(/usr/libexec/PlistBuddy -c \
-    'Print :PayloadContent:0:DNSSettings:ServerURL' "$LOCAL_DOH_PROFILE" 2>/dev/null || true)"
-  protocol="$(/usr/libexec/PlistBuddy -c \
-    'Print :PayloadContent:0:DNSSettings:DNSProtocol' "$LOCAL_DOH_PROFILE" 2>/dev/null || true)"
-  server_address="$(/usr/libexec/PlistBuddy -c \
-    'Print :PayloadContent:0:DNSSettings:ServerAddresses:0' "$LOCAL_DOH_PROFILE" 2>/dev/null || true)"
-  first_domain="$(/usr/libexec/PlistBuddy -c \
-    'Print :PayloadContent:0:DNSSettings:SupplementalMatchDomains:0' \
-    "$LOCAL_DOH_PROFILE" 2>/dev/null || true)"
-  [[ "$identifier" == "$LOCAL_DOH_PROFILE_IDENTIFIER" &&
-    "$server_url" == "https://127.0.0.1/dns-query" &&
-    "$protocol" == "HTTPS" && "$server_address" == "127.0.0.1" &&
-    -n "$first_domain" && "$first_domain" != "." ]] || {
-    echo "the root-owned Local DoH profile failed fixed-field validation" >&2
-    return 1
-  }
-}
-
 # Returns 0 when the fixed device profile is installed, 1 when a successful
 # system-wide inspection proves it absent, and 2 when macOS cannot inspect the
 # profile database. Profile contents stay in a root-private temporary file and
@@ -1548,7 +1516,7 @@ install_daemon() {
   else
     wait_for "authenticated Mihomo controller" managed_controller_ready
     wait_for_runtime_dns_mode
-    wait_for "LocalHttpDns or Global DNS fallback runtime" managed_runtime_dns_ready
+    wait_for "Global DNS with TUN or standby runtime" managed_runtime_dns_ready
   fi
   install_cli_entry
   trap - ERR

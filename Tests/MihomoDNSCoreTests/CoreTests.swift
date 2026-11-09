@@ -2,7 +2,6 @@ import Foundation
 import CMihomoDNSSystem
 import Darwin
 @preconcurrency import NIOCore
-@preconcurrency import NIOHTTP1
 @preconcurrency import NIOPosix
 import SystemConfiguration
 import XCTest
@@ -148,30 +147,44 @@ final class CoreTests: XCTestCase {
             XCTAssertTrue(RuntimeReadiness.isReady(
                 baseRuntimeReady: true, expectsEnhancedTUN: false,
                 tunEnabled: false, ownedRouteReady: owned != nil,
-                usesLocalDoH: true, dnsBridgeReady: false
+                managesSystemDNS: false, dnsBridgeReady: false
             ))
         }
         for expectsTUN in [false, true] {
             XCTAssertFalse(RuntimeReadiness.isReady(
                 baseRuntimeReady: false, expectsEnhancedTUN: expectsTUN,
                 tunEnabled: expectsTUN, ownedRouteReady: true,
-                usesLocalDoH: true, dnsBridgeReady: true
+                managesSystemDNS: expectsTUN, dnsBridgeReady: true
             ))
         }
         XCTAssertFalse(RuntimeReadiness.isReady(
             baseRuntimeReady: true, expectsEnhancedTUN: true,
             tunEnabled: true, ownedRouteReady: false,
-            usesLocalDoH: true, dnsBridgeReady: true
+            managesSystemDNS: true, dnsBridgeReady: true
         ))
         XCTAssertFalse(RuntimeReadiness.isReady(
             baseRuntimeReady: true, expectsEnhancedTUN: false,
             tunEnabled: true, ownedRouteReady: true,
-            usesLocalDoH: true, dnsBridgeReady: false
+            managesSystemDNS: false, dnsBridgeReady: false
         ))
+        // Standby never owns system DNS.
         XCTAssertFalse(RuntimeReadiness.isReady(
             baseRuntimeReady: true, expectsEnhancedTUN: false,
             tunEnabled: false, ownedRouteReady: false,
-            usesLocalDoH: false, dnsBridgeReady: true
+            managesSystemDNS: true, dnsBridgeReady: true
+        ))
+    }
+
+    func testGlobalDNSWithTUNRequiresTheAnsweringBridge() {
+        XCTAssertTrue(RuntimeReadiness.isReady(
+            baseRuntimeReady: true, expectsEnhancedTUN: true,
+            tunEnabled: true, ownedRouteReady: true,
+            managesSystemDNS: true, dnsBridgeReady: true
+        ))
+        XCTAssertFalse(RuntimeReadiness.isReady(
+            baseRuntimeReady: true, expectsEnhancedTUN: true,
+            tunEnabled: true, ownedRouteReady: true,
+            managesSystemDNS: true, dnsBridgeReady: false
         ))
     }
 
@@ -521,31 +534,21 @@ final class CoreTests: XCTestCase {
         }
     }
 
-    func testLocalDoHUsesOnlyTheFixedRootOwnedEndpointAndIdentity() {
+    func testGlobalDNSOwnershipMovesWithEnhancedTUN() {
         XCTAssertNoThrow(try ProxyConfiguration(
-            manageSystemDNS: false,
-            localDoH: LocalDoHConfiguration()
+            manageSystemDNS: true, globalDNSFallbackEnabled: true, enhancedTUNEnabled: true
         ).validate())
-        XCTAssertThrowsError(try ProxyConfiguration(
-            manageSystemDNS: false,
-            localDoH: LocalDoHConfiguration(
-                certificatePath: "/Library/Application Support/Mihomo App/local-doh/../other.key"
-            )
-        ).validate()) { error in
-            XCTAssertEqual(error as? ConfigurationError, .invalidLocalDoH)
-        }
-        XCTAssertThrowsError(try ProxyConfiguration(
-            manageSystemDNS: true,
-            localDoH: LocalDoHConfiguration()
-        ).validate()) { error in
-            XCTAssertEqual(error as? ConfigurationError, .incompatibleDNSOwnership)
-        }
-        XCTAssertThrowsError(try ProxyConfiguration(
-            manageSystemDNS: false,
-            enhancedTUNEnabled: true,
-            localDoH: nil
-        ).validate()) { error in
-            XCTAssertEqual(error as? ConfigurationError, .incompatibleDNSOwnership)
+        XCTAssertNoThrow(try ProxyConfiguration(
+            manageSystemDNS: false, globalDNSFallbackEnabled: false, enhancedTUNEnabled: false
+        ).validate())
+        for (manage, global, tun) in [
+            (false, false, true), (true, false, false), (true, true, false), (false, true, true),
+        ] {
+            XCTAssertThrowsError(try ProxyConfiguration(
+                manageSystemDNS: manage, globalDNSFallbackEnabled: global, enhancedTUNEnabled: tun
+            ).validate(), "\(manage) \(global) \(tun)") { error in
+                XCTAssertEqual(error as? ConfigurationError, .incompatibleDNSOwnership)
+            }
         }
     }
 
@@ -554,53 +557,6 @@ final class CoreTests: XCTestCase {
         let environment = MihomoSupervisor.processEnvironment(base: inherited)
         XCTAssertNil(environment["SAFE_PATHS"])
         XCTAssertEqual(environment["PATH"], "/usr/bin")
-    }
-
-    func testIndependentLocalDoHAcceptsPostAndGetWireQueries() throws {
-        let query = try XCTUnwrap(DNSMessage.addressQuery(for: "example.com"))
-        var body = ByteBufferAllocator().buffer(capacity: query.count)
-        body.writeBytes(query)
-        var post = HTTPRequestHead(version: .http1_1, method: .POST, uri: "/dns-query")
-        post.headers.add(name: "content-type", value: "application/dns-message")
-        XCTAssertEqual(try LocalDoHHTTPRequest.query(head: post, body: body), query)
-
-        let encoded = query.base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
-        let get = HTTPRequestHead(
-            version: .http1_1,
-            method: .GET,
-            uri: "/dns-query?dns=\(encoded)"
-        )
-        XCTAssertEqual(
-            try LocalDoHHTTPRequest.query(
-                head: get,
-                body: ByteBufferAllocator().buffer(capacity: 0)
-            ),
-            query
-        )
-    }
-
-    func testIndependentLocalDoHRejectsNonDoHRequests() throws {
-        let query = try XCTUnwrap(DNSMessage.addressQuery(for: "example.com"))
-        var body = ByteBufferAllocator().buffer(capacity: query.count)
-        body.writeBytes(query)
-        let wrongPath = HTTPRequestHead(version: .http1_1, method: .POST, uri: "/")
-        XCTAssertThrowsError(try LocalDoHHTTPRequest.query(head: wrongPath, body: body)) {
-            XCTAssertEqual($0 as? LocalDoHHTTPError, .notFound)
-        }
-
-        var wrongType = HTTPRequestHead(version: .http1_1, method: .POST, uri: "/dns-query")
-        wrongType.headers.add(name: "content-type", value: "application/json")
-        XCTAssertThrowsError(try LocalDoHHTTPRequest.query(head: wrongType, body: body)) {
-            XCTAssertEqual($0 as? LocalDoHHTTPError, .unsupportedMediaType)
-        }
-
-        let missingType = HTTPRequestHead(version: .http1_1, method: .POST, uri: "/dns-query")
-        XCTAssertThrowsError(try LocalDoHHTTPRequest.query(head: missingType, body: body)) {
-            XCTAssertEqual($0 as? LocalDoHHTTPError, .unsupportedMediaType)
-        }
     }
 
     func testExistingLoopbackAliasIsIgnored() throws {
@@ -2029,14 +1985,13 @@ extension CoreTests {
             manageSystemDNS: false, globalDNSFallbackEnabled: false,
             enhancedTUNEnabled: false, systemProxyEnabled: true,
             mihomoProcess: .init(), controllerEndpoint: .init(host: "127.0.0.1", port: 19090),
-            controllerSecret: "test-only", localDoH: .init()
+            controllerSecret: "test-only"
         )
         var enhanced = standby
         enhanced.enhancedTUNEnabled = true
         enhanced.enhancedTUNResumeEnabled = true
         enhanced.manageSystemDNS = true
         enhanced.globalDNSFallbackEnabled = true
-        enhanced.localDoH = nil
         try enhanced.validate()
         XCTAssertTrue(standby.permitsResidentTransition(to: enhanced))
         XCTAssertTrue(enhanced.permitsResidentTransition(to: standby))

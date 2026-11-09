@@ -60,7 +60,8 @@ For sustained combined-mode acceptance, keep App Proxy and TUN on and System
 Proxy off for longer than the previous failure interval (at least 75 minutes on
 m4pro). Record bounded samples of health, switch state, lease counters, app
 inbound byte progress and client reconnect errors. Require successful UDP/TCP
-loopback DNS probes, no repeated DNS ownership transitions, no preference or
+loopback DNS probes (UDP only on a Mac running MTTA's DNS Proxy, where loopback
+TCP DNS fails; see [MTTA DNS Proxy](#mtta-dns-proxy)), no repeated DNS ownership transitions, no preference or
 lease-expiry errors, and separately attributed Claude/Codex traffic on their
 App Proxy inbounds. An idle client or a working TUN connection alone cannot
 establish stream stability. Publish only after this acceptance passes.
@@ -290,20 +291,26 @@ saved list and `mihomoboxctl app-proxy set-all Proxy` transactionally assigns
 the existing entries to a group through the same typed XPC validation. Neither
 command changes macOS extension approval or adds application identities.
 
-This page does not prepare or enable Local DoH. A fresh CLI installation keeps
-Local DoH unprepared until the operator explicitly invokes Prepare & Trust.
-App Proxy forwards captured DNS queries over TCP to the existing Mihomo DNS
-listener at `127.0.0.1:1153`, sharing the TUN resolver and its Fake-IP policy.
-Its per-app resolver advertises the managed TUN DNS address `198.18.0.2`,
+This page does not change macOS DNS ownership. App Proxy resolves the DNS it
+captures for policy-matched applications through the root daemon: the
+extension sends each query over the privileged Mach service
+`dev.linsheng.mihomo.daemon.control` as control operation `dns.resolve`, and the
+daemon answers it from the existing Mihomo DNS listener at `127.0.0.1:1153`,
+sharing the TUN resolver and its Fake-IP policy. The extension opens no DNS
+socket itself, so a DNS Proxy that intercepts port-53 flows (such as MTTA) does
+not see these queries. An older daemon rejects `dns.resolve` and App Proxy DNS
+then fails closed; upgrade the daemon together with the App.
+App Proxy's per-app resolver advertises the managed TUN DNS address `198.18.0.2`,
 not `127.0.0.1:53` where no DNS service is bound. Low-level resolver calls
 must be tested with App Proxy enabled: successful hostname/SOCKS forwarding
 alone does not establish that system name resolution works.
 It does not publish a supplemental default DNS resolver or use a separate
 public DoH service. DNS follows the core's shared configuration; each app's
 selected node still controls its proxied connections. With TUN off, the core's
-standby DNS returns real addresses. A failed core DNS request fails closed.
-Disabling Enhanced TUN keeps that standby core and DNS available, including
-when switching away from Global DNS fallback. `mihomoboxctl rpc set-tun false`
+standby DNS returns real addresses. A failed, rejected or timed-out query fails
+closed: the application gets no answer, and there is no system-resolver or
+public fallback. Disabling Enhanced TUN releases Global DNS and keeps that
+standby core and DNS available. `mihomoboxctl rpc set-tun false`
 performs this same transition; `mihomoboxctl stop` stops the entire runtime.
 DNS UDP flows do not open a SOCKS association or expire with its idle timer.
 macOS reuses these resolver flows across core restarts; a failed DNS request
@@ -333,9 +340,9 @@ installer through the standard macOS administrator authorization dialog.
 If no previously authenticated active profile exists, installation stages a
 REJECT-only provisioning profile and starts only the authenticated XPC daemon;
 the agent and TUN remain stopped. The selected user profile is then activated
-over typed XPC into a controller/DNS standby state with TUN off. LocalHttpDns
-certificate/profile preparation follows; a failed activation leaves the macOS
-system DNS list untouched.
+over typed XPC into a controller/DNS standby state with TUN off. No
+certificate, trust setting or configuration profile is prepared; a failed
+activation leaves the macOS system DNS list untouched.
 
 For a remote Mac, first transfer a release App through an authenticated channel
 and verify the complete bundle, then invoke the detached entry point **without**
@@ -358,13 +365,12 @@ or a standalone copy of the wrapper is not a trusted remote installation source.
 Launchd never executes from the movable App bundle.
 
 The protocol-v2 to v3 upgrade requires this verified installer and a valid
-root-owned component version floor. It does not send v2 runtime mutations or
-relax the certificate/profile prerequisite; missing or unsafe version state
-and newer daemon protocols remain rejected.
+root-owned component version floor. It does not send v2 runtime mutations;
+missing or unsafe version state and newer daemon protocols remain rejected.
 
-The app name in user-facing copy, system extension metadata, DNS profiles and
-VPN configuration names is **MihomoBox**. Feature labels such as App Proxy and
-Local DoH describe functionality; Mihomo names the bundled upstream core.
+The app name in user-facing copy, system extension metadata and VPN
+configuration names is **MihomoBox**. Feature labels such as App Proxy and
+Enhanced TUN describe functionality; Mihomo names the bundled upstream core.
 
 To install/activate just the bundled App Proxy system extension during an
 authorized remote upgrade, run the installed, Cloud-signed host as the logged-in
@@ -385,8 +391,7 @@ that App Proxy is connected or Claude works. macOS approval remains an operator
 step when requested. Re-run after approval/reboot; a timeout must not be treated
 as a confirmed cancellation or success. Enabling App Proxy and granting package
 access remain separate operations in the application.
-Existing installed DNS/VPN names update when their configuration is regenerated
-and approved or re-enabled, respectively.
+An existing VPN configuration name updates when App Proxy is re-enabled.
 The visible bundle is `MihomoBox.app`. Existing
 `/Library/Application Support/Mihomo App` and `/Library/Logs/Mihomo App` paths
 remain stable so upgrades preserve configuration, DNS backups, and structured
@@ -405,58 +410,26 @@ The installer:
 4. validates the copied Mihomo configuration;
 5. stops a running Homebrew Mihomo service to prevent duplicate owners;
 6. installs the XPC Mach service and starts the root daemon, which launches the
-   agent in TUN-off standby;
-7. verifies controller, Mihomo DNS, absent TUN/Fake-IP route, and that no
-   MihomoBox address remains in persistent or effective system DNS.
+   agent with the saved Enhanced TUN choice (TUN-off standby on a fresh
+   installation);
+7. waits for `Global DNS with TUN or standby runtime`: when `daemon.json` has
+   `enhancedTUNEnabled` or `globalDNSFallbackEnabled` set, the full network
+   runtime (controller, Mihomo DNS, TUN, Fake-IP route, an answering
+   `127.0.0.53` bridge and managed system DNS); otherwise the standby runtime
+   (controller and Mihomo DNS, no TUN/Fake-IP route, and no MihomoBox address
+   in persistent or effective system DNS).
 
-From the Config page, **Prepare & Trust / Open Profile** asks for explicit
-confirmation of SSL trust and then asks the authenticated
-root daemon to prepare a global/default DNS profile, independent of domain rules
-and controller mode. The daemon writes the fixed profile at
-`/Library/Application Support/Mihomo App/MihomoBox-Local-DoH.mobileconfig` as
-root:wheel mode `0644` and returns only aggregate counts. The profile contains
-both a `com.apple.security.root` certificate payload and the global DNS payload,
-but manual macOS profile approval does not itself prove SSL trust. In the
-same typed XPC transaction, the already-installed root daemon validates that
-artifact, keeps its control service and standby agent online, generates a
-root-owned local CA and loopback server certificate/private key, discards the
-CA private key, and starts the daemon-owned DoH endpoint. The endpoint is
-validated independently; profile preparation does not require TUN or a Fake-IP
-route. It always forwards raw DNS through Mihomo's root-private Unix socket;
-TUN-off standby makes Mihomo return real addresses. When Mihomo is stopped or
-IPC is unresponsive, a daemon-owned forwarder uses current physical/scoped DNS
-without depending on the agent, changing system DNS, or stopping port 443.
-Valid Mihomo DNS error responses are returned unchanged. Preparation failure restores the previous
-identity and prepared profile atomically before returning an error.
-After preparation, the App sends a separate fixed `local-doh.trust-certificate`
-action to install the current CA into the System keychain with SSL-only Admin
-trust. It permits a macOS authorization dialog for up to two minutes, never
-unlocks a keychain or weakens authorization rules, and verifies native SSL
-trust before opening the profile. Cancellation/denial is reported without
-automatic retry; **Trust Certificate for SSL** retries explicitly and **Open
-Keychain Access** provides the manual path when system authorization cannot
-run from the helper. No `sudo` or AppleScript is used. The App opens the
-validated root-owned profile. Apple requires the
-user to finish installation in **General > Device Management**; **Open Device
-Management** reopens that exact System Settings pane at any time. There is no
-normal LocalHttpDns-off action: after approval it remains available whether
-Enhanced TUN is on or off. Full helper uninstall verifies removal of the fixed
-profile identifier before deleting legacy trust residue, server identity and
-the root installation.
-
-Config shows separate `Awaiting macOS Approval`, `Active`, and `Needs Attention`
-states. It refreshes authenticated root/profile state while visible, so
-finishing approval in System Settings does not require relaunching the App.
-New profiles omit `SupplementalMatchDomains` for global coverage. Existing split
-profiles need one regeneration and manual reinstall to adopt this behavior;
-later rule, selector, and GeoSite changes no longer require profile regeneration.
+The installer no longer prepares a DNS profile or certificate and no longer
+checks a loopback `443` listener. Earlier releases' Local DoH artifacts are
+removed by the daemon after the upgrade; see
+[Legacy Local DoH cleanup](#legacy-local-doh-cleanup).
 
 There are two intentionally separate startup mechanisms. The root LaunchDaemon
-starts LocalHttpDns and the managed Mihomo runtime at system startup. The
-`enhancedTUNResumeEnabled` preference restores the last explicit TUN choice;
-turning TUN off survives restarts and component updates. Upgrades use the old
-current state instead of the legacy "ever enabled" flag. LocalHttpDns is unchanged
-by that choice. On launch, the App
+starts the managed Mihomo runtime at system startup. The
+`enhancedTUNResumeEnabled` preference restores the last explicit TUN choice,
+and Global DNS with it; turning TUN off survives restarts and component
+updates. Upgrades use the old current state instead of the legacy "ever
+enabled" flag. On launch, the App
 also applies a one-time current-user login-item default, without requiring TUN
 or a healthy network, so the hidden tray App returns after login.
 Only an installed copy under `/Applications` or `~/Applications` applies this
@@ -523,8 +496,8 @@ all incompatible XPC actions. Select the emphasized `Upgrade Daemon…` item (or
 verified installer. Repair preserves the root-owned active profile and does
 not import user profile bytes again.
 
-The repair briefly restarts Mihomo and migrates legacy DNS state to
-LocalHttpDns standby. It succeeds only after a version-3 tray-state response is
+The repair briefly restarts Mihomo and migrates legacy DNS state so that
+Global DNS is owned only together with Enhanced TUN. It succeeds only after a version-3 tray-state response is
 received; cancellation, timeout, rollback, or another older response leaves the repair-required state
 visible. An installation with a root-owned active profile must also pass the
 full controller/TUN/Fake-IP/DNS health gate. Without one, repair safely remains
@@ -606,7 +579,8 @@ mihomoboxctl stop
 ```
 
 The tray no longer uses this as the Enhanced TUN switch: disabling Enhanced TUN
-returns to standby and keeps LocalHttpDns active. The explicit CLI stop remains
+releases Global DNS and returns to standby, keeping the core available for App
+Proxy. The explicit CLI stop remains
 a recovery operation for Mihomo; it also restores any legacy DNS backup,
 removes a daemon-created alias, flushes caches, stops TUN, and removes its routes.
 
@@ -621,7 +595,9 @@ snapshot):
 Restore stops the daemon, agent, and Mihomo child, restores the backed-up service/global DNS,
 removes only a daemon-created alias, restarts a previously active Homebrew
 Mihomo service, removes the managed CLI symlink, and removes installed system
-files.
+files. As a fallback for an installation whose daemon never completed the
+[legacy cleanup](#legacy-local-doh-cleanup), restore also removes the retired
+Local DoH profile and trust anchor.
 
 ## CLI
 
@@ -733,34 +709,66 @@ that first-install activation fails, it stops the agent and confirms TUN and
 system DNS restoration before returning the error, rather than leaving the
 minimal direct profile active.
 
-## Selecting DNS integration
+## DNS ownership
 
-In Config > DNS Integration, **Use Global DNS** persists the existing Global
-DNS configuration (`globalDNSFallbackEnabled` is retained as the compatible
-storage key), starts and verifies Enhanced TUN DNS at `198.18.0.2`, releases
-443, and removes only MihomoBox's installed DoH profile. The App confirms this
-impact before starting. A removal error remains visible, never an active-mode
-success. Certificate identity files and the prepared profile are retained.
+There is no separate DNS mode. Enhanced TUN owns macOS Global DNS together with
+TUN, so `daemon.json` keeps `manageSystemDNS`, `globalDNSFallbackEnabled` and
+`enhancedTUNEnabled` equal; the tray switch and `mihomoboxctl rpc set-tun`
+change all three together. Config shows the result read-only as
+**Global DNS** or **System DNS**.
 
-To return, choose **Prepare & Trust / Open Profile**, authorize SSL trust if
-needed, and approve the profile in Device Management. **Use Local DoH** is
-enabled only after certificate and installed-profile readiness. Local DoH
-continues using original-network DNS when the Mihomo backend is unavailable.
-Global DNS requires Enhanced TUN and restores the original DNS when stopped.
+- TUN on: macOS PrimaryService DNS → `127.0.0.53:53` agent bridge → Mihomo DNS
+  `127.0.0.1:1153` with Fake-IP answers. `scutil --dns` shows `198.18.0.1`.
+- TUN off: standby. System DNS is left untouched, and Mihomo stays up for App
+  Proxy, whose captured DNS the daemon resolves over XPC.
+
+See [Daemon and DNS](daemon-and-dns.md) for the bridge, original-DNS escape and
+restoration details.
+
+## Legacy Local DoH cleanup
+
+Earlier releases offered Local DoH (LocalHttpDns): a loopback HTTPS DNS server
+on `127.0.0.1:443`, the split-DNS configuration profile
+`dev.linsheng.mihomobox.local-doh`, a System-keychain trust anchor, identity
+files under `/Library/Application Support/Mihomo App/local-doh/`, a prepared
+`MihomoBox-Local-DoH.mobileconfig`, and a DNS IPC directory
+`mihomo-data/.dns-ipc`. The feature and its `local-doh` CLI commands are
+removed. A leftover profile would keep sending its domains to a listener that
+no longer exists, so the daemon removes these artifacts itself.
+
+At every daemon start the daemon runs an idempotent cleanup with fixed commands
+only: it checks for the profile with `profiles show`, removes it with
+`profiles remove ... -forced` and checks again; removes the trust anchor with
+`security remove-trusted-cert -d` and `security delete-certificate -Z`
+(reading only root-owned regular files of at most 64 KB); deletes the `local-doh/`
+directory, the prepared `.mobileconfig` and `.dns-ipc`; and flushes DNS caches
+when it removed the profile. When it finds anything to clean, it logs one line
+to `mihomo-daemon.log`, without profile or certificate contents:
+
+```text
+event=legacy_local_doh_cleanup profile=<absent|removed|removal_required|unknown> trust=<absent|removed|partially_removed> files=<absent|removed|failed>
+```
+
+`mihomoboxctl status --json` reports `health.legacy_local_doh_profile_removed`.
+While it is `false`, turning Enhanced TUN on runs the cleanup again first.
+`profile=removal_required` means macOS did not confirm removal (`unknown`: the
+profile database could not be read). Remove the profile in
+**System Settings > Privacy & Security > Profiles**, or:
+
+```bash
+sudo profiles remove -type configuration -identifier dev.linsheng.mihomobox.local-doh
+```
+
+`trust=partially_removed` means a `security` command failed. The identity files
+are deleted afterwards, so later runs cannot retry it; review the System
+keychain in Keychain Access and delete only the exact retired MihomoBox
+certificate, not every certificate sharing its name. Uninstall repeats the
+profile and trust removal as a fallback. An installer failure that mentions
+Local DoH is logged by the App as
+`event=privileged_installer ... reason=legacy_local_doh_cleanup`.
 
 ## Diagnosis
 
-Local DoH status is available through `mihomoboxctl local-doh status`. A matched
-installed profile and a listening 443 port do not prove macOS trusts HTTPS.
-`certificate_trusted: false` means the current loopback certificate fails
-native system SSL evaluation. Manual profile installation can import the CA
-while leaving SSL trust unspecified. Review the exact current certificate in
-Keychain Access; do not trust or delete every certificate sharing its name.
-MihomoBox never silently grants trust; use the explicit SSL-trust action or
-Keychain Access. After one minute of continuously observed
-installed-profile/trust failure it releases 443 and enters Global DNS fallback.
-The identity and prepared profile remain for retry; only the fixed installed
-DoH profile is removed after the fallback DNS runtime passes its health gate.
 Acceptance must include normal system DNS and an HTTPS request without a
 custom CA, `--insecure`, or an explicit HTTP proxy; a proxy-only success is not
 proof that the system resolver works.
@@ -786,20 +794,24 @@ log show --last 10m --style compact \
   --predicate 'subsystem == "dev.linsheng.mihomo-app" AND eventMessage CONTAINS "event=app_startup"'
 grep 'event=daemon_startup' '/Library/Logs/Mihomo App/mihomo-daemon.log'
 grep 'event=agent_startup' '/Library/Logs/Mihomo App/mihomo-agent.log'
-dig @198.18.0.2 -p 53 example.com
-dig @198.18.0.2 -p 53 example.com +tcp
+grep 'event=legacy_local_doh_cleanup' '/Library/Logs/Mihomo App/mihomo-daemon.log'
+dig @127.0.0.53 mihomobox-health.invalid
+dig @127.0.0.53 example.com
 dig @127.0.0.1 -p 1054 example.com
 scutil --dns
 ```
 
-The `198.18.0.2` probes apply to Global DNS fallback; LocalHttpDns normally
-listens on `127.0.0.1:443`, and 9443 is no longer used. Config reports fallback
-separately from pending DoH-profile removal. A successful TUN probe alone does
-not prove that macOS has stopped using the old encrypted-DNS profile.
+With Enhanced TUN on, the `127.0.0.53` probes exercise the same Global DNS
+bridge path as the system resolver, and `scutil --dns` shows `198.18.0.1`. Any
+well-formed answer to `mihomobox-health.invalid`, including a negative one,
+proves the bridge answers. With TUN off the bridge is not used and system DNS
+is the original one. MihomoBox no longer listens on `127.0.0.1:443`; a remaining
+`dev.linsheng.mihomobox.local-doh` profile in `profiles show` is a
+[legacy cleanup](#legacy-local-doh-cleanup) problem, not a DNS mode.
 
 The `--check-system-dns` command verifies the persisted CurrentSet
-PrimaryService DNS value (or the Global fallback when no primary service is
-available). `scutil --dns` verifies the effective dynamic resolver state; the
+PrimaryService DNS value (or the Global DNS dictionary when no primary service
+is available). `scutil --dns` verifies the effective dynamic resolver state; the
 installer requires both checks to pass.
 
 The inverse `--check-system-dns-restored` command succeeds only when the
@@ -809,15 +821,70 @@ Provisioning installation also requires no managed
 agent or Mihomo process, no TUN or Fake-IP route, and no managed DNS listener
 before it reports a safely stopped runtime.
 
-`--health` reports controller, TUN, Fake-IP route, Mihomo DNS, absence of legacy
-system-DNS ownership, and overall consistency. The first failed Enhanced-mode
+`--health` reports controller, TUN, Fake-IP route, Mihomo DNS, the Global DNS
+bridge (`dns_bridge_ready`), system DNS ownership (`system_dns_managed`), and
+overall consistency. The first failed Enhanced-mode
 observation immediately disables Fake-IP answers. Domains still owned by
 Fake-IP fail closed instead of leaking to original DNS; only domains explicitly
 excluded by the active Fake-IP policy may receive real upstream answers.
 Recovery starts after three consecutive failures. TUN-off standby does not
-accrue those failures. LocalHttpDns now delegates all DNS decisions to Mihomo
-over IPC when available. A stopped/restarting Mihomo uses the daemon's independent
-current-network DNS fallback; the next request retries IPC automatically.
-Local DoH status accepts either a ready Mihomo backend or an available original
-DNS resolver configuration, plus listener and SSL trust. This is not proof of
-Internet reachability; acceptance must still exercise actual DNS and HTTPS.
+accrue those failures. Health is not proof of Internet reachability;
+acceptance must still exercise actual DNS and HTTPS.
+
+### MTTA DNS Proxy
+
+A corporate DNS Proxy provider (`NEDNSProxyProvider`) such as MTTA
+(`com.sankuai.sec.mtta.dns`) intercepts every port-53 flow, loopback included.
+It forwards standard QUERY-opcode UDP (rewriting the transaction ID), drops
+STATUS-opcode queries, and loopback TCP DNS through it fails. Older releases
+probed the bridge with a STATUS query, so on such a Mac `dns_bridge_ready`
+stayed `false` and turning TUN on rolled back. The bridge probe is now a
+standard A query for `mihomobox-health.invalid` with a random ID, and any
+well-formed answer counts.
+
+```bash
+systemextensionsctl list
+scutil --nc list
+dig @127.0.0.53 mihomobox-health.invalid
+```
+
+The first two show whether a DNS proxy is installed and active. With TUN on,
+the `dig` should get an answer. Known limitation: while MTTA is active, a
+truncated Global DNS answer cannot be retried over TCP. The daemon's App Proxy
+resolver queries Mihomo on port 1153, not port 53, so MTTA does not see those
+queries. Unverified on a device: whether per-app DNS (the App Proxy's
+`NEDNSSettings`) reaches the App Proxy at all while MTTA's DNS Proxy is active.
+
+### App Proxy DNS failures
+
+The extension resolves captured DNS through `dns.resolve` on
+`dev.linsheng.mihomo.daemon.control`. A failure gives the application no answer;
+the provider records `dnsFailed` receipts and `dns_failed_*` counters, visible
+in `mihomoboxctl app-proxy runtime`. The daemon does not log individual
+queries, and `dns.resolve` is excluded from the routine audit log. Its error
+replies are:
+
+| Error | Meaning |
+|---|---|
+| `dns_invalidQuery` | Not a one-question standard query |
+| `dns_busy` | 128 queries already in flight; extra queries fail at once |
+| `dns_invalidResponse` | Mihomo's answer did not match the query ID, question or opcode |
+| `dns_unavailable` | No answer from Mihomo DNS at `127.0.0.1:1153` (error or 4000 ms timeout) |
+
+The extension itself waits at most 6 seconds. Check, in order:
+
+- The daemon version. An older daemon rejects `dns.resolve`, so every App Proxy
+  DNS query fails; upgrade the daemon together with the App (normal component
+  synchronization or `mihomoboxctl components update`).
+- `mihomo-daemon.log` for `result=peer_not_permitted role=<role>`. The daemon
+  serves `dns.resolve` only to a peer whose code satisfies identifier
+  `dev.linsheng.mihomo-app.app-proxy` plus the release certificate family,
+  logged once per connection as `event=control_peer_classified
+  role=app_proxy_extension`. `role=controller` on `dns.resolve` means the
+  caller is not that extension; `role=app_proxy_extension` on any other
+  operation means the extension asked for something it may not call.
+- Whether the sandboxed extension can look up the Mach service at all. Its
+  entitlement carries a `mach-lookup` temporary exception for
+  `dev.linsheng.mihomo.daemon.control`; that this exception works for the
+  sandboxed system extension is not yet verified on a device.
+- Mihomo DNS itself: `mihomo_dns_ready` in `--health`.

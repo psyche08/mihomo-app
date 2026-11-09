@@ -263,14 +263,10 @@ actor InstallerCoordinator {
   static func classification(_ value: String) -> String {
     if value.localizedCaseInsensitiveContains("test failed") { return "profile_rejected" }
     if value.localizedCaseInsensitiveContains("configuration file") { return "profile_rejected" }
-    if value.localizedCaseInsensitiveContains("root-owned Local DoH profile") {
-      return "local_doh_profile_generation"
-    }
-    if value.localizedCaseInsensitiveContains("Local DoH certificate authority") {
-      return "local_doh_trust"
-    }
-    if value.localizedCaseInsensitiveContains("Local DoH profile") {
-      return "local_doh_profile"
+    // The installer still removes artifacts left by the retired Local DoH
+    // feature; keep those failures distinguishable in diagnostics.
+    if value.localizedCaseInsensitiveContains("Local DoH") {
+      return "legacy_local_doh_cleanup"
     }
     if value.localizedCaseInsensitiveContains("recovery requires operator attention") {
       return "recovery_required"

@@ -51,7 +51,6 @@ env \
 /bin/bash Tests/test_installer_lock.sh
 /bin/bash Tests/test_installer_protocol_migration.sh
 /bin/bash Tests/test_installer_rollback.sh
-/bin/bash Tests/test_local_doh_installer.sh
 /bin/bash Tests/test_app_proxy_configuration.sh
 /bin/bash Tests/test_app_proxy_code_access.sh
 /bin/bash Tests/test_release_product.sh
@@ -153,8 +152,8 @@ test -f "$APP/Contents/Resources/daemon/dev.linsheng.mihomo.daemon.plist"
 test -f "$APP/Contents/Resources/licenses/Mihomo.LICENSE"
 test -f "$APP/Contents/Resources/licenses/MetaCubeXD.LICENSE"
 test -f "$APP/Contents/Resources/licenses/Sparkle.LICENSE"
-test -f "$APP/Contents/Resources/licenses/SwiftNIOSSL.LICENSE"
-test -f "$APP/Contents/Resources/licenses/SwiftNIOSSL.NOTICE"
+test ! -e "$APP/Contents/Resources/licenses/SwiftNIOSSL.LICENSE"
+test ! -e "$APP/Contents/Resources/swift-nio-ssl_NIOSSL.bundle"
 test -f "$TRAY_ICON"
 test ! -L "$TRAY_ICON"
 test "$(/usr/bin/stat -f '%Lp' "$TRAY_ICON")" = "644"

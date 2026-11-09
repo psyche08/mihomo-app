@@ -63,11 +63,6 @@ public enum DashboardConfigAction: Equatable, Sendable {
   case flushingFakeIP
   case flushingDNS
   case updatingGeoData
-  case preparingLocalDoH
-  case trustingLocalDoH
-  case switchingDNSMode
-  case openingKeychainAccess
-  case openingDeviceManagement
 
   public var progressTitle: String {
     switch self {
@@ -78,11 +73,6 @@ public enum DashboardConfigAction: Equatable, Sendable {
     case .flushingFakeIP: "Flushing Fake-IP cache…"
     case .flushingDNS: "Flushing DNS cache…"
     case .updatingGeoData: "Updating GEO data…"
-    case .preparingLocalDoH: "Preparing Local DoH / waiting for SSL authorization…"
-    case .trustingLocalDoH: "Waiting for SSL trust authorization…"
-    case .switchingDNSMode: "Switching DNS mode…"
-    case .openingKeychainAccess: "Opening Keychain Access…"
-    case .openingDeviceManagement: "Opening Device Management…"
     }
   }
 }
@@ -131,20 +121,6 @@ public final class DashboardStore: ObservableObject {
   @Published public private(set) var configAction: DashboardConfigAction?
   @Published public private(set) var automaticUpdatesAvailable = false
   @Published public private(set) var automaticUpdatesEnabled = false
-  @Published public private(set) var localDoHAvailable = false
-  @Published public private(set) var localDoHPrepared = false
-  @Published public private(set) var localDoHProfileInstalled = false
-  @Published public private(set) var localDoHRuntimeHealthy = false
-  @Published public private(set) var localDoHSystemDNSManaged: Bool?
-  @Published public private(set) var localDoHCertificateTrusted = false
-  @Published public private(set) var confirmedDNSMode: DNSIntegrationMode?
-  @Published public private(set) var localDoHPhase: DashboardLocalDoHPhase = .unavailable
-  @Published public private(set) var localDoHDomainCount = 0
-  @Published public private(set) var localDoHOmittedRuleCount = 0
-  @Published public private(set) var localDoHExactDomainCount = 0
-  @Published public private(set) var localDoHExpandedGeoSiteRuleCount = 0
-  @Published public private(set) var localDoHUnrepresentableGeoSiteEntryCount = 0
-  @Published public private(set) var localDoHInvertedGeoSiteRuleCount = 0
   @Published public private(set) var coreVersion = "Mihomo"
   @Published public private(set) var traffic = TrafficSnapshot()
   @Published public private(set) var trafficHistory: [TrafficPoint] = []
@@ -174,7 +150,6 @@ public final class DashboardStore: ObservableObject {
   private let gateway: any DashboardControlGateway
   private let previewMode: Bool
   private weak var updatePreference: (any DashboardUpdatePreference)?
-  private weak var localDoHService: (any DashboardLocalDoHService)?
   private var streamTasks: [StreamKind: Task<Void, Never>] = [:]
   private var streamRetryTasks: [StreamKind: Task<Void, Never>] = [:]
   private var streamRetryCounts: [StreamKind: Int] = [:]
@@ -298,11 +273,6 @@ public final class DashboardStore: ObservableObject {
     updatePreference = preference
     automaticUpdatesAvailable = preference.automaticUpdatesAvailable
     automaticUpdatesEnabled = preference.automaticUpdatesEnabled
-  }
-
-  public func configureLocalDoHService(_ service: any DashboardLocalDoHService) {
-    localDoHService = service
-    Task { await refreshLocalDoHStatus() }
   }
 
   public func setAutomaticUpdatesEnabled(_ enabled: Bool) {
@@ -540,76 +510,6 @@ public final class DashboardStore: ObservableObject {
     await performConfigAction(.updatingGeoData) { try await gateway.updateGeoData() }
   }
 
-  public func prepareLocalDoH() async {
-    guard let localDoHService else { return }
-    await performConfigAction(.preparingLocalDoH) {
-      let summary = try await localDoHService.prepare()
-      localDoHOmittedRuleCount = summary.omittedRuleCount
-      localDoHExactDomainCount = summary.exactDomainApproximationCount
-      localDoHExpandedGeoSiteRuleCount = summary.expandedGeoSiteRuleCount
-      localDoHUnrepresentableGeoSiteEntryCount = summary.unrepresentableGeoSiteEntryCount
-      localDoHInvertedGeoSiteRuleCount = summary.invertedGeoSiteRuleCount
-    }
-    await refreshLocalDoHStatus()
-  }
-
-  public func openDeviceManagement() async {
-    guard let localDoHService else { return }
-    await performConfigAction(.openingDeviceManagement) {
-      try await localDoHService.openDeviceManagement()
-    }
-  }
-
-  public func trustLocalDoHCertificate() async {
-    guard let localDoHService else { return }
-    await performConfigAction(.trustingLocalDoH) {
-      try await localDoHService.trustCertificate()
-    }
-    await refreshLocalDoHStatus()
-  }
-
-  public func setDNSMode(_ mode: DNSIntegrationMode) async {
-    guard let localDoHService else { return }
-    await performConfigAction(.switchingDNSMode) {
-      try await localDoHService.setDNSMode(mode)
-    }
-    // Always read back after failure too: Global DNS may be configured while
-    // macOS still requires manual removal of the old encrypted-DNS profile.
-    await refreshLocalDoHStatus()
-  }
-
-  public func openKeychainAccess() async {
-    guard let localDoHService else { return }
-    await performConfigAction(.openingKeychainAccess) {
-      try await localDoHService.openKeychainAccess()
-    }
-  }
-
-  public func refreshLocalDoHStatus() async {
-    guard let localDoHService else {
-      localDoHAvailable = false
-      localDoHPrepared = false
-      localDoHProfileInstalled = false
-      localDoHRuntimeHealthy = false
-      localDoHSystemDNSManaged = nil
-      localDoHCertificateTrusted = false
-      confirmedDNSMode = nil
-      localDoHPhase = .unavailable
-      localDoHDomainCount = 0
-      return
-    }
-    let status = await localDoHService.status()
-    localDoHAvailable = status.available
-    localDoHPrepared = status.serverPrepared
-    localDoHProfileInstalled = status.profileInstalled
-    localDoHRuntimeHealthy = status.runtimeHealthy
-    localDoHSystemDNSManaged = status.systemDNSManaged
-    localDoHCertificateTrusted = status.certificateTrusted == true
-    confirmedDNSMode = status.confirmedDNSMode
-    localDoHPhase = status.phase
-    localDoHDomainCount = status.installedDomainCount
-  }
-
   private func scheduleRefresh(_ page: DashboardPage) {
     refreshTasks[page]?.cancel()
     let token = UUID()
@@ -648,7 +548,6 @@ public final class DashboardStore: ObservableObject {
       }
       await routing
     case .config:
-      await refreshLocalDoHStatus()
       await load(page: page) {
         apply(config: try await gateway.fetchConfig())
       }
