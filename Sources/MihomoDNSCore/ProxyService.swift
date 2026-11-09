@@ -19,7 +19,7 @@ public final class ProxyService {
     private var powerObserver: SystemPowerObserver?
     private var routeTableMonitor: RouteTableMonitor?
     private var channels: [Channel] = []
-    private var bridgeChannels: [Channel] = []
+    private var bridgeListeners: DNSBridgeListeners?
     private var systemDNSForwarder: AsyncDNSForwarding?
     private var preexistingFakeIPRouteInterface: String?
 
@@ -90,8 +90,13 @@ public final class ProxyService {
             // The port-53 bridge exists while macOS Global DNS points at it
             // (Enhanced TUN). Standby leaves the system resolver alone.
             if configuration.servesSystemDNSBridge {
-                bridgeChannels.append(try startUDP(endpoint: configuration.systemDNSListen, forwarder: systemDNSForwarder))
-                bridgeChannels.append(try startTCP(endpoint: configuration.systemDNSListen, forwarder: systemDNSForwarder))
+                let listeners = DNSBridgeListeners(
+                    group: group,
+                    endpoint: configuration.systemDNSListen,
+                    forwarder: systemDNSForwarder
+                )
+                bridgeListeners = listeners
+                try listeners.start()
             }
             channels.append(try startUDP(endpoint: configuration.upstreamListen, forwarder: originalDNSForwarder))
             channels.append(try startTCP(endpoint: configuration.upstreamListen, forwarder: originalDNSForwarder))
@@ -147,7 +152,8 @@ public final class ProxyService {
                 },
                 preexistingFakeIPRouteInterface: preexistingFakeIPRouteInterface,
                 healthGeneration: healthGeneration,
-                ownedTUN: ownedTUN
+                ownedTUN: ownedTUN,
+                bridgeListeners: bridgeListeners
             )
             consistencyController = controller
             controller.start()
@@ -204,8 +210,9 @@ public final class ProxyService {
         HealthSnapshotStore.remove(at: configuration.healthSnapshotPath)
         safetyState.setRuntimeReady(false)
         // Close only the Global DNS bridge. Port 1054 never leaves the process.
-        for channel in bridgeChannels { try channel.close().wait() }
-        bridgeChannels.removeAll()
+        // A bridge transport SwiftNIO already closed must not fail the switch.
+        bridgeListeners?.close()
+        bridgeListeners = nil
         configuration = next
         globalDNS = GlobalDNSPreferences(
             servers: next.managedSystemDNSServers,
@@ -214,8 +221,13 @@ public final class ProxyService {
         )
         if next.manageSystemDNS { try aliasManager.ensure() }
         if next.servesSystemDNSBridge {
-            bridgeChannels.append(try startUDP(endpoint: next.systemDNSListen, forwarder: systemDNSForwarder))
-            bridgeChannels.append(try startTCP(endpoint: next.systemDNSListen, forwarder: systemDNSForwarder))
+            let listeners = DNSBridgeListeners(
+                group: group,
+                endpoint: next.systemDNSListen,
+                forwarder: systemDNSForwarder
+            )
+            bridgeListeners = listeners
+            try listeners.start()
         }
         try MihomoRuntimeInspector.reloadResidentMihomo(configuration: next)
         ServiceLog.info("event=resident_runtime_transition phase=applied elapsed_ms=\(clock.elapsedMilliseconds())")
@@ -332,9 +344,10 @@ public final class ProxyService {
             try? aliasManager.removeIfManaged()
         }
         DNSCacheMaintenance.flushSystemCaches()
-        let active = channels + bridgeChannels
+        bridgeListeners?.close()
+        bridgeListeners = nil
+        let active = channels
         channels.removeAll()
-        bridgeChannels.removeAll()
         for channel in active {
             try? channel.close().wait()
         }
@@ -347,33 +360,10 @@ public final class ProxyService {
     }
 
     private func startUDP(endpoint: Endpoint, forwarder: AsyncDNSForwarding) throws -> Channel {
-        return try DatagramBootstrap(group: group)
-            .channelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
-            .channelInitializer { channel in
-                channel.eventLoop.makeCompletedFuture {
-                    try channel.pipeline.syncOperations.addHandler(
-                        DNSUDPHandler(forwarder: forwarder)
-                    )
-                }
-            }
-            .bind(host: endpoint.host, port: endpoint.port)
-            .wait()
+        try DNSListenerBootstrap.bindUDP(group: group, endpoint: endpoint, forwarder: forwarder)
     }
 
     private func startTCP(endpoint: Endpoint, forwarder: AsyncDNSForwarding) throws -> Channel {
-        return try ServerBootstrap(group: group)
-            .serverChannelOption(ChannelOptions.backlog, value: 64)
-            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
-            .childChannelInitializer { channel in
-                channel.eventLoop.makeCompletedFuture {
-                    try channel.pipeline.syncOperations.addHandlers(
-                        ByteToMessageHandler(DNSTCPFrameDecoder()),
-                        DNSTCPHandler(forwarder: forwarder)
-                    )
-                }
-            }
-            .childChannelOption(ChannelOptions.socket(IPPROTO_TCP, TCP_NODELAY), value: 1)
-            .bind(host: endpoint.host, port: endpoint.port)
-            .wait()
+        try DNSListenerBootstrap.bindTCP(group: group, endpoint: endpoint, forwarder: forwarder)
     }
 }

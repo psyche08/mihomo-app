@@ -14,6 +14,10 @@ enum DNSListenerErrorClassifier {
         if error is ChannelError {
             return "category=channel"
         }
+        // SwiftNIO socket failures; only the errno is kept, never `reason`.
+        if let error = error as? IOError {
+            return "category=posix code=\(error.errnoCode)"
+        }
         let nsError = error as NSError
         if nsError.domain == NSPOSIXErrorDomain {
             return "category=posix code=\(nsError.code)"
@@ -27,6 +31,9 @@ final class DNSUDPHandler: ChannelInboundHandler {
     typealias OutboundOut = AddressedEnvelope<ByteBuffer>
 
     private let forwarder: AsyncDNSForwarding
+    /// Only the first failed reply of this channel is logged: once SwiftNIO
+    /// closes the channel, every later reply fails the same way.
+    private var writeFailureLogged = false
 
     init(forwarder: AsyncDNSForwarding) {
         self.forwarder = forwarder
@@ -37,12 +44,31 @@ final class DNSUDPHandler: ChannelInboundHandler {
         guard let query = envelope.data.readData(length: envelope.data.readableBytes) else { return }
         let remoteAddress = envelope.remoteAddress
         let loopBoundContext = NIOLoopBound(context, eventLoop: context.eventLoop)
+        let loopBoundHandler = NIOLoopBound(self, eventLoop: context.eventLoop)
         forwarder.forward(query, on: context.eventLoop).whenSuccess { response in
             let context = loopBoundContext.value
             var buffer = context.channel.allocator.buffer(capacity: response.count)
             buffer.writeBytes(response)
-            context.writeAndFlush(self.wrapOutboundOut(AddressedEnvelope(remoteAddress: remoteAddress, data: buffer)), promise: nil)
+            // SwiftNIO closes a datagram channel on any send error except
+            // EMSGSIZE and EHOSTUNREACH, without calling `errorCaught`; the
+            // failed write promise is the only place that error surfaces.
+            let written = context.eventLoop.makePromise(of: Void.self)
+            written.futureResult.whenFailure { error in
+                loopBoundHandler.value.recordWriteFailure(error)
+            }
+            context.writeAndFlush(
+                self.wrapOutboundOut(AddressedEnvelope(remoteAddress: remoteAddress, data: buffer)),
+                promise: written
+            )
         }
+    }
+
+    private func recordWriteFailure(_ error: Error) {
+        guard !writeFailureLogged else { return }
+        writeFailureLogged = true
+        ServiceLog.error(
+            "event=udp_listener_write_failed \(DNSListenerErrorClassifier.fields(for: error))"
+        )
     }
 
     func errorCaught(context: ChannelHandlerContext, error: Error) {

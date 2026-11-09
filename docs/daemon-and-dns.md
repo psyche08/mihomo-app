@@ -247,6 +247,30 @@ probe failure does not restore/reapply DNS or restart a healthy kernel. Three
 observer timer failures restore owned DNS; acquisition then backs off. Network
 configuration notifications do not advance failure counters.
 
+The bridge's UDP and TCP listeners are supervised. SwiftNIO closes a datagram
+channel after any send error other than `EMSGSIZE` or `EHOSTUNREACH`, without
+an `errorCaught` callback, while the kernel keeps an idle socket bound to the
+alias across its removal and re-addition. Previously a rollback removed the
+alias under in-flight queries; each pending reply then failed with
+`EADDRNOTAVAIL`, the UDP listener closed silently, the TCP listener survived,
+and nothing rebound UDP until the agent restarted. Under MTTA the bridge probe
+was still answered (MTTA's SERVFAIL for the unreachable bridge), so the
+observer kept pointing system DNS at a bridge with no UDP listener (m4pro,
+2026-11-09). Now:
+
+- an unexpected listener close is logged as `dns_bridge_listener_closed
+  protocol=udp|tcp` and triggers an immediate evaluation; the first failed UDP
+  reply of a channel is logged as `udp_listener_write_failed` with its errno;
+- every evaluation rebinds a closed listener while the alias is present
+  (`dns_bridge_listener_rebound`, or `dns_bridge_listener_rebind_failed` once
+  per distinct error);
+- `dns_bridge_ready` also requires both agent listeners to be open, so a probe
+  answered by an intercepting DNS Proxy cannot stand in for the bridge;
+- acquisition ensures the alias, then both listeners, then probes, and writes
+  system DNS only if all succeed;
+- `dns_bridge_unhealthy` restores system DNS and then rebuilds both listeners
+  (`dns_bridge_listeners_rebuilt`), since flipping DNS alone repairs nothing.
+
 The prior TUN address `198.18.0.2:53` remained intermittently unavailable on
 m4pro with DNS Proxy extensions, while loopback Mihomo DNS answered normally.
 Restoring Global DNS on each missed probe caused a restore/acquire notification
@@ -276,13 +300,15 @@ through it fails. The earlier bridge readiness probe sent a STATUS query to
 `127.0.0.53:53`, so under MTTA `dns_bridge_ready` stayed false, Global DNS
 validation timed out and the TUN transition rolled back.
 
-The bridge probe is a standard QUERY for type A `mihomobox-health.invalid`
-with a random transaction ID. Any well-formed, untruncated response to that
-question with the probe's ID and the QUERY opcode counts as ready, whatever its
-answer or RCODE. The bridge recognizes the health name without relying on the
-transaction ID, which an intermediary may rewrite in transit. The health name
-bypasses the bridge's readiness gate and is never sent through the
-original-DNS fallback to the network's resolvers.
+The bridge probe is a standard QUERY for type A `mihomobox-health.invalid` with
+a random transaction ID. Any well-formed, untruncated response to that question
+with the probe's ID and the QUERY opcode counts as ready, whatever its answer
+or RCODE. MTTA answers SERVFAIL when nothing listens behind it, so the probe
+counts only while the agent's own UDP and TCP bridge listeners are open
+([Global DNS bridge](#global-dns-bridge)). The bridge recognizes the health
+name without relying on the transaction ID, which an intermediary may rewrite
+in transit. The health name bypasses the bridge's readiness gate and is never
+sent through the original-DNS fallback to the network's resolvers.
 
 Known limitation: because TCP DNS to loopback through MTTA fails, a truncated
 Global DNS answer cannot be retried over TCP while MTTA is active. App Proxy
@@ -434,6 +460,13 @@ trust anchor as a fallback.
 `127.0.0.53` is added to `lo0` through `SIOCAIFADDR` only when absent. A marker
 is written only after this agent creates the alias. Restore removes the alias
 only when that marker exists; a pre-existing administrator-owned alias remains.
+
+A rollback while the agent keeps running (DNS apply failure, bridge or runtime
+unhealthy) restores system DNS but keeps the alias as long as the agent's
+bridge listeners are bound to it: nothing resolves through it once DNS is
+restored, and removing it under the listeners closed the UDP listener (see
+[Global DNS bridge](#global-dns-bridge)). Agent stop and a resident transition
+still remove the marked alias.
 
 ## Network Changes
 
