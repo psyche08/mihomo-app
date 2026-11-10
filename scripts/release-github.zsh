@@ -145,25 +145,44 @@ cleanup_release_lock() {
     /bin/rm -f -- "$LOCK_TOKEN_TEMP"
   fi
   LOCK_TOKEN_TEMP=''
+  LOCK_TOKEN=''
 }
 
-cleanup() {
-  local exit_code="$?"
+# Idempotent and never exits: both the EXIT trap and the ZERR hook call it.
+release_owned_resources() {
   local temporary=''
 
-  trap - EXIT
-  trap - HUP
-  trap - INT
-  trap - TERM
-  set +e
   for temporary in "${TEMP_FILES[@]}"; do
     if [[ -n "$temporary" && "$temporary" == "$STATE_DIR"/.* &&
           -e "$temporary" && ! -d "$temporary" ]]; then
       /bin/rm -f -- "$temporary"
     fi
   done
+  TEMP_FILES=()
   cleanup_release_lock
+}
+
+cleanup() {
+  local exit_code="$?"
+
+  trap - EXIT
+  trap - HUP
+  trap - INT
+  trap - TERM
+  set +e
+  release_owned_resources
   exit "$exit_code"
+}
+
+# zsh hides a top-level EXIT trap while a function runs, so ERR_EXIT raised
+# inside a function exits without running it and leaves locks and temporary
+# files behind. ZERR fires under the same conditions just before that exit, so
+# release owned resources there too. Subshells own nothing, and a failure while
+# ERR_EXIT is off does not end the script.
+TRAPZERR() {
+  [[ -o ERR_EXIT && "$ZSH_SUBSHELL" == 0 ]] || return 0
+  setopt LOCAL_OPTIONS NO_ERR_EXIT
+  release_owned_resources
 }
 
 trap cleanup EXIT

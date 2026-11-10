@@ -121,10 +121,24 @@ readonly KEY_OWNER="$(/usr/bin/stat -f '%u' "$SPARKLE_ED_KEY_PATH")"
 [[ "$KEY_OWNER" == "$(/usr/bin/id -u)" ]] || fail 'Sparkle private key has the wrong owner'
 
 typeset STAGE=''
-cleanup() {
-  [[ -z "$STAGE" ]] || /bin/rm -rf -- "$STAGE"
+# Idempotent and never exits: both the EXIT trap and the ZERR hook call it.
+release_owned_resources() {
+  [[ -n "$STAGE" ]] || return 0
+  /bin/rm -rf -- "$STAGE"
+  STAGE=''
 }
-trap cleanup EXIT
+
+# zsh hides a top-level EXIT trap while a function runs, so ERR_EXIT raised
+# inside a function exits without running it and leaves locks and temporary
+# files behind. ZERR fires under the same conditions just before that exit, so
+# release owned resources there too. Subshells own nothing, and a failure while
+# ERR_EXIT is off does not end the script.
+TRAPZERR() {
+  [[ -o ERR_EXIT && "$ZSH_SUBSHELL" == 0 ]] || return 0
+  setopt LOCAL_OPTIONS NO_ERR_EXIT
+  release_owned_resources
+}
+trap release_owned_resources EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM

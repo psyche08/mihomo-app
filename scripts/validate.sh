@@ -48,6 +48,7 @@ env \
   CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-/private/tmp/mihomo-app-clang-cache}" \
   /usr/bin/swift test --disable-sandbox
 /bin/bash Tests/test_release_common.sh
+/bin/bash Tests/test_release_zsh_cleanup.sh
 /bin/bash Tests/test_installer_lock.sh
 /bin/bash Tests/test_installer_protocol_migration.sh
 /bin/bash Tests/test_installer_rollback.sh
