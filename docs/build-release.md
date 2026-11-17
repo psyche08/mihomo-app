@@ -212,6 +212,15 @@ binds all mutations to one numeric GitHub release ID. An existing asset with a
 different digest stops the release; the workflow never uses `--clobber`,
 deletes an asset, or selects a mutable draft by tag alone.
 
+One helper runs per repository at a time, guarded by
+`/tmp/mihomobox-github-release-<uid>/<owner>-<repo>.lock`, which holds
+`<commit>.<pid>.<UTC time>.<random>`. The zsh release scripts release their
+locks and temporary files on every exit. zsh skips a top-level EXIT trap when
+`ERR_EXIT` fires inside a function, so each script also releases them from a
+shared `TRAPZERR` hook; `Tests/test_release_zsh_cleanup.sh` covers this. A lock
+whose recorded process no longer runs is stale; no script removes it, so
+confirm the owner is gone before deleting that one file.
+
 The local `release-product.zsh` and `release-macos.sh` signing/notarization path
 is retained only for the frozen 0.9.1 migration exception and historical
 recovery. It is not a production path for 0.9.2 or later. Its state and legacy
