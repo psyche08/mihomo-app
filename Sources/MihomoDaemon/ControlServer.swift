@@ -129,6 +129,14 @@ final class ControlDispatcher: @unchecked Sendable {
             return
         }
         do {
+            try profiles.restoreAppProxyOverlayIfMissing()
+        } catch {
+            // Start anyway: validation then fails closed with
+            // blockers=app_proxy_listeners instead of leaving App Proxy flows
+            // waiting on a closed port.
+            ServiceLog.error("event=app_proxy_overlay result=restore_failed")
+        }
+        do {
             try ensureRuntimePrerequisiteLocked()
             try agent.start()
             try ensureStartedRuntimeLocked(timeout: Self.bootStartTimeout)
@@ -551,6 +559,9 @@ final class ControlDispatcher: @unchecked Sendable {
                 throw ControllerBrokerCriticalError.unsafeGlobalRuntime
             } catch {
                 lastError = error
+                if (error as? AppProxySettingsError) == .listenerUnavailable {
+                    blockers = ["app_proxy_listeners"]
+                }
                 if Date() < deadline {
                     // An atomic snapshot replacement wakes us immediately.
                     // Keep bounded polling as a fallback for lost/coalesced

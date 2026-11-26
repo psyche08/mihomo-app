@@ -96,7 +96,14 @@ final class ControllerBroker: @unchecked Sendable {
         let configuration = try ProxyConfiguration.load(path: configPath)
         var snapshot = try routeSnapshot(configuration)
         if requireSafeGlobal { snapshot = try repairUnsafeGlobalIfNeeded(configuration, snapshot: snapshot) }
-        if let settings, !settings.routes.isEmpty { try settings.validateRoutes(in: snapshot) }
+        if let settings, !settings.routes.isEmpty {
+            try settings.validateRoutes(in: snapshot)
+            // A valid route is useless when its application port is gone: the
+            // extension's flows then wait for a listener that never answers.
+            guard settings.applications.allSatisfy({ AppProxyListenerProbe.answersSOCKS(port: $0.port) }) else {
+                throw AppProxySettingsError.listenerUnavailable
+            }
+        }
     }
 
     func waitForSafeGlobalRoute(attempts: Int = 30) throws {

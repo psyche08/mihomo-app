@@ -217,6 +217,72 @@ final class ProfileBroker: @unchecked Sendable {
         }
     }
 
+    /// Only the daemon renders the App Proxy overlay. A runtime profile
+    /// written by another path, such as the installer during a repair, lacks
+    /// its listeners, and every App Proxy flow then waits on a closed port.
+    /// Before the boot start, re-render the active profile when the saved App
+    /// Proxy routes have no listener in it. Requires a stopped agent.
+    func restoreAppProxyOverlayIfMissing() throws {
+        try queue.sync {
+            guard !agent.isRunning,
+                  FileManager.default.fileExists(atPath: root.appendingPathComponent("active-profile").path)
+            else { return }
+            let settings = try appProxySettings()
+            let runtimeProfile = root.appendingPathComponent("mihomo-data/config.yaml")
+            guard let current = String(data: try readStoredProfile(runtimeProfile), encoding: .utf8) else {
+                throw profileError("profile must be UTF-8")
+            }
+            let missing = AppProxyProfile.missingListeners(settings, in: current)
+            guard !missing.isEmpty else { return }
+
+            let transaction = root.appendingPathComponent(
+                ".app-proxy-overlay-\(UUID().uuidString)",
+                isDirectory: true
+            )
+            try FileManager.default.createDirectory(
+                at: transaction,
+                withIntermediateDirectories: false,
+                attributes: [.posixPermissions: 0o700]
+            )
+            defer { try? FileManager.default.removeItem(at: transaction) }
+            let protected = [
+                "daemon.json", "controller.json", "controller-secret",
+                "mihomo-data/config.yaml",
+            ]
+            var backupDigests: [String: String] = [:]
+            for relative in protected {
+                let source = root.appendingPathComponent(relative)
+                guard FileManager.default.fileExists(atPath: source.path) else { continue }
+                let backup = transaction.appendingPathComponent("backup")
+                    .appendingPathComponent(relative)
+                try FileManager.default.createDirectory(
+                    at: backup.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try FileManager.default.copyItem(at: source, to: backup)
+                backupDigests[relative] = ComponentUpdatePackage.digest(
+                    try Data(contentsOf: backup, options: [.mappedIfSafe])
+                )
+            }
+            do {
+                let active = try activeProfileName()
+                let data = try readStoredProfile(
+                    root.appendingPathComponent("profiles").appendingPathComponent(active)
+                )
+                let configured = try preparedProfile(data: data, publishController: true)
+                defer { try? FileManager.default.removeItem(at: configured.deletingLastPathComponent()) }
+                try validateMihomo(path: configured)
+                try replace(configured, runtimeProfile, permissions: 0o600)
+                ServiceLog.info(
+                    "event=app_proxy_overlay result=restored applications=\(missing.joined(separator: ","))"
+                )
+            } catch {
+                try restoreProtected(protected, transaction: transaction, backupDigests: backupDigests)
+                throw error
+            }
+        }
+    }
+
     /// Persists the desired TUN state and regenerates the managed profile as
     /// one root-only transaction. A running core applies the configuration in
     /// place; only an unprovable failure uses stop/restore recovery.

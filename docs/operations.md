@@ -374,7 +374,14 @@ the installer item *(Recommended)*; the App logs
 administrator dialog by itself. An installation from before 1.1.2 still runs
 with `ProcessType` `Background`: macOS throttles the daemon, the agent and
 Mihomo, and under post-boot load the core may miss its start window, leaving
-Mihomo stopped until a manual start. The App invokes the bundled
+Mihomo stopped until a manual start.
+
+The installer renders the runtime profile without the App Proxy overlay; only
+the daemon adds the `mihomobox-app-*` listeners. Before its boot start, the
+daemon therefore re-renders the active profile when saved App Proxy routes
+have no listener in it (`event=app_proxy_overlay result=restored`). Without that
+step every App Proxy flow waited 30 seconds on a closed port and the
+extension counted `upstream_timeout` while `socks_connected` stayed at zero. The App invokes the bundled
 installer through the standard macOS administrator authorization dialog.
 If no previously authenticated active profile exists, installation stages a
 REJECT-only provisioning profile and starts only the authenticated XPC daemon;
@@ -857,7 +864,11 @@ A start that does not become healthy in time logs
 `runtime_validation result=timeout blockers=…` with the fixed names of the
 checks that never passed, such as `mihomo_dns,network_consistency` for a core
 that had not yet answered DNS, `health_generation` for an agent that never
-published the current snapshot, or `routes` for a failed controller route check.
+published the current snapshot, `routes` for a failed controller route check,
+or `app_proxy_listeners` when an App Proxy application port does not accept a
+no-authentication SOCKS5 greeting. Route validation probes every application
+port whenever App Proxy routes are saved, so a missing listener now fails the
+start or transition instead of passing as verified.
 
 The `--check-system-dns` command verifies the persisted CurrentSet
 PrimaryService DNS value (or the Global DNS dictionary when no primary service

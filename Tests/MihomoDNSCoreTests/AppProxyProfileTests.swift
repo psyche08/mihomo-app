@@ -50,6 +50,30 @@ final class AppProxyProfileTests: XCTestCase {
         routes = AppProxyProcessRoutes([:], prefixes: ["chatgpt": (0...AppProxyProcessRoutes.maximumPaths).map { "/opt/f\($0)" }])
         XCTAssertThrowsError(try routes.validate(applications: AppProxyEntry.defaults))
     }
+    func testMissingListenersNamesApplicationsWithoutTheirOverlayListener() throws {
+        let source = "mixed-port: 7897\ntun:\n  enable: false\nrules:\n  - MATCH,REJECT\n"
+        let rendered = try AppProxyProfile.applying(settings, to: source)
+        XCTAssertEqual(AppProxyProfile.missingListeners(settings, in: rendered), [])
+        XCTAssertEqual(
+            AppProxyProfile.missingListeners(settings, in: rendered.replacingOccurrences(of: "\n", with: "\r\n")),
+            []
+        )
+        // A runtime profile rendered without the overlay, as an installer repair wrote it.
+        XCTAssertEqual(
+            AppProxyProfile.missingListeners(settings, in: source),
+            AppProxyEntry.legacyDefaults.map(\.id)
+        )
+        let first = try XCTUnwrap(AppProxyEntry.legacyDefaults.first)
+        XCTAssertEqual(
+            AppProxyProfile.missingListeners(
+                settings,
+                in: rendered.replacingOccurrences(of: AppProxyProfile.listenerBlock(first), with: "")
+            ),
+            [first.id]
+        )
+        var unrouted = settings; unrouted.routes = [:]
+        XCTAssertEqual(AppProxyProfile.missingListeners(unrouted, in: source), [])
+    }
     private var settings: AppProxySettings {
         .init(routes: Dictionary(uniqueKeysWithValues: AppProxyApplication.legacyPresets.map { ($0.rawValue, "node-" + $0.rawValue) }), applications: AppProxyEntry.legacyDefaults)
     }
