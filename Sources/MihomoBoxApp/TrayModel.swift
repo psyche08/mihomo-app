@@ -120,6 +120,9 @@ struct TraySnapshot: Equatable, Sendable {
   var profileActionsAvailable: Bool
   var installationActionsAvailable: Bool
   var managedInstallationPresent: Bool
+  /// The installed LaunchDaemon plist differs from the bundled one. Component
+  /// synchronization cannot change it; only the explicit installer can.
+  var launchDaemonRepairRecommended: Bool
   var enhancedTUNActionAvailable: Bool
   var actionError: String?
 
@@ -148,7 +151,8 @@ struct TraySnapshot: Equatable, Sendable {
     appProxyEnabled: Bool? = nil,
     enhancedTUNRequested: Bool? = nil,
     systemProxyRequested: Bool? = nil,
-    appProxyRequested: Bool? = nil
+    appProxyRequested: Bool? = nil,
+    launchDaemonRepairRecommended: Bool = false
   ) {
     self.daemonCompatibility = daemonCompatibility
     self.controllerReachable = controllerReachable
@@ -168,6 +172,7 @@ struct TraySnapshot: Equatable, Sendable {
     self.profileActionsAvailable = profileActionsAvailable
     self.installationActionsAvailable = installationActionsAvailable
     self.managedInstallationPresent = managedInstallationPresent
+    self.launchDaemonRepairRecommended = launchDaemonRepairRecommended
     self.enhancedTUNActionAvailable = enhancedTUNActionAvailable
     self.systemProxyEnabled = systemProxyEnabled
     self.appProxyEnabled = appProxyEnabled
@@ -281,6 +286,7 @@ struct TraySnapshot: Equatable, Sendable {
       profileActionsAvailable: profileActionsAvailable,
       installationActionsAvailable: installationActionsAvailable,
       managedInstallationPresent: managedInstallationPresent,
+      launchDaemonRepairRecommended: launchDaemonRepairRecommended,
       enhancedTUNActionAvailable: enhancedTUNActionAvailable,
       actionError: actionError
     )
@@ -316,6 +322,7 @@ struct TrayMenuSignature: Equatable, Sendable {
   var profileActionsAvailable: Bool
   var installationActionsAvailable: Bool
   var managedInstallationPresent: Bool
+  var launchDaemonRepairRecommended: Bool
   var enhancedTUNActionAvailable: Bool
   var actionError: String?
 }
@@ -427,9 +434,20 @@ enum TrayDaemonMenuPolicy {
     snapshot.daemonCompatibility.requiresRepair
   }
 
+  /// A stale LaunchDaemon definition keeps the daemon working, so the repair
+  /// is offered, never started: it needs the administrator dialog.
+  static func showsLaunchDefinitionRepair(_ snapshot: TraySnapshot) -> Bool {
+    snapshot.launchDaemonRepairRecommended
+      && !snapshot.daemonCompatibility.requiresRepair
+      && snapshot.daemonCompatibility.allowsExplicitInstaller
+  }
+
   static func installerTitle(_ snapshot: TraySnapshot) -> String {
     if snapshot.daemonCompatibility.requiresRepair {
       return "Install / Repair Daemon… (Required)"
+    }
+    if showsLaunchDefinitionRepair(snapshot) {
+      return "Install / Repair Daemon… (Recommended)"
     }
     return "Install / Repair Daemon…"
   }

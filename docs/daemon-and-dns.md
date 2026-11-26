@@ -169,7 +169,10 @@ System DNS cache-flush commands still finish before readiness, using process-exi
 notifications instead of Foundation's run-loop polling delay.
 Legacy Local DoH cleanup runs fixed system commands with a bounded wait. The LaunchDaemon uses the
 `Standard` process class: `Background` is inappropriate for the user-requested
-network data path and delays interactive work under load. Agent lifecycle
+network data path and delays interactive work under load. Component updates do
+not rewrite the plist, so an installation made before this change keeps
+`Background` until an explicit repair; the App flags the difference and the
+daemon logs its process class at start. Agent lifecycle
 signals and synchronous inspection/cache-flush children use user-initiated QoS;
 periodic external diagnostics retain their utility workers.
 Route ownership still excludes any

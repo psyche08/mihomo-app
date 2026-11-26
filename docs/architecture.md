@@ -42,7 +42,11 @@ root-owned paths and register the daemon's Mach service. After a compatible
 bootstrap, routine Desktop and CLI operations never invoke `sudo`, AppleScript
 elevation, or the installer; they use authenticated XPC. Later App releases
 synchronize the fixed `mihomo-daemon`, `mihomo-agent`, and `mihomo` component
-set through that XPC boundary without modifying the LaunchDaemon plist.
+set through that XPC boundary without modifying the LaunchDaemon plist. A
+release that changes the plist therefore reaches an existing installation only
+through an explicit repair: at launch the App compares the installed and
+bundled definitions and, when they differ, recommends that repair in the tray
+without opening the administrator dialog.
 
 An install without an existing root-owned active-profile marker stages the
 bundled REJECT provisioning profile, but the LaunchDaemon starts only its XPC

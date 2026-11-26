@@ -187,6 +187,17 @@ final class StatusItemController: NSObject, NSMenuDelegate, ApplicationStatusIte
         attributes: [.font: NSFont.boldSystemFont(ofSize: NSFont.systemFontSize)]
       )
       menu.addItem(upgrade)
+    } else if TrayDaemonMenuPolicy.showsLaunchDefinitionRepair(snapshot) {
+      let repair = item("Repair Daemon Launch Settings…", action: #selector(installOrRepairDaemon))
+      repair.isEnabled = TrayMenuActionPolicy.installerEnabled(snapshot)
+      repair.image = NSImage(
+        systemSymbolName: "exclamationmark.triangle",
+        accessibilityDescription: "Daemon launch settings are outdated"
+      )
+      repair.toolTip =
+        "The installed LaunchDaemon predates this App. Repair applies the current one; "
+        + "it needs an administrator password."
+      menu.addItem(repair)
     }
 
     let tun = item("Enhanced TUN", action: #selector(toggleEnhancedTUN(_:)))

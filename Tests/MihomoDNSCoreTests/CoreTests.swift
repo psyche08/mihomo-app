@@ -313,6 +313,97 @@ final class CoreTests: XCTestCase {
         )
     }
 
+    private func startedHealth(
+        controller: Bool = true,
+        tun: Bool = false,
+        interface: String? = nil,
+        route: Bool = false,
+        bridge: Bool = false,
+        mihomoDNS: Bool = true,
+        systemDNS: Bool = false,
+        consistent: Bool = true
+    ) -> NetworkConsistencyHealth {
+        NetworkConsistencyHealth(
+            controllerReachable: controller,
+            tunEnabled: tun,
+            tunInterface: interface,
+            fakeIPMode: true,
+            fakeIPRouteReady: route,
+            dnsBridgeReady: bridge,
+            mihomoDNSReady: mihomoDNS,
+            systemDNSManaged: systemDNS,
+            networkConsistent: consistent
+        )
+    }
+
+    func testStartedRuntimeVerificationAcceptsReadyStandbyAndEnhancedStates() {
+        XCTAssertTrue(
+            StartedRuntimeVerification.blockers(
+                health: startedHealth(),
+                globalDNSFallback: false,
+                managesSystemDNS: false,
+                expectsEnhancedTUN: false
+            ).isEmpty
+        )
+        XCTAssertTrue(
+            StartedRuntimeVerification.blockers(
+                health: startedHealth(
+                    tun: true, interface: "utun7", route: true, bridge: true, systemDNS: true
+                ),
+                globalDNSFallback: true,
+                managesSystemDNS: true,
+                expectsEnhancedTUN: true
+            ).isEmpty
+        )
+    }
+
+    func testStartedRuntimeVerificationNamesAKernelThatHasNotAnsweredDNS() {
+        // A core still loading its profile accepts no DNS query yet; the
+        // observer then also reports the runtime as inconsistent.
+        XCTAssertEqual(
+            StartedRuntimeVerification.blockers(
+                health: startedHealth(mihomoDNS: false, consistent: false),
+                globalDNSFallback: false,
+                managesSystemDNS: false,
+                expectsEnhancedTUN: false
+            ),
+            ["mihomo_dns", "network_consistency"]
+        )
+    }
+
+    func testStartedRuntimeVerificationNamesEveryUnmetModeCondition() {
+        XCTAssertEqual(
+            StartedRuntimeVerification.blockers(
+                health: startedHealth(controller: false),
+                globalDNSFallback: true,
+                managesSystemDNS: true,
+                expectsEnhancedTUN: true
+            ),
+            ["controller", "system_dns_unmanaged", "dns_bridge", "tun", "tun_interface", "fake_ip_route"]
+        )
+        XCTAssertEqual(
+            StartedRuntimeVerification.blockers(
+                health: startedHealth(tun: true, interface: "utun7", route: true, systemDNS: true),
+                globalDNSFallback: false,
+                managesSystemDNS: true,
+                expectsEnhancedTUN: false
+            ),
+            [
+                "system_dns_owner", "system_dns_managed", "standby_tun",
+                "standby_tun_interface", "standby_fake_ip_route",
+            ]
+        )
+        XCTAssertEqual(
+            StartedRuntimeVerification.blockers(
+                health: startedHealth(tun: true, interface: "", route: true, bridge: true, systemDNS: true),
+                globalDNSFallback: true,
+                managesSystemDNS: true,
+                expectsEnhancedTUN: true
+            ),
+            ["tun_interface"]
+        )
+    }
+
     func testResolverTopologyClassifiesGlobalAndScopedResolversWithoutAddresses() {
         let topology = ResolverTopologyObservation.make(
             managedServers: ["127.0.0.53"],

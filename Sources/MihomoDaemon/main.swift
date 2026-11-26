@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import MihomoControl
 import MihomoDNSCore
 
 private let root = URL(fileURLWithPath: "/Library/Application Support/Mihomo App", isDirectory: true)
@@ -16,6 +17,22 @@ ServiceLog.info("event=daemon_started pid=\(getpid())")
 ServiceLog.info(
     "event=daemon_startup phase=process_started elapsed_ms=\(startupClock.elapsedMilliseconds())"
 )
+// Component updates never rewrite the LaunchDaemon plist; the App recommends
+// a repair when it differs. Recording the class here explains a slow boot
+// start without that App: a Background job is throttled under load.
+private let launchdProcessType = LaunchDaemonDefinition.processTypeToken(
+    LaunchDaemonDefinition.load(URL(fileURLWithPath: LaunchDaemonDefinition.installedPath))
+)
+if launchdProcessType == "background" {
+    ServiceLog.error(
+        "event=daemon_startup phase=launchd_definition process_type=background " +
+        "result=repair_recommended"
+    )
+} else {
+    ServiceLog.info(
+        "event=daemon_startup phase=launchd_definition process_type=\(launchdProcessType)"
+    )
+}
 
 if arguments.contains("--help") || arguments.contains("-h") {
     print("usage: mihomo-daemon [--config PATH]")

@@ -76,6 +76,41 @@ public struct NetworkConsistencyHealth: Codable, Equatable, Sendable {
     }
 }
 
+/// Fixed, privacy-safe names of the health conditions a started runtime still
+/// lacks. An empty result is the health half of start validation; the
+/// controller route checks follow it.
+public enum StartedRuntimeVerification {
+    public static func blockers(
+        health: NetworkConsistencyHealth,
+        globalDNSFallback: Bool,
+        managesSystemDNS: Bool,
+        expectsEnhancedTUN: Bool
+    ) -> [String] {
+        var result: [String] = []
+        if !health.controllerReachable { result.append("controller") }
+        if !health.fakeIPMode { result.append("fake_ip_mode") }
+        if !health.mihomoDNSReady { result.append("mihomo_dns") }
+        if !health.networkConsistent { result.append("network_consistency") }
+        if globalDNSFallback {
+            if !health.systemDNSManaged { result.append("system_dns_unmanaged") }
+            if !health.dnsBridgeReady { result.append("dns_bridge") }
+        } else {
+            if managesSystemDNS { result.append("system_dns_owner") }
+            if health.systemDNSManaged { result.append("system_dns_managed") }
+        }
+        if expectsEnhancedTUN {
+            if !health.tunEnabled { result.append("tun") }
+            if health.tunInterface?.isEmpty != false { result.append("tun_interface") }
+            if !health.fakeIPRouteReady { result.append("fake_ip_route") }
+        } else {
+            if health.tunEnabled { result.append("standby_tun") }
+            if health.tunInterface != nil { result.append("standby_tun_interface") }
+            if health.fakeIPRouteReady { result.append("standby_fake_ip_route") }
+        }
+        return result
+    }
+}
+
 /// Describes only fixed, privacy-safe reasons why a managed runtime has not
 /// reached its fully stopped state. Callers may log these identifiers without
 /// exposing resolver addresses, profile contents, or controller credentials.
