@@ -158,8 +158,8 @@ routing and selected explicitly rather than labelled as L3 acceleration.
 
 Mihomo implementation references: [process routing rules](https://wiki.metacubex.one/config/rules/)
 and [TUN stacks](https://wiki.metacubex.one/config/inbound/tun/). The shipped
-`v1.19.30` binary, rather than newer online documentation alone, validates the
-generated profile syntax.
+`v1.19.30` binary (now `v1.19.30-connect-udp.1`, see below), rather than newer
+online documentation alone, validates the generated profile syntax.
 
 
 ## Strict per-application DNS: feasibility checkpoint (2026-10-20)
@@ -631,3 +631,21 @@ can send the health name to upstream resolvers, which answer SERVFAIL while
 offline, and the agent's own listener state is the direct evidence. Also
 rejected: patching SwiftNIO's recoverable datagram errors, which would put a
 fork of a pinned dependency on the DNS path.
+
+## 2026-11-27: Bundle Mihomo v1.19.30 with a MASQUE CONNECT-UDP patch
+
+MASQUE CONNECT-IP (`network: h3`) sessions to the self-hosted server stalled
+within minutes while the QUIC connection stayed up; Surge, which uses standard
+CONNECT over HTTP/3 for TCP and CONNECT-UDP for UDP, kept working. Upstream
+`h3-l4proxy` carries TCP only and disables UDP.
+
+Decision: bundle upstream `v1.19.30` plus one commit that adds RFC 9298
+CONNECT-UDP to `h3-l4proxy` when a node sets `udp-uri`, built reproducibly from
+the pinned fork commit and checked against a pinned SHA-256
+([build](build-release.md#patched-mihomo-build)). Nodes without `udp-uri` keep
+upstream behavior. The patch is based on the release MihomoBox already pinned,
+not on the upstream Alpha branch, so it is the only behavioral change.
+
+Rejected: rebasing onto Alpha, which would ship 112 unreleased upstream
+commits; and publishing prebuilt binaries from the fork, which would add a
+release channel whose bytes nothing reproduces.
