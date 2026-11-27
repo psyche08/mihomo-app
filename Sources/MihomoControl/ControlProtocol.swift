@@ -50,6 +50,8 @@ public enum ControlOperation: String, Codable, CaseIterable, Sendable {
     case importProfile = "profile.import"
     case switchProfile = "profile.switch"
     case reloadProfile = "profile.reload"
+    /// Removes one stored profile other than the active one.
+    case deleteProfile = "profile.delete"
 }
 
 /// Controls only routine successful request lifecycle logging. Every refused,

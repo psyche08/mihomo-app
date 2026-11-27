@@ -345,7 +345,7 @@ final class ControlDispatcher: @unchecked Sendable {
                 payload = nil
             case .listProfiles:
                 payload = try profiles.list()
-            case .importProfile, .switchProfile, .reloadProfile:
+            case .importProfile, .switchProfile, .reloadProfile, .deleteProfile:
                 payload = try profiles.perform(request)
             case .controllerStreamClose:
                 // Deliberately outside the agent check below. Closing only drops
@@ -437,7 +437,7 @@ final class ControlDispatcher: @unchecked Sendable {
     private static func isMutating(_ operation: ControlOperation) -> Bool {
         switch operation {
         case .startAgent, .stopAgent, .restartAgent, .upgradeComponents, .setSystemProxy,
-             .importProfile, .switchProfile, .reloadProfile, .setTUN,
+             .importProfile, .switchProfile, .reloadProfile, .deleteProfile, .setTUN,
              .setOutboundMode, .selectProxy, .refreshProxyProvider,
              .closeAllConnections, .setAppProxyRouting, .setAppProxyProcesses:
             return true

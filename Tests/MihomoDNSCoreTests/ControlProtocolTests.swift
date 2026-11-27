@@ -9,6 +9,8 @@ final class ControlProtocolTests: XCTestCase {
         XCTAssertTrue(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .status))
         XCTAssertTrue(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .setTUN))
         XCTAssertTrue(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .reloadProfile))
+        XCTAssertTrue(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .deleteProfile))
+        XCTAssertEqual(ControlOperation(rawValue: "profile.delete"), .deleteProfile)
         XCTAssertFalse(ControlRequestAuditPolicy.logsRoutineLifecycle(for: .resolveDNS))
     }
 

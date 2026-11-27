@@ -56,6 +56,19 @@ final class ProfileBroker: @unchecked Sendable {
                     try reloadActiveRuntime()
                 }
                 return try listUnlocked()
+            case .deleteProfile:
+                guard request.arguments.count == 1, let name = request.arguments["name"],
+                      request.payload == nil else {
+                    throw profileError("profile name is required")
+                }
+                try validateName(name)
+                try StoredProfileDeletion.delete(
+                    name: name,
+                    in: root.appendingPathComponent("profiles", isDirectory: true),
+                    activeProfile: try? activeProfileName()
+                )
+                ServiceLog.info("event=profile_delete result=success")
+                return try listUnlocked()
             default:
                 throw profileError("operation is not a profile operation")
             }

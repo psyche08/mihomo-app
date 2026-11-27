@@ -657,6 +657,7 @@ mihomoboxctl profile import-url URL [--name profile.yaml] [--activate]
   [--username USER] [--header NAME] [--secret-stdin]
 mihomoboxctl profile switch profile.yaml
 mihomoboxctl profile reload
+mihomoboxctl profile delete profile.yaml
 mihomoboxctl install [--detached]
 mihomoboxctl start
 mihomoboxctl restart
