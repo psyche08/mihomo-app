@@ -230,6 +230,7 @@ activation transaction.
 | Select proxy | `runtime.select-proxy` |
 | Refresh proxy provider | `runtime.refresh-proxy-provider` |
 | Reload active profile | `profile.reload` |
+| Delete a stored profile other than the active one (CLI) | `profile.delete` |
 | Import/switch profile | `profile.import` / `profile.switch` |
 | Start/stop/restart proxy runtime | `agent.start` / `agent.stop` / `agent.restart` |
 | Read service health (`mihomoboxctl status`) | `service.status` |

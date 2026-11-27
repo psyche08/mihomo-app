@@ -119,7 +119,7 @@ historical reference; use the local entry point above for new releases.
 |---|---|---|
 | Sparkle | `2.9.4` | SwiftPM exact version; binary artifact checksum `cb6fdbdc8884f15d62a616e79face92b08322410fd2d425edc6596ccbf4ba3b0` |
 | MetaCubeXD visual reference | tag `v1.271.0`, commit `c4622599d0a597378729a91c3b7f76c5d9803831` | exact revision check; MIT license copied |
-| Mihomo | release `v1.19.30` | architecture-specific SHA-256 |
+| Mihomo | `v1.19.30-connect-udp.3`: [psyche08/mihomo](https://github.com/psyche08/mihomo/tree/feat/masque-connect-udp-v1.19.30) commit `f34d18f74aa2c7408ce68991b63d83512bf7c288`, Go `go1.26.6` | reproducible build, architecture-specific SHA-256 |
 | App and tray icon | upstream Mihomo `Meta.png` | source, embedded tray resource and derived-output SHA-256 |
 
 `VERSION` is the sole product-version source. SwiftPM builds the user App,
@@ -505,8 +505,23 @@ Before uploading, freeze SHA-256 values and verify:
 ## License outputs
 
 The project MIT license, `THIRD_PARTY_NOTICES.md`, Mihomo, MetaCubeXD and Sparkle
-license texts are bundled. Mihomo remains an unmodified official release
-artifact; MetaCubeXD remains a non-shipped design reference.
+license texts are bundled. MetaCubeXD remains a non-shipped design reference.
+
+## Patched Mihomo build
+
+The bundled Mihomo is upstream `v1.19.30` plus a patch (three commits) adding RFC 9298
+CONNECT-UDP to the MASQUE `h3-l4proxy` outbound (`udp-uri`); without `udp-uri`
+it behaves exactly like upstream. `scripts/fetch-mihomo.sh` fetches the patch's
+head commit by hash, builds it with the upstream release flags (`CGO_ENABLED=0`,
+`-tags with_gvisor -trimpath -buildvcs=false -w -s -buildid=`, fixed version and
+build time) and toolchain `go1.26.6` through `GOTOOLCHAIN`, and accepts the
+output only when it matches the pinned SHA-256. Any Go 1.21+ on `PATH` (or under
+`/opt/homebrew/opt/go*`) can drive the build. The verified binary is cached in
+`.cache/mihomo/` by triple, version and commit.
+
+To move the patch: rebase it onto the new upstream tag in the fork, push the
+branch, update `SOURCE_COMMIT`, `SOURCE_TIME`, `VERSION` and the toolchain, then
+record both checksums from two independent clean builds.
 
 ## Bundled App Proxy
 

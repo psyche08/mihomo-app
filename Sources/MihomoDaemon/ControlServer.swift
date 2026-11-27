@@ -129,10 +129,17 @@ final class ControlDispatcher: @unchecked Sendable {
             return
         }
         do {
+            try profiles.restoreAppProxyOverlayIfMissing()
+        } catch {
+            // Start anyway: validation then fails closed with
+            // blockers=app_proxy_listeners instead of leaving App Proxy flows
+            // waiting on a closed port.
+            ServiceLog.error("event=app_proxy_overlay result=restore_failed")
+        }
+        do {
             try ensureRuntimePrerequisiteLocked()
             try agent.start()
-            try ensureStartedRuntimeLocked(timeout: components.hasPendingBootValidation
-                ? Self.updatedComponentsStartTimeout : 20)
+            try ensureStartedRuntimeLocked(timeout: Self.bootStartTimeout)
             try resumeEnhancedRuntimeLocked()
             try components.commitPendingBootValidation()
             do { try refreshSystemProxy(restoreSavedChoice: true) } catch { ServiceLog.error("event=system_proxy_restore result=failed") }
@@ -338,7 +345,7 @@ final class ControlDispatcher: @unchecked Sendable {
                 payload = nil
             case .listProfiles:
                 payload = try profiles.list()
-            case .importProfile, .switchProfile, .reloadProfile:
+            case .importProfile, .switchProfile, .reloadProfile, .deleteProfile:
                 payload = try profiles.perform(request)
             case .controllerStreamClose:
                 // Deliberately outside the agent check below. Closing only drops
@@ -430,7 +437,7 @@ final class ControlDispatcher: @unchecked Sendable {
     private static func isMutating(_ operation: ControlOperation) -> Bool {
         switch operation {
         case .startAgent, .stopAgent, .restartAgent, .upgradeComponents, .setSystemProxy,
-             .importProfile, .switchProfile, .reloadProfile, .setTUN,
+             .importProfile, .switchProfile, .reloadProfile, .deleteProfile, .setTUN,
              .setOutboundMode, .selectProxy, .refreshProxyProvider,
              .closeAllConnections, .setAppProxyRouting, .setAppProxyProcesses:
             return true
@@ -452,6 +459,12 @@ final class ControlDispatcher: @unchecked Sendable {
     /// The first launch of replaced component binaries waits for macOS to assess them,
     /// which took over 20 seconds under load; a premature rollback interrupts the proxy twice.
     static let updatedComponentsStartTimeout: TimeInterval = 60
+
+    /// Boot starts the core while login items, indexing and other daemons
+    /// compete for the machine. The interactive 20-second window rejected a
+    /// boot start that took 3 seconds once that load settled, and the rejected
+    /// boot leaves the network stopped until someone starts it by hand.
+    static let bootStartTimeout: TimeInterval = 60
 
     private func ensureStartedRuntimeLocked(timeout: TimeInterval = 20) throws {
         do {
@@ -509,45 +522,36 @@ final class ControlDispatcher: @unchecked Sendable {
         let clock = MonotonicStartupClock()
         let changes = try agent.healthSnapshotChanges()
         var lastError: Error?
+        // Fixed condition names only: the timeout line must say which check
+        // never passed without exposing addresses or profile contents.
+        var blockers = ["health_snapshot"]
         repeat {
             guard agent.isRunning else {
+                ServiceLog.error(
+                    "event=runtime_validation result=agent_exited " +
+                    "elapsed_ms=\(clock.elapsedMilliseconds())"
+                )
                 throw ControllerBrokerCriticalError.unsafeGlobalRuntime
             }
             do {
+                blockers = ["health_snapshot"]
                 guard let health = try agent.expectedHealthSnapshot()?.health else {
+                    blockers = ["health_generation"]
                     throw serverErrorStatic("awaiting current agent health generation")
                 }
-                guard health.controllerReachable,
-                      health.fakeIPMode,
-                      health.mihomoDNSReady,
-                      health.networkConsistent else {
-                    throw serverErrorStatic("the managed network is not ready")
-                }
-                if agent.globalDNSFallbackConfigured {
-                    guard health.systemDNSManaged, health.dnsBridgeReady else {
-                        throw serverErrorStatic("the Global DNS bridge is not ready")
-                    }
-                } else {
-                    guard !agent.managesSystemDNS, !health.systemDNSManaged else {
-                        throw serverErrorStatic("the standby runtime still owns system DNS")
-                    }
-                }
-                if agent.expectsEnhancedTUN {
-                    guard health.tunEnabled,
-                          health.tunInterface?.isEmpty == false,
-                          health.fakeIPRouteReady else {
-                        throw serverErrorStatic("the Enhanced TUN network is not ready")
-                    }
-                } else {
-                    guard !health.tunEnabled,
-                          health.tunInterface == nil,
-                          !health.fakeIPRouteReady else {
-                        throw serverErrorStatic("the standby runtime still owns a TUN route")
-                    }
+                blockers = StartedRuntimeVerification.blockers(
+                    health: health,
+                    globalDNSFallback: agent.globalDNSFallbackConfigured,
+                    managesSystemDNS: agent.managesSystemDNS,
+                    expectsEnhancedTUN: agent.expectsEnhancedTUN
+                )
+                guard blockers.isEmpty else {
+                    throw serverErrorStatic("the managed runtime is not ready")
                 }
                 // Controller verification follows the matching agent snapshot;
                 // polling pending generations must not create an active probe loop.
                 ServiceLog.info("event=runtime_validation phase=health_ready elapsed_ms=\(clock.elapsedMilliseconds())")
+                blockers = ["routes"]
                 try controller.ensureRuntimeRoutes(requireSafeGlobal: agent.expectsEnhancedTUN)
                 ServiceLog.info("event=runtime_validation phase=routes_verified elapsed_ms=\(clock.elapsedMilliseconds())")
                 return
@@ -555,6 +559,9 @@ final class ControlDispatcher: @unchecked Sendable {
                 throw ControllerBrokerCriticalError.unsafeGlobalRuntime
             } catch {
                 lastError = error
+                if (error as? AppProxySettingsError) == .listenerUnavailable {
+                    blockers = ["app_proxy_listeners"]
+                }
                 if Date() < deadline {
                     // An atomic snapshot replacement wakes us immediately.
                     // Keep bounded polling as a fallback for lost/coalesced
@@ -567,6 +574,10 @@ final class ControlDispatcher: @unchecked Sendable {
                 }
             }
         } while Date() < deadline
+        ServiceLog.error(
+            "event=runtime_validation result=timeout elapsed_ms=\(clock.elapsedMilliseconds()) " +
+            "blockers=\(blockers.joined(separator: ","))"
+        )
         throw lastError ?? serverErrorStatic("the managed network did not become ready")
     }
 

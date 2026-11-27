@@ -71,6 +71,7 @@ final class TrayStateCoordinator: TrayService {
   private var consecutivePollFailures = 0
   private var started = false
   private var installationAvailable = false
+  private var launchDaemonDefinition = LaunchDaemonDefinition.State.unknown
   private var loginDefaultDoneOrInFlight = false
   private var didAttemptEnhancedStartup = false
   private var loginDefaultFailures = 0
@@ -109,11 +110,13 @@ final class TrayStateCoordinator: TrayService {
       initial.activeProfile = local.activeProfile
       self.publish(initial)
       self.installationAvailable = await installer.installationActionsAvailable
+      self.refreshLaunchDaemonDefinition()
       var value = self.currentSnapshot
       value.installationActionsAvailable = self.installationAvailable
       value.managedInstallationPresent = Self.managedInstallationPresent(
         fileManager: self.fileManager
       )
+      value.launchDaemonRepairRecommended = self.launchDaemonRepairRecommended
       self.publish(value)
     }
   }
@@ -445,6 +448,7 @@ final class TrayStateCoordinator: TrayService {
           ? nil
           : self.selectedLocalProfile()
         try await self.installer.installOrRepair(initialProfile: initialProfile)
+        self.refreshLaunchDaemonDefinition()
         self.apply(try await self.waitForDaemonProtocolReadiness(), retainDelays: false)
       }
     }
@@ -472,6 +476,8 @@ final class TrayStateCoordinator: TrayService {
         removed.systemDNSManaged = false
         removed.healthTUNEnabled = false
         removed.managedInstallationPresent = false
+        self.launchDaemonDefinition = .unknown
+        removed.launchDaemonRepairRecommended = false
         self.publish(removed)
       }
     }
@@ -593,7 +599,8 @@ final class TrayStateCoordinator: TrayService {
         appProxyEnabled: currentSnapshot.appProxyEnabled,
         enhancedTUNRequested: poll.enhancedTUNRequested,
         systemProxyRequested: poll.systemProxyRequested,
-        appProxyRequested: currentSnapshot.appProxyRequested
+        appProxyRequested: currentSnapshot.appProxyRequested,
+        launchDaemonRepairRecommended: launchDaemonRepairRecommended
       ))
   }
 
@@ -666,7 +673,8 @@ final class TrayStateCoordinator: TrayService {
         fileManager: fileManager
       ),
       enhancedTUNActionAvailable: false,
-      actionError: currentSnapshot.actionError
+      actionError: currentSnapshot.actionError,
+      launchDaemonRepairRecommended: launchDaemonRepairRecommended
     )
   }
 
@@ -809,6 +817,20 @@ final class TrayStateCoordinator: TrayService {
       .appendingPathComponent("Library/Application Support/MihomoBox/profiles")
       .appendingPathComponent(active)
     return fileManager.isReadableFile(atPath: url.path) ? url : nil
+  }
+
+  private var launchDaemonRepairRecommended: Bool { launchDaemonDefinition == .outdated }
+
+  /// Only the verified installer writes the LaunchDaemon plist, so a release
+  /// that changes it (the process class, say) reaches an installation that
+  /// synchronizes components only after an explicit repair. Recommend that
+  /// repair; never start it, because it needs the administrator dialog.
+  private func refreshLaunchDaemonDefinition() {
+    let state = LaunchDaemonDefinition.state(bundleURL: Bundle.main.bundleURL)
+    if state == .outdated, launchDaemonDefinition != .outdated {
+      AppLog.info("event=launch_daemon_definition result=outdated action=repair_recommended")
+    }
+    launchDaemonDefinition = state
   }
 
   private static func daemonInstalled(fileManager: FileManager) -> Bool {

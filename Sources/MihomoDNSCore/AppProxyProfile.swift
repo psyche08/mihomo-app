@@ -62,10 +62,22 @@ public enum AppProxyProfile {
             "  - SUB-RULE,(AND,((RULE-SET,\(processProviderName(app.id))))),mihomobox-app-\(app.id)"
         }, intoRules: result)
         result += "\n# MihomoBox App Proxy runtime overlay\nlisteners:\n"
-        for app in settings.applications {
-            result += "  - name: mihomobox-app-\(app.id)\n    type: mixed\n    listen: 127.0.0.1\n    port: \(app.port)\n    udp: true\n    rule: mihomobox-app-\(app.id)\n"
-        }
+        for app in settings.applications { result += listenerBlock(app) }
         return result
+    }
+
+    static func listenerBlock(_ app: AppProxyEntry) -> String {
+        "  - name: mihomobox-app-\(app.id)\n    type: mixed\n    listen: 127.0.0.1\n    port: \(app.port)\n    udp: true\n    rule: mihomobox-app-\(app.id)\n"
+    }
+
+    /// Applications whose overlay listener a rendered runtime profile lacks.
+    /// Only the daemon renders the overlay; a configuration written by any
+    /// other path (an installer repair, for example) has none, and the App
+    /// Proxy extension then waits on a port nothing listens on.
+    public static func missingListeners(_ settings: AppProxySettings, in profile: String) -> [String] {
+        guard !settings.routes.isEmpty else { return [] }
+        let text = profile.replacingOccurrences(of: "\r\n", with: "\n")
+        return settings.applications.filter { !text.contains(listenerBlock($0)) }.map(\.id)
     }
 
     public static func processProviderName(_ id: String) -> String { "mihomobox-app-\(id)-processes" }

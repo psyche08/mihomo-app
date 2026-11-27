@@ -2,8 +2,10 @@
 
 ## Mihomo
 
-Mihomo is distributed under the MIT License. Release binaries are downloaded
-from <https://github.com/MetaCubeX/mihomo/releases> and bundled unchanged.
+Mihomo is distributed under the MIT License. MihomoBox bundles upstream
+`v1.19.30` (<https://github.com/MetaCubeX/mihomo>) with one modification adding
+MASQUE CONNECT-UDP, built from
+<https://github.com/psyche08/mihomo/commit/f34d18f74aa2c7408ce68991b63d83512bf7c288>.
 The application icon is the upstream
 [`Meta.png`](https://raw.githubusercontent.com/MetaCubeX/mihomo/Meta/Meta.png),
 bundled at SHA-256

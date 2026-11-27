@@ -205,9 +205,10 @@ public struct AppProxySettings: Codable, Equatable, Sendable {
 }
 
 public enum AppProxySettingsError: LocalizedError {
-    case invalidRoutes, unsupportedProfile, unsupportedRules, staleState, unavailableNode, invalidExecutables, invalidScopes, invalidIdentifiers, overlappingFakeIP
+    case invalidRoutes, unsupportedProfile, unsupportedRules, staleState, unavailableNode, invalidExecutables, invalidScopes, invalidIdentifiers, overlappingFakeIP, listenerUnavailable
     public var errorDescription: String? {
         switch self {
+        case .listenerUnavailable: "An App Proxy application port is not answering as Mihomo's proxy listener. Reload the profile; if it persists, another process may hold the port."
         case .overlappingFakeIP: "An App Proxy bypass overlaps this profile's Fake-IP range. Remove the overlapping bypass before applying."
         case .invalidExecutables: "App Proxy process routes must be absolute paths without commas or line breaks."
         case .invalidScopes: "Enter 10-character Team IDs (up to 8 per app) and absolute or ~/ folders other than / (up to 16 per app). Each Team ID or folder can belong to only one app."

@@ -363,7 +363,25 @@ so a later helper installation can reuse the user's selected profile.
 
 ## Install or Repair
 
-Use `Install / Repair Daemon…` from the tray. The App invokes the bundled
+Use `Install / Repair Daemon…` from the tray.
+
+Component synchronization never rewrites `/Library/LaunchDaemons/dev.linsheng.mihomo.daemon.plist`,
+so a release that changes it reaches an existing installation only through this
+repair. When the installed definition differs from the one in the App, the tray
+shows **Repair Daemon Launch Settings…** under the network status and labels
+the installer item *(Recommended)*; the App logs
+`event=launch_daemon_definition result=outdated` once and never opens the
+administrator dialog by itself. An installation from before 1.1.2 still runs
+with `ProcessType` `Background`: macOS throttles the daemon, the agent and
+Mihomo, and under post-boot load the core may miss its start window, leaving
+Mihomo stopped until a manual start.
+
+The installer renders the runtime profile without the App Proxy overlay; only
+the daemon adds the `mihomobox-app-*` listeners. Before its boot start, the
+daemon therefore re-renders the active profile when saved App Proxy routes
+have no listener in it (`event=app_proxy_overlay result=restored`). Without that
+step every App Proxy flow waited 30 seconds on a closed port and the
+extension counted `upstream_timeout` while `socks_connected` stayed at zero. The App invokes the bundled
 installer through the standard macOS administrator authorization dialog.
 If no previously authenticated active profile exists, installation stages a
 REJECT-only provisioning profile and starts only the authenticated XPC daemon;
@@ -558,8 +576,9 @@ whole 6-second window. A long-running agent under load once needed more than the
 earlier 3 + 2 seconds; the update then failed closed and left the proxy stopped
 until `mihomoboxctl start`, although no component had been replaced. The first
 start of replaced components may take up to 60 seconds before the update rolls
-back (other runtime starts keep 20 seconds): macOS assesses new binaries on first
-launch, and under load that alone exceeded 20 seconds.
+back: macOS assesses new binaries on first launch, and under load that alone
+exceeded 20 seconds. The boot start gets the same 60 seconds, because login and
+indexing work compete with it; a start the user requests keeps 20 seconds.
 
 The 0.8.1 and 0.8.2 installers incorrectly inspected the opened lock through
 the `/dev/fd` pathname, whose macOS device number differs from the underlying
@@ -638,6 +657,7 @@ mihomoboxctl profile import-url URL [--name profile.yaml] [--activate]
   [--username USER] [--header NAME] [--secret-stdin]
 mihomoboxctl profile switch profile.yaml
 mihomoboxctl profile reload
+mihomoboxctl profile delete profile.yaml
 mihomoboxctl install [--detached]
 mihomoboxctl start
 mihomoboxctl restart
@@ -821,6 +841,7 @@ log stream --style compact --predicate 'subsystem == "dev.linsheng.mihomo-app"'
 log show --last 10m --style compact \
   --predicate 'subsystem == "dev.linsheng.mihomo-app" AND eventMessage CONTAINS "event=app_startup"'
 grep 'event=daemon_startup' '/Library/Logs/Mihomo App/mihomo-daemon.log'
+grep 'event=runtime_validation' '/Library/Logs/Mihomo App/mihomo-daemon.log'
 grep 'event=agent_startup' '/Library/Logs/Mihomo App/mihomo-agent.log'
 grep 'event=legacy_local_doh_cleanup' '/Library/Logs/Mihomo App/mihomo-daemon.log'
 dig @127.0.0.53 mihomobox-health.invalid
@@ -836,6 +857,19 @@ proves the bridge answers. With TUN off the bridge is not used and system DNS
 is the original one. MihomoBox no longer listens on `127.0.0.1:443`; a remaining
 `dev.linsheng.mihomobox.local-doh` profile in `profiles show` is a
 [legacy cleanup](#legacy-local-doh-cleanup) problem, not a DNS mode.
+
+`daemon_startup phase=launchd_definition process_type=…` records the installed
+LaunchDaemon's process class at every daemon start; `background` is logged as an
+error with `result=repair_recommended` ([Install or Repair](#install-or-repair)).
+A start that does not become healthy in time logs
+`runtime_validation result=timeout blockers=…` with the fixed names of the
+checks that never passed, such as `mihomo_dns,network_consistency` for a core
+that had not yet answered DNS, `health_generation` for an agent that never
+published the current snapshot, `routes` for a failed controller route check,
+or `app_proxy_listeners` when an App Proxy application port does not accept a
+no-authentication SOCKS5 greeting. Route validation probes every application
+port whenever App Proxy routes are saved, so a missing listener now fails the
+start or transition instead of passing as verified.
 
 The `--check-system-dns` command verifies the persisted CurrentSet
 PrimaryService DNS value (or the Global DNS dictionary when no primary service

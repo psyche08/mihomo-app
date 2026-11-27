@@ -333,6 +333,43 @@ final class TrayModelTests: XCTestCase {
     }
   }
 
+  func testOutdatedLaunchDefinitionRecommendsButDoesNotRequireRepair() {
+    var outdated = snapshot(delay: 180)
+    outdated.launchDaemonRepairRecommended = true
+    XCTAssertTrue(TrayDaemonMenuPolicy.showsLaunchDefinitionRepair(outdated))
+    XCTAssertFalse(TrayDaemonMenuPolicy.showsUpgradeAction(outdated))
+    XCTAssertFalse(outdated.daemonCompatibility.blocksControlActions)
+    XCTAssertTrue(TrayMenuActionPolicy.installerEnabled(outdated))
+    XCTAssertEqual(
+      TrayDaemonMenuPolicy.installerTitle(outdated),
+      "Install / Repair Daemon… (Recommended)"
+    )
+    XCTAssertEqual(outdated.networkStatusTitle, snapshot(delay: 180).networkStatusTitle)
+
+    var legacy = outdated
+    legacy.daemonCompatibility = .legacyRepairRequired(peerVersion: 1)
+    XCTAssertFalse(TrayDaemonMenuPolicy.showsLaunchDefinitionRepair(legacy))
+    XCTAssertEqual(
+      TrayDaemonMenuPolicy.installerTitle(legacy),
+      "Install / Repair Daemon… (Required)"
+    )
+
+    var newer = outdated
+    newer.daemonCompatibility = .appUpdateRequired(peerVersion: 9)
+    XCTAssertFalse(TrayDaemonMenuPolicy.showsLaunchDefinitionRepair(newer))
+    XCTAssertEqual(TrayDaemonMenuPolicy.installerTitle(newer), "Install / Repair Daemon…")
+  }
+
+  func testLaunchDefinitionChangeForcesMenuRebuild() {
+    let rendered = snapshot(delay: 180)
+    var incoming = rendered
+    incoming.launchDaemonRepairRecommended = true
+    XCTAssertEqual(
+      TrayMenuUpdatePolicy.decision(rendered: rendered, incoming: incoming, isTracking: false),
+      .rebuildNow
+    )
+  }
+
   func testCompatibilityChangeForcesMenuRebuild() {
     let rendered = snapshot(delay: 180)
     var incoming = rendered

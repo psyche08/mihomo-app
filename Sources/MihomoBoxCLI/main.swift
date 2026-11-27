@@ -1091,6 +1091,7 @@ private func usage() {
                                       Download, validate, and import HTTP(S) YAML
       profile switch NAME             Transactionally activate a profile
       profile reload                  Reload the active profile
+      profile delete NAME             Delete a stored profile other than the active one
       install [--detached]            Install or repair (App-contained CLI only)
       start                           Start the agent over authenticated XPC
       restart                         Restart the agent over authenticated XPC
@@ -1271,6 +1272,11 @@ private func main() throws -> Int32 {
         case "reload":
             try requireNoExtraArguments(arguments)
             _ = try sendControl(.reloadProfile)
+            return 0
+        case "delete", "remove":
+            guard arguments.count == 1 else { throw CLIError(message: "usage: mihomoboxctl profile delete NAME") }
+            try validateProfileName(arguments[0])
+            _ = try sendControl(.deleteProfile, arguments: ["name": arguments[0]])
             return 0
         default:
             throw CLIError(message: "unknown profile operation: \(operation)")
