@@ -158,7 +158,7 @@ routing and selected explicitly rather than labelled as L3 acceleration.
 
 Mihomo implementation references: [process routing rules](https://wiki.metacubex.one/config/rules/)
 and [TUN stacks](https://wiki.metacubex.one/config/inbound/tun/). The shipped
-`v1.19.30` binary (now `v1.19.30-connect-udp.1`, see below), rather than newer
+`v1.19.30` binary (now `v1.19.30-connect-udp.3`, see below), rather than newer
 online documentation alone, validates the generated profile syntax.
 
 
@@ -639,7 +639,7 @@ within minutes while the QUIC connection stayed up; Surge, which uses standard
 CONNECT over HTTP/3 for TCP and CONNECT-UDP for UDP, kept working. Upstream
 `h3-l4proxy` carries TCP only and disables UDP.
 
-Decision: bundle upstream `v1.19.30` plus one commit that adds RFC 9298
+Decision: bundle upstream `v1.19.30` plus a patch that adds RFC 9298
 CONNECT-UDP to `h3-l4proxy` when a node sets `udp-uri`, built reproducibly from
 the pinned fork commit and checked against a pinned SHA-256
 ([build](build-release.md#patched-mihomo-build)). Nodes without `udp-uri` keep
@@ -649,3 +649,15 @@ not on the upstream Alpha branch, so it is the only behavioral change.
 Rejected: rebasing onto Alpha, which would ship 112 unreleased upstream
 commits; and publishing prebuilt binaries from the fork, which would add a
 release channel whose bytes nothing reproduces.
+
+The first build (`.1`) never read the CONNECT-UDP request stream, so it did not
+notice when the proxy ended a tunnel, as the server does for idle ones: writes
+kept succeeding and the flow went silent. On a test Mac this followed a minute
+long network interruption. `.2` reads the stream, accepts DATAGRAM capsules,
+and opens a fresh tunnel once the old one ends.
+
+Mihomo refreshes a UDP mapping on every outgoing packet, so a flow that keeps
+sending never expires and only its tunnel can recover it. `.3` therefore bounds
+tunnel setup to 10 s (and then replaces the HTTP/3 connection, whose requests
+are not being served) and replaces a tunnel that has sent for 30 s without
+receiving anything.

@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# MihomoBox bundles upstream Mihomo v1.19.30 plus one patch: RFC 9298
+# MihomoBox bundles upstream Mihomo v1.19.30 plus a patch: RFC 9298
 # CONNECT-UDP for the MASQUE h3-l4proxy outbound (`udp-uri`). The patched
 # source is pinned by commit, built with the toolchain and flags of the
 # upstream release, and accepted only if the binary matches the pinned SHA-256.
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 UPSTREAM_VERSION="v1.19.30"
-VERSION="$UPSTREAM_VERSION-connect-udp.1"
+VERSION="$UPSTREAM_VERSION-connect-udp.3"
 SOURCE_REPOSITORY="https://github.com/psyche08/mihomo.git"
-SOURCE_COMMIT="bf7ef5dfaf038d03163c8aab8bdd741f25ae75ae"
-SOURCE_TIME="2026-11-27T12:51:58+08:00"
+SOURCE_COMMIT="f34d18f74aa2c7408ce68991b63d83512bf7c288"
+SOURCE_TIME="2026-11-27T14:27:30+08:00"
 GO_TOOLCHAIN="go1.26.6"
 if [[ -n "${TARGET_TRIPLE:-}" ]]; then
   TRIPLE="$TARGET_TRIPLE"
@@ -28,13 +28,13 @@ case "$TRIPLE" in
   aarch64-apple-darwin)
     GOARCH_VALUE="arm64"
     GOAMD64_VALUE=""
-    EXPECTED_SHA256="201b6c8a5df8e05a4f435671d0fa72e333954c8dd878c6048fc99a1335c37128"
+    EXPECTED_SHA256="2c71c1223ff1f67999b071969c3e39b97aba705b6bbbec33bec60bba4c641c54"
     ;;
   x86_64-apple-darwin)
     # Matches the upstream "amd64-compatible" release asset.
     GOARCH_VALUE="amd64"
     GOAMD64_VALUE="v1"
-    EXPECTED_SHA256="04db7519e78351dbf72fe4cf23f73ed036bdf40b9d921b92862c2930c3b43d4e"
+    EXPECTED_SHA256="5b39c0030a334f35a01fdc0c566676f11a76582695b7a777cabfa1acd1c75b84"
     ;;
   *)
     echo "unsupported target triple: $TRIPLE" >&2
